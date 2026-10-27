@@ -70,7 +70,7 @@ const assColor = (hex) => {
 };
 const assEsc = (s) => s.replace(/\\/g, "").replace(/[{}]/g, "");
 
-function buildAss(spec, starts) {
+export function buildAss(spec, starts) {
   const W = spec.width, H = spec.height;
   const sub = { max_words: W < H ? 3 : 6, y: W < H ? 0.64 : 0.86, size: W < H ? 0.07 : 0.05, color: "#FFFFFF", highlight: "#FFD400", ...(spec.subtitles || {}) };
   const fontSize = Math.round(Math.min(W, H) * sub.size * 1.35);
@@ -80,7 +80,7 @@ function buildAss(spec, starts) {
 ScriptType: v4.00+
 PlayResX: ${W}
 PlayResY: ${H}
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
@@ -90,19 +90,39 @@ Style: Cap,Montserrat ExtraBold,${fontSize},${assColor(sub.color)},${assColor(su
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
+  // Ancho aproximado de una línea en Montserrat ExtraBold mayúsculas (en píxeles)
+  const em = fontSize;
+  const charW = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /[J]/.test(c) ? 0.6 : /\s/.test(c) ? 0.3 : 0.7);
+  const textW = (s) => [...s].reduce((a, c) => a + charW(c), 0) * em + outline * 2;
+  // Espacio útil: ancho menos márgenes y el 6 % extra de la palabra resaltada
+  const budget = W * 0.88 * 0.93;
   const lines = [];
   spec.scenes.forEach((sc, i) => {
     const words = (sc.words?.length ? sc.words : estimateWords(sc.narration, sc.voice_duration)).filter((w) => !/^\[.*\]$/.test(w.w));
-    for (let k = 0; k < words.length; k += sub.max_words) {
-      const chunk = words.slice(k, k + sub.max_words);
-      const chunkEnd = (words[k + sub.max_words]?.s ?? chunk[chunk.length - 1].e + 0.25);
+    // Agrupa palabras en líneas que quepan en pantalla, con un máximo de palabras por línea
+    const chunks = [];
+    let cur = [];
+    for (const w of words) {
+      const candidate = [...cur, w].map((x) => x.w.toUpperCase()).join(" ");
+      if (cur.length && (cur.length >= sub.max_words || textW(candidate) > budget)) { chunks.push(cur); cur = []; }
+      cur.push(w);
+    }
+    if (cur.length) chunks.push(cur);
+    chunks.forEach((chunk, ci) => {
+      const next = chunks[ci + 1]?.[0];
+      const chunkEnd = next ? next.s : chunk[chunk.length - 1].e + 0.25;
+      const full = chunk.map((x) => x.w.toUpperCase()).join(" ");
+      // Si una sola palabra es demasiado larga, se reduce la línea entera para que quepa
+      const fit = Math.min(100, Math.floor((budget / textW(full)) * 100));
+      const pre = fit < 100 ? `{\\fscx${fit}\\fscy${fit}}` : "";
+      const hi = Math.round(fit * 1.06);
       chunk.forEach((w, j) => {
         const s = starts[i] + w.s;
         const e = starts[i] + (j < chunk.length - 1 ? chunk[j + 1].s : Math.min(chunkEnd, chunk[j].e + 0.6));
-        const text = chunk.map((x, n) => (n === j ? `{\\c${assColor(sub.highlight)}\\fscx106\\fscy106}${assEsc(x.w.toUpperCase())}{\\r}` : assEsc(x.w.toUpperCase()))).join(" ");
-        lines.push(`Dialogue: 0,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Cap,,0,0,0,,${text}`);
+        const text = chunk.map((x, n) => (n === j ? `{\\c${assColor(sub.highlight)}\\fscx${hi}\\fscy${hi}}${assEsc(x.w.toUpperCase())}{\\r}${pre}` : assEsc(x.w.toUpperCase()))).join(" ");
+        lines.push(`Dialogue: 0,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Cap,,0,0,0,,${pre}${text}`);
       });
-    }
+    });
   });
   return head + lines.join("\n") + "\n";
 }

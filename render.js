@@ -171,8 +171,14 @@ export async function render(spec, workdir, progress = () => {}) {
   const subFilter = spec.subtitles?.enabled === false ? "null" : `subtitles=${assFile.replace(/:/g, "\\:")}`;
   parts.push(`[${last}]${subFilter},format=yuv420p[vout]`);
   const videoOnly = path.join(workdir, "video.mp4");
+  const gop = String(Math.round(FPS / 2)); // fotograma clave cada medio segundo (GOP cerrado)
+  const maxrate = W * H >= 1920 * 1080 ? "12M" : "8M";
   await run("ffmpeg", ["-y", "-v", "error", ...vin, "-filter_complex", parts.join(";"), "-map", "[vout]", "-t", total.toFixed(3),
-    "-c:v", "libx264", "-preset", PRESET, "-crf", "19", "-r", String(FPS), videoOnly]);
+    "-c:v", "libx264", "-preset", PRESET, "-profile:v", "high", "-level:v", "4.2", "-pix_fmt", "yuv420p",
+    "-crf", "18", "-maxrate", maxrate, "-bufsize", String(parseInt(maxrate) * 2) + "M",
+    "-g", gop, "-keyint_min", gop, "-sc_threshold", "0", "-bf", "2", "-flags", "+cgop",
+    "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
+    "-r", String(FPS), videoOnly]);
 
   // 4) Mezcla de audio: voz + efectos + música con ducking, normalizado a -14 LUFS
   progress(85, "Mezclando audio");
@@ -210,9 +216,9 @@ export async function render(spec, workdir, progress = () => {}) {
   } else {
     af.push(`[vsc]anullsink`);
   }
-  af.push(`${mixIn.join("")}amix=inputs=${mixIn.length}:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]`);
+  af.push(`${mixIn.join("")}amix=inputs=${mixIn.length}:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000,aformat=channel_layouts=stereo[aout]`);
   const audio = path.join(workdir, "audio.m4a");
-  await run("ffmpeg", ["-y", "-v", "error", ...ain, "-filter_complex", af.join(";"), "-map", "[aout]", "-t", total.toFixed(3), "-c:a", "aac", "-b:a", "192k", audio]);
+  await run("ffmpeg", ["-y", "-v", "error", ...ain, "-filter_complex", af.join(";"), "-map", "[aout]", "-t", total.toFixed(3), "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "384k", "-ac", "2", "-ar", "48000", audio]);
 
   // 5) Unión final
   progress(95, "Empaquetando");

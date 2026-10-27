@@ -1,12 +1,15 @@
 // Servidor de render de Faceless Studio.
 // POST /jobs        (Bearer RENDER_SECRET) → encola un render; body = spec + upload_url
 // GET  /jobs/:id    (Bearer RENDER_SECRET) → estado y progreso
+// POST /frames      (Bearer) → fotogramas del vídeo en base64 para analizarlo
+// POST /thumbnail   (Bearer) → compone una miniatura JPG y la sube
 // GET  /health      → ok
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createReadStream } from "node:fs";
 import { render, cleanup } from "./render.js";
+import { frames, thumbnail } from "./tools.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const SECRET = process.env.RENDER_SECRET || "";
@@ -80,6 +83,19 @@ http.createServer(async (req, res) => {
       queue.push({ id: spec.id, spec });
       setImmediate(work);
       return send(res, 202, { id: spec.id, queued: queue.length });
+    }
+    if (req.method === "POST" && (url.pathname === "/frames" || url.pathname === "/thumbnail")) {
+      const body = await readJson(req);
+      const dir = path.join(os.tmpdir(), `tool-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      try {
+        if (url.pathname === "/frames") {
+          if (!body.video_url) return send(res, 400, { error: "falta video_url" });
+          return send(res, 200, await frames(body, dir));
+        }
+        if (!body.image_url || !body.upload_url) return send(res, 400, { error: "faltan image_url o upload_url" });
+        const { file, ...r } = await thumbnail(body, dir);
+        return send(res, 200, r);
+      } finally { cleanup(dir).catch(() => {}); }
     }
     const m = url.pathname.match(/^\/jobs\/([\w-]+)$/);
     if (req.method === "GET" && m) {

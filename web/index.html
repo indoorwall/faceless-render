@@ -140,6 +140,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);
 .tgrid button.on{border-color:var(--accent)}
 .tgrid button.on::after{content:"✓";position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--on-accent);font-size:12px;display:grid;place-items:center}
 .tgrid img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+.gen-row{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center}
+@media (max-width:820px){ .gen-row{grid-template-columns:1fr} }
 .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
 .thumbs img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:7px;background:var(--sunk)}
 video{width:100%;border-radius:10px;background:#000;max-height:60vh}
@@ -295,7 +297,7 @@ async function run(fn, ok){
 async function load(){
   const [c,v,p,a,k,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
-    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("channel_proposals").select("*").eq("status","pending").order("created_at",{ascending:false}),
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
@@ -383,7 +385,8 @@ function viewHoy(){
     <section><div class="sec-h"><h2>Guiones por revisar</h2><span class="mono">${scripts.length}</span></div>
       ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">Revisar guion</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
     </section>
-    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasRunning?`<span class="chip st-warn">Buscando ideas…</span>`:""}</div>
+    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasRunning||S.jobs.some(j=>j.step==="refill_ideas")?`<span class="chip st-warn">Generando ideas…</span>`:""}</div>
+      ${ideaGenerator()}
       ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pide ideas nuevas desde un canal; además, cada mañana a las 8:30 llegan solas.</div>`}
     </section>
     ${prod.length?`<section><div class="sec-h"><h2>En producción</h2><span class="mono">${prod.length}</span></div><div class="list">${prod.map(v=>`
@@ -392,11 +395,28 @@ function viewHoy(){
     ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>`
       <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`).join("")}</div></section>`:""}`;
 }
+function ideaGenerator(){
+  const chs=S.channels.filter(c=>c.status!=="archived"); if(!chs.length) return "";
+  return `<div class="card" style="margin-bottom:12px"><div class="label" style="margin-bottom:8px">Pedir ideas a medida</div>
+    <div class="gen-row">
+      ${chs.length>1?`<select id="g-ch">${chs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`:`<input type="hidden" id="g-ch" value="${chs[0].id}">`}
+      <input type="text" id="g-focus" placeholder="Tema concreto (opcional): espías de la Guerra Fría, animales en la Primera Guerra Mundial…">
+      <select id="g-kind"><option value="mix">Mezcla</option><option value="single">Una historia</option><option value="compilation">Recopilatorio</option></select>
+      <button class="btn pri" onclick="genIdeas()">Generar 5 ideas</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:6px">Sin tema, «Pedir ideas» en el canal saca ideas del banco gratis. Esto crea ideas nuevas siguiendo la guía del canal (unos céntimos).</div></div>`;
+}
+async function genIdeas(){
+  const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,then_draw:5}}); if(error) throw error; await kick(); await load(); }, "Generando ideas a medida. Llegarán aquí en un minuto.");
+}
 function ideaCard(v){
   const ev = Array.isArray(v.idea_evidence) ? v.idea_evidence.filter(e=>e&&e.url).slice(0,4) : [];
   return `<div class="card" id="idea-${v.id}">
     <div class="row">${chTag(v.channel_id)}<span class="muted" style="font-size:12px">${ago(v.created_at)}</span></div>
     <div class="idea-t">${esc(v.idea_title)}</div>
+    ${v.idea_kind==="compilation"?`<div class="row"><span class="chip st-acc">Recopilatorio · ${(v.idea_stories||[]).length} historias</span></div><ol style="margin:0;padding-left:20px;font-size:13.5px;display:flex;flex-direction:column;gap:4px">${(v.idea_stories||[]).map(x=>`<li><b>${esc(x.title)}</b> <span class="muted">— ${esc(x.hook)}</span></li>`).join("")}</ol>`:""}
+    ${v.idea_hook?`<div class="why"><b>Arranque:</b> «${esc(v.idea_hook)}»</div>`:""}
     ${v.idea_angle?`<div class="why"><b>Ángulo:</b> ${esc(v.idea_angle)}</div>`:""}
     ${v.idea_reason?`<div class="why"><b>Por qué funcionará:</b> ${esc(v.idea_reason)}</div>`:""}
     ${ev.length?`<div class="ev">${ev.map(e=>`<a href="${esc(e.url)}" target="_blank" rel="noopener" title="${esc(e.title)}">${esc((e.title||e.url).slice(0,60))}${e.score?`<span class="mono">×${esc(e.score)}</span>`:e.views?`<span class="mono">${fmtN(e.views)}</span>`:""}</a>`).join("")}</div>`:""}
@@ -782,7 +802,7 @@ function renderChannelSheet(first){
     <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
     <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
     <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
-    <label class="f full">Temas del canal <small>De aquí salen las ideas automáticas. Uno por línea o separados por comas</small><textarea id="c-topics" rows="3" placeholder="Animales en guerras, supervivencias imposibles, inventos por accidente, récords absurdos…">${esc(c.topics)}</textarea></label>
+    <label class="f full">Temas del canal <small>De aquí salen las ideas automáticas. Uno por línea o separados por comas</small><textarea id="c-topics" rows="3" placeholder="Sé concreto: épocas, tipos de historia y lo que NO quieres. Ej.: anécdotas reales de guerras de la Antigüedad a la Guerra Fría, espías, animales soldado… Nada de ciencia ni naturaleza.">${esc(c.topics)}</textarea></label>
     <label class="f">Formato<select id="c-format"><option value="long" ${c.format==="long"?"selected":""}>Vídeo largo (16:9)</option><option value="short" ${c.format==="short"?"selected":""}>Shorts (9:16)</option></select></label>
     <label class="f">Duración objetivo (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(c.target_minutes)}"></label>
     <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["ca","Catalán"],["pt","Portugués"],["fr","Francés"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>

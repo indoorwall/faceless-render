@@ -547,7 +547,7 @@ function renderSheet(first){
     d.scenes=(d.scenes||[]).map(withShots);
     const words=d.scenes.reduce((a,sc)=>a+sc.shots.reduce((b,sh)=>b+String(sh.line||"").split(/\s+/).filter(Boolean).length,0),0);
     const dr=d.director;
-    body=`${dr?`<div class="card an" style="gap:8px"><div class="spread"><div class="label">Revisión del director</div><span class="mono">${dr.score_before??"?"} → <b>${dr.score_after??"?"}</b>/10</span></div>
+    body=`${dr?.skipped?`<div class="card spread"><div><div class="label">Director</div><div class="why" style="margin-top:4px">No ha tenido que intervenir: el borrador ya cumple lo aprendido del canal.${(dr.weak_points||[]).length?` A vigilar: ${esc(dr.weak_points.join(" · "))}`:""}</div></div><span class="mono"><b>${dr.score_before}</b>/10</span></div>`:""}${dr&&!dr.skipped?`<div class="card an" style="gap:8px"><div class="spread"><div class="label">Revisión del director</div><span class="mono">${dr.score_before??"?"} → <b>${dr.score_after??"?"}</b>/10</span></div>
         ${(dr.changes||[]).length?`<ul style="margin:0;padding-left:18px;font-size:13.5px">${dr.changes.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
         ${(dr.title_options||[]).length?`<div class="label" style="margin-top:4px">Otros títulos <small class="muted">(toca para usarlo)</small></div><div class="opts">${dr.title_options.map(t=>`<button type="button" onclick="$('#s-title').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}
         ${(d.thumbnail_texts||[]).length?`<div class="label" style="margin-top:4px">Textos de miniatura</div><div class="opts">${d.thumbnail_texts.map(t=>`<button type="button" onclick="$('#s-thumb').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}</div>`:""}
@@ -646,8 +646,19 @@ function collectScript(){
     .map((sc,i)=>({...sc, n:i+1, narration:sc.shots.map(sh=>sh.line.trim()).join(" "), visual_type:sc.shots[0].visual_type, visual_prompt:sc.shots[0].visual_prompt}));
   return d;
 }
+function scriptEdits(before,after){
+  const lines=s=>(s?.scenes||[]).flatMap(sc=>(sc.shots||[]).map(sh=>String(sh.line||"").trim())).filter(Boolean);
+  const a=lines(before), b=lines(after), out=[];
+  if((before?.title||"")!==(after?.title||"")) out.push(`Título: «${before?.title||""}» → «${after?.title||""}»`);
+  const setA=new Set(a);
+  b.forEach((l,i)=>{ if(!setA.has(l)) out.push(`Frase cambiada: «${a[i]||"(nueva)"}» → «${l}»`); });
+  if(a.length!==b.length) out.push(`Número de planos: ${a.length} → ${b.length}`);
+  return out.slice(0,12);
+}
 async function approveScript(){
   const d=collectScript();
+  const edits=scriptEdits(S.open.v.script,d);
+  if(edits.length) sb.from("jobs").insert({step:"learn",channel_id:S.open.v.channel_id,video_id:S.open.v.id,payload:{source:"edicion",material:`Antes de aprobar el guion, el autor hizo estos cambios a mano (aprende su criterio):\n- ${edits.join("\n- ")}`}}).then(()=>{});
   await run(async()=>{ const {error}=await sb.from("videos").update({script:d,title:d.title,description:d.description,status:"producing",progress:0,stage:"En cola"}).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, "Guion aprobado. Produciendo el vídeo…");
 }
 async function redoScript(){
@@ -746,14 +757,32 @@ const PALETTE=["#2F45E8","#D2462C","#1C8A5A","#B8860B","#8B3FD1","#0E8FA3","#C23
 function openChannel(id, preset){
   const c = id ? {...ch(id)} : { name:"", niche:"", language:"es", format:"long", target_minutes:8, image_source:"mix", ideas_per_run:5, auto_ideas:true, publish_privacy:"private", music_volume:12, music_mode:"video", sfx_enabled:true, sfx_volume:55, color:PALETTE[S.channels.length%PALETTE.length], reference_channels:[], ...(preset||{}) };
   S.open={kind:"channel", c}; renderChannelSheet(true);
+  if(id) loadLearning(id);
+}
+async function loadLearning(id){
+  const [l,b]=await Promise.all([
+    sb.from("lessons").select("source,lesson,created_at").eq("channel_id",id).order("created_at",{ascending:false}).limit(8),
+    sb.from("idea_bank").select("id",{count:"exact",head:true}).eq("channel_id",id).eq("used",false),
+  ]);
+  if(!S.open||S.open.kind!=="channel"||S.open.c.id!==id) return;
+  S.open.learn={lessons:l.data||[], bank:b.count||0};
+  const el=$("#learn-box"); if(el) el.innerHTML=learnHtml(S.open.c,S.open.learn);
+}
+const SRC={director:"Director",feedback:"Tu feedback",analysis:"Análisis",metricas:"Métricas de YouTube",edicion:"Tus cambios"};
+function learnHtml(c,L){
+  const pb=c.playbook||"";
+  return `<div class="spread"><div><h3>IA del canal</h3><div class="why">${pb?`Ha aprendido ${pb.split("\n").filter(x=>x.trim().startsWith("-")||x.trim().startsWith("•")).length||"varias"} reglas${c.playbook_updated_at?` · última vez ${ago(c.playbook_updated_at)}`:""}. Las aplica el guionista y decide si hace falta el director.`:"Todavía no ha aprendido nada. Aprende de cada corrección del director, de tu feedback, de los análisis y de las métricas de YouTube."}</div></div><span class="chip mono">${L?L.bank:"…"} ideas en el banco</span></div>
+    ${L&&L.lessons.length?`<div style="margin-top:10px">${L.lessons.map(x=>`<div class="issue" style="grid-template-columns:auto 1fr"><span class="chip" style="height:fit-content">${SRC[x.source]||esc(x.source)}</span><div>${esc(x.lesson)} <span class="muted mono" style="font-size:11px">${ago(x.created_at)}</span></div></div>`).join("")}</div>`:""}
+    ${pb?`<details style="margin-top:10px"><summary class="label" style="cursor:pointer">Ver todo lo aprendido</summary><textarea id="c-playbook" rows="12" style="margin-top:8px;width:100%">${esc(pb)}</textarea><small class="muted">Puedes corregirlo: se guarda con el canal.</small></details>`:""}`;
 }
 function renderChannelSheet(first){
   if(!first) return;
   const c=S.open.c;
-  const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div>`:""}<div class="fgrid">
+  const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div><div class="card" id="learn-box" style="margin-top:10px">${learnHtml(c,S.open.learn)}</div>`:""}<div class="fgrid">
     <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
     <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
     <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
+    <label class="f full">Temas del canal <small>De aquí salen las ideas automáticas. Uno por línea o separados por comas</small><textarea id="c-topics" rows="3" placeholder="Animales en guerras, supervivencias imposibles, inventos por accidente, récords absurdos…">${esc(c.topics)}</textarea></label>
     <label class="f">Formato<select id="c-format"><option value="long" ${c.format==="long"?"selected":""}>Vídeo largo (16:9)</option><option value="short" ${c.format==="short"?"selected":""}>Shorts (9:16)</option></select></label>
     <label class="f">Duración objetivo (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(c.target_minutes)}"></label>
     <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["ca","Catalán"],["pt","Portugués"],["fr","Francés"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>
@@ -763,6 +792,7 @@ function renderChannelSheet(first){
     <label class="f full">Estilo visual <small>En inglés funciona mejor</small><textarea id="c-style" rows="2" placeholder="cinematic documentary, muted colors, 35mm film grain">${esc(c.style_prompt)}</textarea></label>
     <label class="f">Voz de ElevenLabs <small>Voice ID de tu librería</small><input type="text" id="c-voice" value="${esc(c.voice_id)}" class="mono"></label>
     <label class="f">Ideas por tanda<input type="number" id="c-ipr" min="1" max="10" value="${esc(c.ideas_per_run)}"></label>
+    <label class="f">Exigencia del director <small>Interviene si el borrador saca menos</small><select id="c-dir">${[[7,"7/10 · interviene poco"],[8,"8/10 · equilibrado"],[9,"9/10 · casi siempre"],[11,"Siempre"]].map(([k,l])=>`<option value="${k}" ${Number(c.director_threshold??8)===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f full">Canales de referencia <small>IDs de canal (empiezan por UC), separados por comas</small><input type="text" id="c-refs" value="${esc((c.reference_channels||[]).join(", "))}" class="mono"></label>
     <div class="full label" style="margin-top:6px">Sonido · ElevenLabs</div>
     <label class="f">Música de fondo<select id="c-mmode">${[["video","Compuesta a medida para cada vídeo"],["channel","Tema propio del canal (se compone una vez)"],["url","Mi propio MP3"],["off","Sin música"]].map(([k,l])=>`<option value="${k}" ${(c.music_mode||"video")===k?"selected":""}>${l}</option>`).join("")}</select></label>
@@ -774,7 +804,7 @@ function renderChannelSheet(first){
     ${c.generated_music_url?`<div class="full"><div class="label" style="margin-bottom:6px">Tema actual del canal</div><audio controls src="${esc(c.generated_music_url)}" style="width:100%"></audio><button class="btn sm ghost" type="button" onclick="resetTheme()">Componer un tema nuevo en el próximo vídeo</button></div>`:""}
     <label class="f">Privacidad al publicar<select id="c-priv">${[["private","Privado"],["unlisted","Oculto"],["public","Público"]].map(([k,l])=>`<option value="${k}" ${c.publish_privacy===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f">Estado<select id="c-status"><option value="active" ${c.status!=="paused"?"selected":""}>Activo</option><option value="paused" ${c.status==="paused"?"selected":""}>En pausa</option></select></label>
-    <label class="check full"><input type="checkbox" id="c-auto" ${c.auto_ideas?"checked":""}> Proponer ideas nuevas cada mañana</label>
+    <label class="check full"><input type="checkbox" id="c-auto" ${c.auto_ideas?"checked":""}> Ideas nuevas cada mañana desde el banco del canal (sin coste)</label>
   </div>`;
   const foot=`${c.id?`<button class="btn ghost danger" onclick="archiveChannel()">Archivar</button>`:""}${c.id?`<button class="btn" onclick="connectYT('${c.id}')">${c.youtube_connected?"Reconectar YouTube":"Conectar YouTube"}</button>`:""}<button class="btn pri" onclick="saveChannel()">${c.id?"Guardar":"Crear canal y pedir ideas"}</button>`;
   sheetShell(c.id?c.name:"Nuevo canal", c.id?`<span class="chip">${c.youtube_connected?"YouTube conectado":"Sin YouTube"}</span>`:"", body, foot);
@@ -787,18 +817,24 @@ async function saveChannel(){
     language:$("#c-lang").value, image_source:$("#c-img").value, audience:$("#c-aud").value.trim()||null, tone:$("#c-tone").value.trim()||null, style_prompt:$("#c-style").value.trim()||null,
     voice_id:$("#c-voice").value.trim()||null, ideas_per_run:+$("#c-ipr").value||5, reference_channels:$("#c-refs").value.split(",").map(s=>s.trim()).filter(Boolean),
     music_url:$("#c-music").value.trim()||null, music_volume:+$("#c-mvol").value||0, music_mode:$("#c-mmode").value, music_style:$("#c-mstyle").value.trim()||null,
-    sfx_enabled:$("#c-sfx").checked, sfx_volume:+$("#c-sfxvol").value||0, publish_privacy:$("#c-priv").value, status:$("#c-status").value, auto_ideas:$("#c-auto").checked };
+    sfx_enabled:$("#c-sfx").checked, sfx_volume:+$("#c-sfxvol").value||0, publish_privacy:$("#c-priv").value, status:$("#c-status").value, auto_ideas:$("#c-auto").checked,
+    topics:$("#c-topics").value.trim()||null, director_threshold:+$("#c-dir").value||8, ...($("#c-playbook")?{playbook:$("#c-playbook").value.trim()||null}:{}) };
   if(!row.name||!row.niche) return toast("El canal necesita nombre y nicho");
   await run(async()=>{
     if(c.id){ const {error}=await sb.from("channels").update(row).eq("id",c.id); if(error) throw error; }
     else { const {data,error}=await sb.from("channels").insert(row).select().single(); if(error) throw error;
-      await sb.from("jobs").insert({channel_id:data.id, step:"ideas"}); await kick(); }
+      await sb.rpc("draw_ideas",{p_channel:data.id,p_n:row.ideas_per_run}); await kick(); }
     closeSheet(); await load();
-  }, c.id?"Canal guardado":"Canal creado. Buscando las primeras ideas…");
+  }, c.id?"Canal guardado":"Canal creado. Preparando su banco de ideas…");
 }
 async function resetTheme(){ await run(async()=>{ const {error}=await sb.from("channels").update({generated_music_url:null}).eq("id",S.open.c.id); if(error) throw error; S.open.c.generated_music_url=null; renderChannelSheet(true); await load(); }, "Se compondrá un tema nuevo"); }
 async function archiveChannel(){ await run(async()=>{ const {error}=await sb.from("channels").update({status:"archived"}).eq("id",S.open.c.id); if(error) throw error; closeSheet(); await load(); }, "Canal archivado"); }
-async function askIdeas(id){ await run(async()=>{ const {error}=await sb.from("jobs").insert({channel_id:id, step:"ideas"}); if(error) throw error; await kick(); await load(); }, "Buscando ideas. Llegarán a Revisar en un par de minutos."); }
+async function askIdeas(id){
+  const c=ch(id);
+  try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:c?.ideas_per_run||5}); if(error) throw error; await kick(); await load();
+    toast(data>0?`${data} ideas nuevas en Revisar`:"Preparando el banco de ideas del canal. Llegarán en un minuto."); }
+  catch(e){ toast(e.message||String(e)); }
+}
 async function connectYT(id){
   await run(async()=>{ const { data:{ session } } = await sb.auth.getSession();
     const r=await fetch(SB_URL+"/functions/v1/youtube-auth",{method:"POST",headers:{Authorization:"Bearer "+session.access_token,apikey:SB_KEY,"Content-Type":"application/json"},body:JSON.stringify({channel_id:id})});

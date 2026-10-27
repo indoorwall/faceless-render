@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Faceless Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<style>
+/* Layout: carril de navegación a la izquierda (barra inferior en móvil), bandeja de revisión como vista principal, hoja lateral para el detalle */
+:root{
+  --bg:#F2F3F7; --surface:#FFFFFF; --sunk:#E8EAF0; --ink:#14161C; --muted:#636979; --line:#DEE1E8;
+  --accent:#2F45E8; --accent-soft:#E4E8FF; --on-accent:#FFFFFF;
+  --ok:#1C7F4E; --ok-soft:#DDF2E6; --warn:#9A6410; --warn-soft:#F8EBD3; --bad:#BE3328; --bad-soft:#F9E0DD;
+  --display:"Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body:"Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r:12px; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0E1014; --surface:#171A21; --sunk:#1F232C; --ink:#ECEEF3; --muted:#9299A8; --line:#2A2F3A;
+  --accent:#7D8FFF; --accent-soft:#232A52; --on-accent:#0E1014;
+  --ok:#5BC98F; --ok-soft:#173226; --warn:#E3AE57; --warn-soft:#3A2D16; --bad:#F07A6F; --bad-soft:#3D1D1A; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0E1014; --surface:#171A21; --sunk:#1F232C; --ink:#ECEEF3; --muted:#9299A8; --line:#2A2F3A;
+  --accent:#7D8FFF; --accent-soft:#232A52; --on-accent:#0E1014;
+  --ok:#5BC98F; --ok-soft:#173226; --warn:#E3AE57; --warn-soft:#3A2D16; --bad:#F07A6F; --bad-soft:#3D1D1A; color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--display);font-weight:700;margin:0;text-wrap:balance;letter-spacing:-.01em}
+h1{font-size:30px;line-height:1.1} h2{font-size:20px} h3{font-size:16px;font-weight:600}
+a{color:var(--accent)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.label{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100%}
+.rail{position:sticky;top:0;height:100vh;padding:22px 14px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:4px;background:var(--surface)}
+.brand{font-family:var(--display);font-weight:700;font-size:19px;padding:4px 10px 18px;display:flex;align-items:center;gap:9px}
+.brand i{width:11px;height:11px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 4px var(--bad-soft)}
+.nav{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;color:var(--ink);text-decoration:none;font-weight:500}
+.nav:hover{background:var(--sunk)}
+.nav.on{background:var(--accent-soft);color:var(--accent)}
+.nav svg{width:18px;height:18px;flex:none}
+.nav .n{margin-left:auto;font:500 11.5px var(--mono);background:var(--accent);color:var(--on-accent);border-radius:20px;padding:1px 7px}
+.rail .foot{margin-top:auto;font-size:12px;color:var(--muted);padding:0 10px}
+main{min-width:0;padding-block:28px 90px;padding-left:max(16px, env(safe-area-inset-left,0px));padding-right:max(16px, env(safe-area-inset-right,0px))}
+.wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+.head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.head p{margin:6px 0 0;color:var(--muted);max-width:60ch}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--line);background:var(--surface);padding:8px 14px;border-radius:9px;cursor:pointer;font-weight:600;font-size:14px;white-space:nowrap}
+.btn:hover{border-color:var(--muted)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--ink);background:var(--sunk)}
+.btn.danger{color:var(--bad)}
+.btn.sm{padding:5px 10px;font-size:13px}
+.btn[disabled]{opacity:.5;pointer-events:none}
+
+/* Tira del pipeline */
+.flow{display:grid;grid-template-columns:repeat(5,1fr);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.flow div{padding:14px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:2px;min-width:0}
+.flow div:last-child{border-right:0}
+.flow b{font:600 26px/1.1 var(--display);font-variant-numeric:tabular-nums}
+.flow .you{background:var(--accent-soft)}
+.flow .you .label{color:var(--accent)}
+
+section{display:flex;flex-direction:column;gap:12px}
+.sec-h{display:flex;align-items:baseline;gap:10px}
+.sec-h .mono{color:var(--muted)}
+.list{display:flex;flex-direction:column;gap:10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.card.click{cursor:pointer}
+.card.click:hover{border-color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row.end{justify-content:flex-end}
+.spread{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+.chip .dot{width:7px;height:7px;border-radius:50%}
+.st-ok{background:var(--ok-soft);color:var(--ok)} .st-warn{background:var(--warn-soft);color:var(--warn)}
+.st-bad{background:var(--bad-soft);color:var(--bad)} .st-acc{background:var(--accent-soft);color:var(--accent)}
+.idea-t{font:600 17px/1.3 var(--display)}
+.why{font-size:14px;color:var(--muted)}
+.why b{color:var(--ink);font-weight:600}
+.ev{display:flex;flex-wrap:wrap;gap:6px}
+.ev a{font-size:12.5px;text-decoration:none;background:var(--sunk);color:var(--ink);padding:3px 9px;border-radius:7px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev a .mono{color:var(--accent);margin-left:4px}
+.bar{height:6px;background:var(--sunk);border-radius:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .6s}
+.empty{border:1px dashed var(--line);border-radius:var(--r);padding:22px;color:var(--muted);text-align:center}
+
+label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;min-width:0}
+label.f small{font-weight:400;color:var(--muted)}
+input[type=text],input[type=password],input[type=email],input[type=number],input[type=url],input[type=datetime-local],select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:14px;font-weight:400}
+textarea{resize:vertical;min-height:70px;line-height:1.5}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.fgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.fgrid .full{grid-column:1/-1}
+.check{display:flex;gap:8px;align-items:center;font-size:14px}
+
+/* Hoja lateral */
+.scrim{position:fixed;inset:0;background:rgba(10,12,18,.45);z-index:40;opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;top:0;right:0;bottom:0;width:min(760px,100%);background:var(--surface);z-index:50;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column;border-left:1px solid var(--line);padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
+.sheet.on{transform:none}
+.sheet-h{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.sheet-b{overflow:auto;padding:20px;display:flex;flex-direction:column;gap:20px;flex:1}
+.sheet-f{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;background:var(--surface)}
+.scene{display:grid;grid-template-columns:34px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.scene:first-child{border-top:0}
+.scene .n{font:500 12px var(--mono);color:var(--muted);padding-top:9px}
+.scene-meta{display:grid;grid-template-columns:140px 1fr;gap:8px;margin-top:8px}
+.an{display:flex;flex-direction:column;gap:12px}
+.an-top{display:flex;gap:14px;align-items:center}
+.an-score{font:700 34px/1 var(--display,inherit);min-width:72px;text-align:center;padding:10px 0;border-radius:12px;background:var(--sunk)}
+.an-score small{display:block;font-size:11px;font-weight:500;color:var(--muted);margin-top:4px}
+.bars{display:grid;grid-template-columns:110px 1fr 28px;gap:6px 10px;align-items:center;font-size:12.5px}
+.bars b{height:6px;border-radius:3px;background:var(--sunk);position:relative;overflow:hidden}
+.bars b i{position:absolute;inset:0 auto 0 0;border-radius:3px}
+.issue{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;padding:10px 0;border-top:1px solid var(--line);font-size:13.5px}
+.issue .t{font:500 12px var(--mono,monospace);padding:2px 7px;border-radius:6px;background:var(--sunk);border:0;cursor:pointer;color:var(--ink);height:fit-content}
+.issue .fix{grid-column:2;color:var(--muted)}
+.sev-alta{color:var(--bad)} .sev-media{color:var(--warn)} .sev-baja{color:var(--muted)}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opts button{text-align:left;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:8px 10px;font:inherit;font-size:13.5px;cursor:pointer}
+.opts button:hover{border-color:var(--accent)}
+.tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.tgrid button{padding:0;border:2px solid transparent;border-radius:9px;background:none;cursor:pointer;overflow:hidden;position:relative}
+.tgrid button.on{border-color:var(--accent)}
+.tgrid button.on::after{content:"✓";position:absolute;top:6px;right:6px;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--on-accent);font-size:12px;display:grid;place-items:center}
+.tgrid img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
+.thumbs img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:7px;background:var(--sunk)}
+video{width:100%;border-radius:10px;background:#000;max-height:60vh}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13.5px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+
+.key-row{display:grid;grid-template-columns:200px 1fr auto;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)}
+.key-row:first-of-type{border-top:0}
+.log{display:flex;flex-direction:column;font-size:13.5px}
+.log div{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;font-size:14px;opacity:0;transition:.2s;z-index:60;pointer-events:none;max-width:90vw}
+.toast.on{opacity:1;transform:translateX(-50%)}
+
+.auth{min-height:100%;display:grid;place-items:center;padding-block:24px;padding-left:max(16px, env(safe-area-inset-left,0px));padding-right:max(16px, env(safe-area-inset-right,0px))}
+.auth .card{width:min(400px,100%);padding:28px;gap:16px}
+
+@media (max-width: 820px){
+  .app{grid-template-columns:1fr}
+  .rail{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;flex-direction:row;justify-content:space-around;padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));border-right:0;border-top:1px solid var(--line);z-index:30}
+  .brand,.rail .foot{display:none}
+  .nav{flex-direction:column;gap:2px;font-size:11px;padding:6px 8px;position:relative}
+  .nav .n{position:absolute;top:0;right:2px;font-size:10px;padding:0 5px}
+  .flow{grid-template-columns:repeat(3,1fr)}
+  .flow div:nth-child(3){border-right:0}
+  .flow div:nth-child(n+4){border-top:1px solid var(--line)}
+  .fgrid,.scene-meta{grid-template-columns:1fr}
+  .key-row{grid-template-columns:1fr}
+  h1{font-size:25px}
+}
+
+
+
+.shot{display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:9px;background:var(--sunk)}
+.shot textarea{min-height:0;background:var(--surface)}
+.shot-meta{display:grid;grid-template-columns:170px 1fr auto;gap:6px;align-items:center}
+.shot-meta select,.shot-meta input{background:var(--surface);padding:6px 9px;font-size:13px}
+@media (max-width:820px){ .shot-meta{grid-template-columns:1fr auto} .shot-meta > :nth-child(2){grid-column:1/-1;grid-row:2} }
+/* Guía */
+.guide-ta{min-height:360px;font-size:14.5px;line-height:1.6}
+.guide-fb{background:var(--sunk);border-color:transparent}
+.guide-fb textarea{background:var(--surface)}
+.guide-cta{background:var(--accent-soft);border-color:transparent;margin-bottom:6px}
+/* Descubrir */
+.disc-bar{gap:12px}
+.disc-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.disc-row input{flex:1 1 320px;min-width:0}
+.seg{display:inline-flex;background:var(--sunk);border-radius:9px;padding:3px}
+.seg button{border:0;background:transparent;padding:6px 12px;border-radius:7px;font-weight:600;font-size:13px;cursor:pointer;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.chip-btn{border:1px solid var(--line);background:var(--surface);cursor:pointer;color:var(--ink);font-weight:500}
+.chip-btn:hover{border-color:var(--accent);color:var(--accent)}
+.running{flex-direction:row;align-items:center;gap:14px;border-color:var(--accent);background:var(--accent-soft)}
+.spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);animation:spin 1s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.prop{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.prop-main{padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.prop-head{display:flex;gap:14px;align-items:center}
+.prop-head h2{font-size:22px}
+.tagline{color:var(--muted);font-size:14.5px;margin-top:2px}
+.score{flex:none;width:62px;height:62px;border-radius:50%;display:grid;place-content:center;text-align:center;line-height:1;border:3px solid currentColor}
+.score b{font:700 22px var(--display);font-variant-numeric:tabular-nums}
+.score span{font-size:10px;opacity:.7}
+.sc-hi{color:var(--ok)} .sc-mid{color:var(--warn)} .sc-lo{color:var(--muted)}
+.prop-desc{margin:0;font-size:15px;max-width:62ch}
+.ticks{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:5px;font-size:14px}
+.ticks li{padding-left:18px;position:relative}
+.ticks li::before{content:"";position:absolute;left:3px;top:.55em;width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.ticks.warn li::before{background:var(--warn)}
+.titles summary{cursor:pointer;font-weight:600;font-size:13.5px;color:var(--accent)}
+.titles ol{margin:8px 0 0;padding-left:20px;font-size:14px;display:flex;flex-direction:column;gap:4px}
+.prop-data{background:var(--sunk);padding:20px;display:flex;flex-direction:column;gap:12px;min-width:0;border-left:1px solid var(--line)}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpis div{background:var(--surface);border-radius:9px;padding:10px 12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.kpis b{font:700 20px var(--display);font-variant-numeric:tabular-nums}
+.kpis span{font-size:11.5px;color:var(--muted);line-height:1.3}
+.vids{display:flex;flex-direction:column;gap:8px}
+.vid{display:grid;grid-template-columns:96px 1fr;gap:10px;text-decoration:none;color:var(--ink);align-items:center;border-radius:8px;padding:4px;margin:-4px}
+.vid:hover{background:var(--surface)}
+.vid > div{min-width:0}
+.vid img{width:96px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;background:var(--line)}
+.vt{font-size:13px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.vm{font-size:11.5px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vm .hot{color:var(--ok);font-weight:600}
+.srcs{display:flex;flex-wrap:wrap;gap:6px;font-size:12px}
+.srcs a{color:var(--muted)}
+.prop-foot{grid-column:1/-1;display:flex;justify-content:flex-end;gap:10px;padding:12px 20px;border-top:1px solid var(--line)}
+.old summary{cursor:pointer;color:var(--muted);font-weight:600}
+@media (max-width:820px){ .prop{grid-template-columns:1fr} .prop-data{border-left:0;border-top:1px solid var(--line)} }
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="scrim" id="scrim"></div>
+<aside class="sheet" id="sheet" aria-hidden="true"></aside>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const SB_URL = "https://embjkwggqooawqnzkoam.supabase.co";
+const SB_KEY = "sb_publishable_LJvU-FYxfiy6dmQz7B6V6A_ZCLJlMKl";
+const REDIRECT_URI = SB_URL + "/functions/v1/youtube-auth";
+const sb = supabase.createClient(SB_URL, SB_KEY);
+
+const S = { session:null, view:"hoy", channels:[], videos:[], proposals:[], activity:[], keys:[], jobs:[], filterCh:"", open:null, busy:false };
+
+const KEY_INFO = {
+  ANTHROPIC_API_KEY:["Claude (Anthropic)","Ideas, guiones e investigación","https://console.anthropic.com/settings/keys", true],
+  ELEVENLABS_API_KEY:["ElevenLabs","Voz en off","https://elevenlabs.io/app/settings/api-keys", true],
+  CREATOMATE_API_KEY:["Creatomate","Montaje y render del vídeo","https://creatomate.com/dashboard", true],
+  OPENAI_API_KEY:["OpenAI","Imágenes IA y miniaturas (GPT Image 2)","https://platform.openai.com/api-keys", false],
+  PEXELS_API_KEY:["Pexels","Fotos y vídeo de stock gratis","https://www.pexels.com/api/", false],
+  YOUTUBE_API_KEY:["YouTube Data API","Análisis de vídeos y nichos","https://console.cloud.google.com/apis/credentials", false],
+  GOOGLE_CLIENT_ID:["Google OAuth · Client ID","Publicar en YouTube","https://console.cloud.google.com/apis/credentials", false],
+  GOOGLE_CLIENT_SECRET:["Google OAuth · Client secret","Publicar en YouTube","https://console.cloud.google.com/apis/credentials", false],
+  RENDER_URL:["Servidor de render (URL)","Montaje propio en 1080p. Si está vacío se usa Creatomate","https://railway.com/dashboard", false],
+};
+const STATUS = {
+  idea_review:["Idea por aprobar","st-acc"], idea_rejected:["Descartada",""], scripting:["Escribiendo guion","st-warn"],
+  script_review:["Guion por revisar","st-acc"], producing:["En producción","st-warn"], final_review:["Vídeo por aprobar","st-acc"],
+  publishing:["Publicando","st-warn"], published:["Publicado","st-ok"], scheduled:["Programado","st-ok"], failed:["Error","st-bad"],
+};
+const ICON = {
+  hoy:'<path d="M4 13h4l2 3h4l2-3h4M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
+  canales:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+  descubrir:'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/>',
+  ajustes:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+};
+
+// ---------- utilidades ----------
+const $ = (s, el=document) => el.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ch = (id) => S.channels.find(c => c.id === id) || {};
+const fmtN = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n ?? 0);
+const ago = (d) => { const s=(Date.now()-new Date(d))/1000; if(s<60) return "ahora"; if(s<3600) return Math.floor(s/60)+" min"; if(s<86400) return Math.floor(s/3600)+" h"; return new Date(d).toLocaleDateString("es-ES",{day:"numeric",month:"short"}); };
+const dur = (s) => s ? `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,"0")}` : "–";
+function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),2600); }
+function chip(status){ const [l,c]=STATUS[status]||[status,""]; return `<span class="chip ${c}">${esc(l)}</span>`; }
+function chTag(id){ const c=ch(id); return `<span class="chip"><span class="dot" style="background:${esc(c.color||'#888')}"></span>${esc(c.name||"Canal")}</span>`; }
+function icon(name){ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`; }
+
+async function kick(){
+  try{ const { data:{ session } } = await sb.auth.getSession();
+    await fetch(SB_URL+"/functions/v1/worker",{method:"POST",headers:{Authorization:"Bearer "+session.access_token, apikey:SB_KEY,"Content-Type":"application/json"},body:"{}"});
+  }catch(e){ /* el cron lo recogerá en menos de un minuto */ }
+}
+async function run(fn, ok){
+  try{ S.busy=true; await fn(); if(ok) toast(ok); }
+  catch(e){ toast(e.message || "Algo ha fallado"); console.error(e); }
+  finally{ S.busy=false; }
+}
+
+// ---------- datos ----------
+async function load(){
+  const [c,v,p,a,k,j] = await Promise.all([
+    sb.from("channels").select("*").neq("status","archived").order("created_at"),
+    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("channel_proposals").select("*").eq("status","pending").order("created_at",{ascending:false}),
+    sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
+    sb.rpc("api_key_status"),
+    sb.from("jobs").select("id,step,status,channel_id,video_id").in("status",["queued","running"]),
+  ]);
+  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.jobs=j.data||[];
+  render();
+}
+let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
+
+// ---------- render ----------
+function render(){
+  if(!S.session){ $("#root").innerHTML = authView(); bindAuth(); return; }
+  const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
+  const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
+  const views = {hoy:["Revisar",reviewCount],canales:["Canales",0],descubrir:["Descubrir",S.proposals.length],ajustes:["Ajustes",missing]};
+  const scrollY = window.scrollY;
+  $("#root").innerHTML = `<div class="app">
+    <nav class="rail">
+      <div class="brand"><i></i>Faceless Studio</div>
+      ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
+      <div class="foot">${esc(S.session.user.email)}</div>
+    </nav>
+    <main><div class="wrap">${ ({hoy:viewHoy,canales:viewCanales,descubrir:viewDescubrir,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+  </div>`;
+  window.scrollTo(0, scrollY);
+  if(S.open) renderSheet();
+}
+
+function authView(){
+  return `<div class="auth"><form class="card" id="authf">
+    <div class="brand" style="padding:0"><i></i>Faceless Studio</div>
+    <p class="muted" style="margin:0">Tu estudio de canales automáticos. La primera cuenta que se crea es la del propietario; nadie más tiene acceso.</p>
+    <label class="f">Email<input type="email" id="ae" required autocomplete="email"></label>
+    <label class="f">Contraseña<input type="password" id="ap" required minlength="8" autocomplete="current-password"></label>
+    <div class="row"><button class="btn pri" type="submit" style="flex:1">Entrar</button><button class="btn" type="button" id="asu">Crear cuenta</button></div>
+    <p class="muted" id="amsg" style="margin:0;font-size:13px"></p>
+  </form></div>`;
+}
+function bindAuth(){
+  const netMsg = "No se puede conectar con el servidor. Si estás viendo esta página dentro de la app de Claude, descárgala y ábrela en Chrome, o súbela a Netlify Drop.";
+  const msg = (t) => $("#amsg").textContent = /fetch|network/i.test(t) ? netMsg : t;
+  $("#authf").onsubmit = async (e) => { e.preventDefault();
+    const { error } = await sb.auth.signInWithPassword({ email:$("#ae").value, password:$("#ap").value });
+    if(error && /fetch|network/i.test(error.message)) return msg(error.message);
+    if(error) msg(error.message.includes("confirm") ?"Confirma tu email con el enlace que te hemos enviado y vuelve a entrar." : "Email o contraseña incorrectos.");
+  };
+  $("#asu").onclick = async () => {
+    if(!$("#authf").reportValidity()) return;
+    const { data, error } = await sb.auth.signUp({ email:$("#ae").value, password:$("#ap").value });
+    if(error) return msg(error.message);
+    if(!data.session) msg("Cuenta creada. Abre el enlace de confirmación del email (aunque la página de destino no cargue, la cuenta queda confirmada) y entra aquí.");
+  };
+}
+
+// --- Vista: Revisar
+function viewHoy(){
+  const vs = S.filterCh ? S.videos.filter(v=>v.channel_id===S.filterCh) : S.videos;
+  const by = (st) => vs.filter(v=>st.includes(v.status));
+  const ideas=by(["idea_review"]), scripts=by(["script_review"]), finals=by(["final_review"]);
+  const prod=by(["scripting","producing","publishing"]), failed=by(["failed"]), pub=by(["published","scheduled"]).slice(0,6);
+  const ideasRunning = S.jobs.filter(j=>j.step==="ideas").length;
+  if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal o deja que el estudio te proponga nichos con demanda real.</p></div></div>
+    <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button><a class="btn" href="#descubrir">Ver propuestas de canales</a></div>
+    ${setupHint()}`;
+  return `<div class="head"><div><h1>Revisar</h1><p>Tú solo decides en tres momentos: la idea, el guion y el vídeo final. El resto lo hace el estudio.</p></div>
+    <div class="row"><select id="fch" style="width:auto">${[`<option value="">Todos los canales</option>`,...S.channels.map(c=>`<option value="${c.id}" ${S.filterCh===c.id?"selected":""}>${esc(c.name)}</option>`)].join("")}</select></div></div>
+    ${setupHint()}
+    <div class="flow">
+      <div class="you"><span class="label">1 · Ideas</span><b>${ideas.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
+      <div class="you"><span class="label">2 · Guiones</span><b>${scripts.length}</b><span class="muted" style="font-size:12px">por revisar</span></div>
+      <div><span class="label">Producción</span><b>${prod.length}</b><span class="muted" style="font-size:12px">voz, imagen, montaje</span></div>
+      <div class="you"><span class="label">3 · Vídeos</span><b>${finals.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
+      <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
+    </div>
+    ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>`
+      <div class="card"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip("failed")}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
+      <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`).join("")}</div></section>`:""}
+    <section><div class="sec-h"><h2>Vídeos por aprobar</h2><span class="mono">${finals.length}</span></div>
+      ${finals.length?`<div class="grid">${finals.map(v=>`<div class="card click" onclick="openVideo('${v.id}')">
+        ${v.thumbnail_url?`<img src="${esc(v.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px">`:""}
+        <div class="row">${chTag(v.channel_id)}<span class="mono muted">${dur(v.duration_sec)}</span></div>
+        <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
+    </section>
+    <section><div class="sec-h"><h2>Guiones por revisar</h2><span class="mono">${scripts.length}</span></div>
+      ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">Revisar guion</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
+    </section>
+    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasRunning?`<span class="chip st-warn">Buscando ideas…</span>`:""}</div>
+      ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pide ideas nuevas desde un canal; además, cada mañana a las 8:30 llegan solas.</div>`}
+    </section>
+    ${prod.length?`<section><div class="sec-h"><h2>En producción</h2><span class="mono">${prod.length}</span></div><div class="list">${prod.map(v=>`
+      <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
+      ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`).join("")}</div></section>`:""}
+    ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>`
+      <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`).join("")}</div></section>`:""}`;
+}
+function ideaCard(v){
+  const ev = Array.isArray(v.idea_evidence) ? v.idea_evidence.filter(e=>e&&e.url).slice(0,4) : [];
+  return `<div class="card" id="idea-${v.id}">
+    <div class="row">${chTag(v.channel_id)}<span class="muted" style="font-size:12px">${ago(v.created_at)}</span></div>
+    <div class="idea-t">${esc(v.idea_title)}</div>
+    ${v.idea_angle?`<div class="why"><b>Ángulo:</b> ${esc(v.idea_angle)}</div>`:""}
+    ${v.idea_reason?`<div class="why"><b>Por qué funcionará:</b> ${esc(v.idea_reason)}</div>`:""}
+    ${ev.length?`<div class="ev">${ev.map(e=>`<a href="${esc(e.url)}" target="_blank" rel="noopener" title="${esc(e.title)}">${esc((e.title||e.url).slice(0,60))}${e.score?`<span class="mono">×${esc(e.score)}</span>`:e.views?`<span class="mono">${fmtN(e.views)}</span>`:""}</a>`).join("")}</div>`:""}
+    <textarea id="note-${v.id}" placeholder="Tu enfoque u opinión para el guion (opcional, pero da al canal tu sello)" rows="2"></textarea>
+    <div class="row end"><button class="btn ghost danger" onclick="rejectIdea('${v.id}')">Descartar</button><button class="btn pri" onclick="approveIdea('${v.id}')">Aprobar y escribir guion</button></div>
+  </div>`;
+}
+function setupHint(){
+  const miss = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]);
+  if(!miss.length) return "";
+  return `<div class="card" style="border-color:var(--warn);background:var(--warn-soft)"><div class="spread"><div><h3>Faltan claves para producir</h3><div class="why" style="color:var(--warn)">${miss.map(k=>KEY_INFO[k.name][0]).join(", ")}</div></div><a class="btn sm" href="#ajustes">Añadir claves</a></div></div>`;
+}
+
+// --- Vista: Canales
+function viewCanales(){
+  return `<div class="head"><div><h1>Canales</h1><p>Cada canal tiene su nicho, voz, estilo visual y formato. Así cada vídeo sale con identidad propia.</p></div><button class="btn pri" onclick="openChannel()">Nuevo canal</button></div>
+  ${S.channels.length?`<div class="grid">${S.channels.map(c=>{
+    const vs=S.videos.filter(v=>v.channel_id===c.id);
+    const n=(st)=>vs.filter(v=>st.includes(v.status)).length;
+    const gen=S.jobs.some(j=>j.step==="ideas"&&j.channel_id===c.id);
+    return `<div class="card">
+      <div class="spread"><div style="min-width:0"><div class="row"><span class="chip"><span class="dot" style="background:${esc(c.color)}"></span>${c.format==="short"?"Shorts":"Largo · "+c.target_minutes+" min"}</span>${c.status==="paused"?`<span class="chip st-warn">En pausa</span>`:""}</div>
+      <h2 style="margin-top:8px">${esc(c.name)}</h2><div class="why">${esc(c.niche)}</div></div></div>
+      <dl class="kv"><dt>Idioma</dt><dd>${esc(c.language)}</dd><dt>Imágenes</dt><dd>${{ai:"IA",stock:"Stock real",mix:"Mezcla"}[c.image_source]}</dd><dt>YouTube</dt><dd>${c.youtube_connected?`<span style="color:var(--ok)">Conectado</span>`:`<span class="muted">Sin conectar</span>`}</dd>
+      <dt>Pipeline</dt><dd class="mono">${n(["idea_review"])} ideas · ${n(["scripting","script_review","producing","final_review"])} en curso · ${n(["published","scheduled"])} publicados</dd></dl>
+      <div class="row" style="margin-top:auto"><button class="btn sm pri" ${gen?"disabled":""} onclick="askIdeas('${c.id}')">${gen?"Buscando ideas…":"Pedir ideas"}</button><button class="btn sm" onclick="openGuide('${c.id}')">${c.style_guide?"Guía ✓":"Crear guía"}</button><button class="btn sm" onclick="openChannel('${c.id}')">Editar</button>
+      ${c.youtube_connected?"":`<button class="btn sm ghost" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}</div>
+    </div>`;}).join("")}</div>`:`<div class="empty">Aún no hay canales. Crea uno o ve a Descubrir para que el estudio te proponga nichos.</div>`}`;
+}
+
+// --- Vista: Descubrir
+const FOCUS_CHIPS=["Historia","Finanzas personales","Ciencia y espacio","Misterios sin resolver","Tecnología e IA","Geografía y países","Psicología","Deporte"];
+const COMP={baja:["Competencia baja","st-ok"],media:["Competencia media","st-warn"],alta:["Competencia alta","st-bad"]};
+const PROD={facil:"Fácil de producir",media:"Producción media",dificil:"Producción exigente"};
+function scoreClass(n){ return n>=70?"sc-hi":n>=50?"sc-mid":"sc-lo"; }
+function rpmText(p){ if(p.rpm_low==null) return "–"; const c=p.rpm_currency==="USD"?"$":"€"; return `${String(p.rpm_low).replace(".",",")}–${String(p.rpm_high).replace(".",",")} ${c}`; }
+function proposalCard(p){
+  const m=p.metrics||{}; const has=m.sample>0;
+  const [cl,cc]=COMP[(p.competition||"").toLowerCase()]||[p.competition?`Competencia ${p.competition}`:"",""];
+  const vids=(p.videos||[]).slice(0,4);
+  return `<article class="prop">
+    <div class="prop-main">
+      <div class="prop-head">
+        <div class="score ${scoreClass(p.score||0)}" title="Puntuación de oportunidad: demanda, huecos para canales pequeños, RPM y competencia"><b>${p.score??"–"}</b><span>/100</span></div>
+        <div style="min-width:0"><h2>${esc(p.name)}</h2><div class="tagline">${esc(p.tagline||p.niche)}</div></div>
+      </div>
+      <div class="row">
+        <span class="chip">${p.format==="short"?"Shorts":"Vídeo largo"}</span>
+        ${cl?`<span class="chip ${cc}" title="${esc(p.competition_note||"")}">${esc(cl)}</span>`:""}
+        ${p.production?`<span class="chip" title="${esc(p.production_note||"")}">${PROD[p.production]||esc(p.production)}</span>`:""}
+        <span class="chip">${p.language==="en"?"Inglés":"Español"}</span>
+      </div>
+      ${p.description?`<p class="prop-desc">${esc(p.description)}</p>`:""}
+      ${p.audience?`<div class="why"><b>Para quién:</b> ${esc(p.audience)}</div>`:""}
+      ${(p.why_now||[]).length?`<div><div class="label">Por qué ahora</div><ul class="ticks">${p.why_now.map(t=>`<li>${esc(t)}</li>`).join("")}</ul></div>`:""}
+      ${(p.risks||[]).filter(Boolean).length?`<div><div class="label">A tener en cuenta</div><ul class="ticks warn">${p.risks.filter(Boolean).map(t=>`<li>${esc(t)}</li>`).join("")}</ul></div>`:""}
+      ${(p.sample_titles||[]).length?`<details class="titles"><summary>${p.sample_titles.length} títulos de ejemplo</summary><ol>${p.sample_titles.map(t=>`<li>${esc(t)}</li>`).join("")}</ol></details>`:""}
+    </div>
+    <aside class="prop-data">
+      <div class="label">Datos de YouTube · últimos ${m.window_days||75} días</div>
+      <div class="kpis">
+        <div><b>${has?fmtN(m.median_views):"–"}</b><span>vistas medianas</span></div>
+        <div><b>${has?m.outliers:"–"}</b><span>vídeos ×3 sobre su canal</span></div>
+        <div><b>${has?m.small_channel_hits:"–"}</b><span>éxitos de canales &lt;100k</span></div>
+        <div><b>${rpmText(p)}</b><span>RPM estimado${p.rpm_source?` · <a href="${esc(p.rpm_source)}" target="_blank" rel="noopener">fuente</a>`:""}</span></div>
+      </div>
+      ${vids.length?`<div class="label" style="margin-top:4px">Vídeos que lo demuestran</div><div class="vids">${vids.map(v=>`
+        <a class="vid" href="${esc(v.url)}" target="_blank" rel="noopener">
+          <img src="${esc(v.thumb)}" alt="" loading="lazy">
+          <div><div class="vt">${esc(v.title)}</div><div class="vm mono">${fmtN(v.views)} vistas · <span class="${v.score>=3?"hot":""}">×${String(v.score).replace(".",",")}</span> · ${esc(v.channel||"")}</div></div>
+        </a>`).join("")}</div>`:`<div class="muted" style="font-size:13px">${has?"":"Sin datos de YouTube para esta propuesta."}</div>`}
+      ${(p.sources||[]).length?`<div class="srcs">${p.sources.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc((s.title||s.url).slice(0,48))}</a>`).join("")}</div>`:""}
+    </aside>
+    <footer class="prop-foot"><button class="btn ghost danger" onclick="rejectProposal('${p.id}')">Descartar</button><button class="btn pri" onclick="acceptProposal('${p.id}')">Crear este canal</button></footer>
+  </article>`;
+}
+function viewDescubrir(){
+  const running = S.jobs.some(j=>j.step==="proposals");
+  const fresh = S.proposals.filter(p=>p.score!=null).sort((a,b)=>(b.score||0)-(a.score||0));
+  const old = S.proposals.filter(p=>p.score==null);
+  return `<div class="head"><div><h1>Descubrir canales</h1><p>Propuestas con datos reales: lo que está funcionando ahora en YouTube, cuánto paga cada nicho y dónde hay hueco para un canal nuevo.</p></div></div>
+  <div class="card disc-bar">
+    <div class="disc-row">
+      <input type="text" id="pfocus" oninput="S.pfocus=this.value" placeholder="¿Sobre qué te gustaría un canal? Déjalo vacío para que busque las mejores oportunidades" value="${esc(S.pfocus||"")}">
+      <div class="seg" role="radiogroup" aria-label="Mercado">${[["es","Español"],["en","Inglés"]].map(([k,l])=>`<button type="button" class="${(S.plang||"es")===k?"on":""}" onclick="S.plang='${k}';render()">${l}</button>`).join("")}</div>
+      <button class="btn pri" ${running?"disabled":""} onclick="askProposals()">${running?"Analizando…":"Buscar oportunidades"}</button>
+    </div>
+    <div class="row">${FOCUS_CHIPS.map(f=>`<button type="button" class="chip chip-btn" onclick="$('#pfocus').value='${f}';S.pfocus='${f}'">${f}</button>`).join("")}</div>
+  </div>
+  ${running?`<div class="card running"><div class="spin"></div><div><b>Analizando el mercado</b><div class="why">Busca tendencias y RPM en la web, consulta los vídeos que más destacan en YouTube y puntúa cada nicho. Tarda 2–3 minutos.</div></div></div>`:""}
+  ${fresh.length?`<div class="list">${fresh.map(proposalCard).join("")}</div>`:(running?"":`<div class="empty">Escribe un tema o pulsa «Buscar oportunidades» y en unos minutos tendrás 5 canales puntuados.</div>`)}
+  ${old.length?`<details class="old"><summary>${old.length===1?"1 propuesta anterior":old.length+" propuestas anteriores"}, sin datos de YouTube</summary><div class="list" style="margin-top:12px">${old.map(p=>`<div class="card"><div class="spread"><div style="min-width:0"><h3>${esc(p.name)}</h3><div class="why">${esc(p.niche)}</div></div><div class="row"><button class="btn sm ghost danger" onclick="rejectProposal('${p.id}')">Descartar</button><button class="btn sm" onclick="acceptProposal('${p.id}')">Crear</button></div></div></div>`).join("")}</div></details>`:""}`;
+}
+
+// --- Vista: Ajustes
+function viewAjustes(){
+  return `<div class="head"><div><h1>Ajustes</h1><p>Las claves se guardan cifradas en tu base de datos. Desde aquí solo se pueden escribir, nunca leer.</p></div></div>
+  <section><h2>Claves de servicios</h2><div class="card" style="gap:0">${S.keys.map(k=>{const [n,d,url,req]=KEY_INFO[k.name]||[k.name,"",""];return `
+    <div class="key-row"><div><div style="font-weight:600">${esc(n)}</div><div class="muted" style="font-size:12.5px">${esc(d)}${req?" · imprescindible":""} · <a href="${url}" target="_blank" rel="noopener">obtener</a></div></div>
+    <input type="password" id="k-${k.name}" placeholder="${k.is_set?"Guardada · escribe para reemplazar":"Pega la clave"}" autocomplete="off">
+    <div class="row"><span class="chip ${k.is_set?"st-ok":req?"st-warn":""}">${k.is_set?"Guardada":"Falta"}</span><button class="btn sm" onclick="saveKey('${k.name}')">Guardar</button></div></div>`;}).join("")}</div></section>
+  <section><h2>Publicar en YouTube</h2><div class="card">
+    <p style="margin:0" class="why">En Google Cloud crea un cliente OAuth de tipo «Aplicación web», activa la YouTube Data API v3 y añade esta URI de redirección autorizada:</p>
+    <div class="row"><code class="mono" style="background:var(--sunk);padding:7px 10px;border-radius:7px;word-break:break-all;flex:1;min-width:0" id="ruri">${REDIRECT_URI}</code><button class="btn sm" onclick="copyText('${REDIRECT_URI}')">Copiar</button></div>
+    <p style="margin:0" class="why">Hasta que Google audite el proyecto, los vídeos subidos por API quedan en privado. Puedes cambiarlos a público desde YouTube Studio o pedir la auditoría.</p>
+  </div></section>
+  <section><div class="spread"><h2>Actividad</h2><div class="row"><span class="mono muted">${S.jobs.length} en cola</span><button class="btn sm" onclick="kick().then(()=>toast('Motor activado'))">Procesar cola ahora</button></div></div>
+    <div class="card"><div class="log">${S.activity.length?S.activity.map(a=>`<div><span class="mono muted">${ago(a.created_at)}</span><span style="${a.level==="error"?"color:var(--bad)":a.level==="warn"?"color:var(--warn)":""};word-break:break-word">${esc(a.message)}</span></div>`).join(""):`<span class="muted">Sin actividad todavía.</span>`}</div></div></section>
+  <div><button class="btn ghost" onclick="sb.auth.signOut()">Cerrar sesión</button></div>`;
+}
+
+// ---------- hoja: vídeo ----------
+async function openVideo(id){
+  const { data, error } = await sb.from("videos").select("*").eq("id",id).single();
+  if(error) return toast(error.message);
+  let scenes=[];
+  if(["producing","final_review","published","scheduled","failed","publishing"].includes(data.status)){
+    const r = await sb.from("scenes").select("n,media_url,media_kind,shots").eq("video_id",id).order("n"); scenes=r.data||[];
+  }
+  S.open = { kind:"video", v:data, scenes, draft: data.script ? JSON.parse(JSON.stringify(data.script)) : null };
+  renderSheet(true);
+}
+function sheetShell(title, sub, body, foot){
+  const el=$("#sheet");
+  el.innerHTML = `<div class="sheet-h"><div style="min-width:0"><div class="row">${sub}</div><h2 style="margin-top:6px">${esc(title)}</h2></div><button class="btn ghost" onclick="closeSheet()" aria-label="Cerrar">✕</button></div>
+    <div class="sheet-b">${body}</div>${foot?`<div class="sheet-f">${foot}</div>`:""}`;
+}
+function renderSheet(first){
+  const o=S.open; if(!o) return;
+  if(o.kind==="channel") return renderChannelSheet(first);
+  if(o.kind==="guide") return renderGuideSheet(first);
+  // refrescar estado si cambió por realtime
+  const live=S.videos.find(v=>v.id===o.v.id);
+  if(!first && live && live.status!==o.v.status){ return openVideo(o.v.id); }
+  if(!first && live && o.v.status==="final_review" && live.updated_at!==o.v.updated_at){ return refreshOpenVideo(); }
+  if(!first && o.v.status==="producing" && live){ o.v.progress=live.progress; o.v.stage=live.stage; const b=$("#sheet .bar i"); if(b){b.style.width=live.progress+"%"; $("#pstage").textContent=`${live.stage||""} · ${live.progress}%`;} return; }
+  if(!first) return;
+  const v=o.v, c=ch(v.channel_id);
+  const usage=v.usage||{};
+  const k=n=>n>=1000?Math.round(n/1000)+"k":String(n||0);
+  const byModel=["opus","sonnet","haiku"].filter(t=>usage[t+"_in"]).map(t=>`${t[0].toUpperCase()+t.slice(1)} ${k(usage[t+"_in"]+(usage[t+"_out"]||0))}`).join(" · ");
+  const usageTxt=`${byModel?`Claude: ${byModel} tokens${usage.web_searches?` · ${usage.web_searches} búsquedas`:""} · `:""}${fmtN((usage.claude_in||0)+(usage.claude_out||0))} tokens · ${fmtN(usage.tts_chars||0)} caracteres de voz · ${usage.music_sec||0} s de música · ${usage.sfx||0} efectos · ${usage.ai_images||0} imágenes IA`;
+  let body="", foot="";
+  if(v.status==="idea_review"){
+    body=ideaCard(v); foot="";
+  } else if(v.status==="script_review" && o.draft){
+    const d=o.draft;
+    d.scenes=(d.scenes||[]).map(withShots);
+    const words=d.scenes.reduce((a,sc)=>a+sc.shots.reduce((b,sh)=>b+String(sh.line||"").split(/\s+/).filter(Boolean).length,0),0);
+    const dr=d.director;
+    body=`${dr?`<div class="card an" style="gap:8px"><div class="spread"><div class="label">Revisión del director</div><span class="mono">${dr.score_before??"?"} → <b>${dr.score_after??"?"}</b>/10</span></div>
+        ${(dr.changes||[]).length?`<ul style="margin:0;padding-left:18px;font-size:13.5px">${dr.changes.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
+        ${(dr.title_options||[]).length?`<div class="label" style="margin-top:4px">Otros títulos <small class="muted">(toca para usarlo)</small></div><div class="opts">${dr.title_options.map(t=>`<button type="button" onclick="$('#s-title').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}
+        ${(d.thumbnail_texts||[]).length?`<div class="label" style="margin-top:4px">Textos de miniatura</div><div class="opts">${d.thumbnail_texts.map(t=>`<button type="button" onclick="$('#s-thumb').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}</div>`:""}
+      <div class="row"><span class="chip mono">${d.scenes?.length||0} escenas</span><span class="chip mono">${words} palabras · ≈${dur(words/150*60)}</span></div>
+      <label class="f">Título<input type="text" id="s-title" value="${esc(d.title)}" maxlength="100"></label>
+      <label class="f">Texto de la miniatura<input type="text" id="s-thumb" value="${esc(d.thumbnail_text||"")}"></label>
+      <label class="f">Descripción<textarea id="s-desc" rows="5">${esc(d.description)}</textarea></label>
+      ${c.music_mode==="video"||d.music_prompt?`<label class="f">Banda sonora <small>Se compone a medida con ElevenLabs a partir de esta descripción</small><textarea id="s-music" rows="2">${esc(d.music_prompt||"")}</textarea></label>`:""}
+      <div><div class="spread" style="margin-bottom:6px"><div class="label">Guion por escenas y planos</div><span class="mono muted">${shotCount(d)} planos</span></div>
+      ${(d.scenes||[]).map((sc,i)=>`<div class="scene"><span class="n">${String(i+1).padStart(2,"0")}</span><div style="min-width:0;display:flex;flex-direction:column;gap:8px">
+        ${sc.shots.map((sh,j)=>`<div class="shot">
+          <textarea data-i="${i}" data-j="${j}" data-k="line" rows="2" placeholder="Frase de este plano">${esc(sh.line)}</textarea>
+          <div class="shot-meta">
+            <select data-i="${i}" data-j="${j}" data-k="visual_type">${VT_OPTS.filter(([k])=>k!=="reframe"||j>0||i>0).map(([k,l])=>`<option value="${k}" ${sh.visual_type===k?"selected":""}>${l}</option>`).join("")}</select>
+            ${sh.visual_type==="reframe"
+              ? `<select data-i="${i}" data-j="${j}" data-k="zone">${ZONES.map(([k,l])=>`<option value="${k}" ${zoneOf(sh.reframe)===k?"selected":""}>${l}</option>`).join("")}</select>`
+              : `<input type="text" data-i="${i}" data-j="${j}" data-k="${VT_FIELD[sh.visual_type]}" value="${esc(sh[VT_FIELD[sh.visual_type]]||"")}" placeholder="${VT_HINT[sh.visual_type]}">`}
+            <button class="btn sm ghost" type="button" title="Quitar plano" onclick="shotOp(${i},${j},'del')" ${sc.shots.length<2?"disabled":""}>✕</button>
+          </div></div>`).join("")}
+        <div class="row"><button class="btn sm ghost" type="button" onclick="shotOp(${i},${sc.shots.length-1},'add')">+ Plano</button></div>
+        <div class="scene-meta"><span class="muted" style="font-size:12.5px;align-self:center">Palabras en amarillo</span><input type="text" data-i="${i}" data-k="keywords" value="${esc((sc.keywords||[]).join(", "))}" placeholder="Ej.: cabo, 1944"></div>
+        ${c.sfx_enabled!==false?`<div class="scene-meta"><span class="muted" style="font-size:12.5px;align-self:center">Efecto de sonido</span><input type="text" data-i="${i}" data-k="sfx" value="${esc(sc.sfx||"")}" placeholder="Sin efecto"></div>`:""}</div></div>`).join("")}</div>
+      ${(v.sources||[]).length?`<div><div class="label" style="margin-bottom:6px">Fuentes consultadas</div><div class="ev">${v.sources.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc((s.title||s.url).slice(0,60))}</a>`).join("")}</div></div>`:""}
+      <label class="f">¿Algo que cambiar? <small>Escribe el feedback y pulsa «Rehacer guion»</small><textarea id="s-fb" rows="2">${esc("")}</textarea></label>`;
+    foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn" onclick="redoScript()">Rehacer guion</button><button class="btn pri" onclick="approveScript()">Aprobar y producir</button>`;
+  } else if(v.status==="final_review"){
+    const pa = v.publish_at ? new Date(new Date(v.publish_at).getTime()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16) : "";
+    body=`<video src="${esc(v.video_url)}" controls playsinline preload="metadata" ${v.thumbnail_url?`poster="${esc(v.thumbnail_url)}"`:""}></video>
+      ${analysisBlock(v)}
+      ${thumbBlock(v,c)}
+      <label class="f">Título<input type="text" id="f-title" value="${esc(v.title)}" maxlength="100"></label>
+      <label class="f">Descripción<textarea id="f-desc" rows="6">${esc(v.description)}</textarea></label>
+      <label class="f">Etiquetas <small>Separadas por comas</small><input type="text" id="f-tags" value="${esc((v.tags||[]).join(", "))}"></label>
+      <div class="fgrid"><label class="f">Programar publicación <small>Vacío = publicar ahora</small><input type="datetime-local" id="f-at" value="${pa}"></label>
+      <label class="check" style="align-self:end"><input type="checkbox" id="f-ai" ${v.ai_disclosure?"checked":""}> Declarar contenido sintético (IA)</label></div>
+      <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span>`}</p>
+      <label class="f">Si no te convence <small>Describe qué cambiar y se reescribe el guion</small><textarea id="f-fb" rows="2"></textarea></label>`;
+    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn pri" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}`;
+  } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
+    body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
+      <p class="why" style="margin:0">${{scripting:"Investigando y escribiendo el guion con fuentes verificadas; después el director lo revisa para que sea viral. Suele tardar 3–6 minutos.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
+      ${(()=>{ const urls=[...new Set(o.scenes.flatMap(sc=>(sc.shots||[]).filter(sh=>sh.media_url&&sh.media_kind==="image").map(sh=>sh.media_url).concat(sc.media_url&&sc.media_kind==="image"?[sc.media_url]:[])))]; return urls.length?`<div class="thumbs">${urls.map(u=>`<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div>`:""; })()}`;
+  } else if(v.status==="failed"){
+    body=`<div class="card" style="border-color:var(--bad)"><div class="label" style="color:var(--bad)">Qué ha fallado</div><div class="mono" style="word-break:break-word">${esc(v.error)}</div></div>`;
+    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button>${/^(render|render_check)/.test(v.error||"")?`<button class="btn" onclick="rerender('${v.id}')">Volver a montar</button>`:""}<button class="btn pri" onclick="retry('${v.id}')">Reintentar desde ese paso</button>`;
+  } else {
+    body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>`:""}
+      <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>`;
+  }
+  body += `<div class="muted mono" style="font-size:11.5px">Consumo: ${usageTxt}</div>`;
+  sheetShell(v.title||v.idea_title, `${chTag(v.channel_id)}${chip(v.status)}`, body, foot);
+  // edición en vivo del borrador de guion
+  $("#sheet").querySelectorAll("[data-i]").forEach(el=>{
+    el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{
+      const sc=o.draft.scenes[+el.dataset.i];
+      if(el.dataset.j!==undefined){
+        const sh=sc.shots[+el.dataset.j];
+        if(el.dataset.k==="zone"){ const z=ZONES.find(x=>x[0]===el.value); sh.reframe={x:z[2],y:z[3],zoom:1.6}; return; }
+        sh[el.dataset.k]=el.value;
+        if(el.dataset.k==="visual_type"){ if(el.value==="reframe"&&!sh.reframe) sh.reframe={x:.5,y:.35,zoom:1.6}; renderSheet(true); }
+        return;
+      }
+      if(el.dataset.k==="keywords"){ sc.keywords=el.value.split(",").map(x=>x.trim()).filter(Boolean); return; }
+      sc[el.dataset.k]=el.value;
+    });
+  });
+  $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); $("#sheet").setAttribute("aria-hidden","false");
+}
+function closeSheet(){ S.open=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); $("#sheet").setAttribute("aria-hidden","true"); }
+$("#scrim").onclick=closeSheet;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape" && S.open) closeSheet(); });
+
+// ---------- acciones de vídeo ----------
+async function approveIdea(id){
+  const note = $(`#note-${id}`)?.value?.trim() || null;
+  await run(async()=>{ const {error}=await sb.from("videos").update({status:"scripting",script_notes:note}).eq("id",id); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Idea aprobada. Escribiendo el guion…");
+}
+async function rejectIdea(id){ await run(async()=>{ const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",id); if(error) throw error; if(S.open) closeSheet(); }, "Idea descartada"); }
+const VT_OPTS=[["ai","Imagen IA"],["archive","Foto de archivo"],["stock_photo","Foto stock"],["stock_video","Vídeo stock"],["reframe","Reencuadre"]];
+const VT_FIELD={ai:"visual_prompt",archive:"archive_query",stock_photo:"stock_query",stock_video:"stock_query"};
+const VT_HINT={ai:"Qué genera la IA (en inglés funciona mejor)",archive:"Qué buscar en el archivo histórico (en inglés)",stock_photo:"Búsqueda de foto (en inglés)",stock_video:"Búsqueda de vídeo (en inglés)"};
+const ZONES=[["top","Detalle arriba (cara)",.5,.3],["center","Detalle en el centro",.5,.5],["bottom","Detalle abajo",.5,.7],["left","Detalle a la izquierda",.3,.5],["right","Detalle a la derecha",.7,.5]];
+function zoneOf(rf){ if(!rf) return "top"; let best=ZONES[0],bd=9; for(const z of ZONES){ const d=Math.abs(z[2]-rf.x)+Math.abs(z[3]-rf.y); if(d<bd){bd=d;best=z;} } return best[0]; }
+function withShots(sc){ if(Array.isArray(sc.shots)&&sc.shots.length) return sc; return {...sc, shots:[{line:sc.narration||"", visual_type:sc.visual_type||"ai", visual_prompt:sc.visual_prompt||"", stock_query:sc.stock_query||"", archive_query:""}]}; }
+function shotCount(d){ return (d.scenes||[]).reduce((a,sc)=>a+(sc.shots?.length||1),0); }
+function shotOp(i,j,op){
+  const sc=S.open.draft.scenes[i];
+  if(op==="del" && sc.shots.length>1) sc.shots.splice(j,1);
+  if(op==="add") sc.shots.splice(j+1,0,{line:"",visual_type:"reframe",reframe:{x:.5,y:.35,zoom:1.6},visual_prompt:"",stock_query:"",archive_query:""});
+  const keep=$("#sheet .sheet-b").scrollTop; renderSheet(true); $("#sheet .sheet-b").scrollTop=keep;
+}
+function collectScript(){
+  const d=S.open.draft; d.title=$("#s-title").value.trim(); d.description=$("#s-desc").value; d.thumbnail_text=$("#s-thumb").value.trim();
+  if($("#s-music")) d.music_prompt=$("#s-music").value.trim();
+  d.scenes=(d.scenes||[]).map(withShots).map(sc=>({...sc, shots:sc.shots.filter(sh=>String(sh.line||"").trim())})).filter(sc=>sc.shots.length)
+    .map((sc,i)=>({...sc, n:i+1, narration:sc.shots.map(sh=>sh.line.trim()).join(" "), visual_type:sc.shots[0].visual_type, visual_prompt:sc.shots[0].visual_prompt}));
+  return d;
+}
+async function approveScript(){
+  const d=collectScript();
+  await run(async()=>{ const {error}=await sb.from("videos").update({script:d,title:d.title,description:d.description,status:"producing",progress:0,stage:"En cola"}).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, "Guion aprobado. Produciendo el vídeo…");
+}
+async function redoScript(){
+  const fb=$("#s-fb").value.trim(); if(!fb) return toast("Escribe qué quieres cambiar");
+  const d=collectScript();
+  await run(async()=>{ const {error}=await sb.from("videos").update({script:d,review_feedback:fb,status:"scripting"}).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, "Reescribiendo el guion con tu feedback…");
+}
+async function backToScript(){
+  const fb=$("#f-fb").value.trim(); if(!fb) return toast("Escribe qué cambiar para rehacer el guion");
+  await run(async()=>{ const {error}=await sb.from("videos").update({review_feedback:fb,status:"scripting"}).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, "Reescribiendo el guion…");
+}
+// ---------- análisis viral y miniaturas ----------
+async function refreshOpenVideo(){
+  const o=S.open; if(!o||o.kind!=="video") return;
+  const keep={}; ["f-title","f-desc","f-tags","f-at","f-fb","t-text"].forEach(id=>{ const el=$("#"+id); if(el) keep[id]=el.value; });
+  const ai=$("#f-ai")?.checked, top=$("#sheet .sheet-b")?.scrollTop, vid=$("#sheet video"), ct=vid?.currentTime||0, playing=vid&&!vid.paused;
+  const { data } = await sb.from("videos").select("*").eq("id",o.v.id).single(); if(!data) return;
+  o.v=data; renderSheet(true);
+  Object.entries(keep).forEach(([id,val])=>{ const el=$("#"+id); if(el) el.value=val; });
+  if($("#f-ai")&&ai!==undefined) $("#f-ai").checked=ai;
+  const nv=$("#sheet video"); if(nv&&ct){ nv.currentTime=ct; if(playing) nv.play().catch(()=>{}); }
+  if(top!=null) $("#sheet .sheet-b").scrollTop=top;
+}
+const AREAS={gancho:"Gancho",ritmo:"Ritmo",estructura:"Estructura",visuales:"Visuales",subtitulos:"Subtítulos",cierre:"Cierre",empaquetado:"Título y miniatura",rigor:"Rigor"};
+const scoreColor=n=>n>=8?"var(--ok)":n>=6?"var(--warn)":"var(--bad)";
+function analysisBlock(v){
+  const a=v.analysis;
+  const running=a?.status==="running" || S.jobs.some(j=>j.video_id===v.id&&j.step==="analyze");
+  if(running) return `<div class="card"><div class="label">Análisis viral</div><p class="why" style="margin:6px 0 0">Claude está viendo el vídeo fotograma a fotograma y leyendo la narración. Tarda 1–2 minutos.</p></div>`;
+  if(!a || a.status!=="done") return `<div class="card spread"><div><div class="label">Análisis viral</div><p class="why" style="margin:4px 0 0">${a?.status==="failed"?`<span style="color:var(--bad)">Falló: ${esc(a.error||"")}</span>`:"Claude revisa el vídeo como un espectador que hace scroll y te dice qué frena que se haga viral, segundo a segundo."}</p></div><button class="btn pri" onclick="analyzeVideo()">Analizar vídeo</button></div>`;
+  const sc=a.scores||{};
+  return `<div class="card an">
+    <div class="an-top"><div class="an-score" style="color:${scoreColor(a.score)}">${Number(a.score).toFixed(1).replace(".0","")}<small>de 10</small></div>
+      <div style="min-width:0"><div class="label">Análisis viral · potencial ${esc(a.viral_potential)}</div><div style="margin-top:4px">${esc(a.verdict)}</div></div></div>
+    <div class="bars">${Object.keys(AREAS).filter(k=>sc[k]!=null).map(k=>`<span>${AREAS[k]}</span><b><i style="width:${sc[k]*10}%;background:${scoreColor(sc[k])}"></i></b><span class="mono">${sc[k]}</span>`).join("")}</div>
+    ${(a.issues||[]).length?`<div><div class="label">Qué cambiar</div>${a.issues.map(i=>`<div class="issue">${i.t!=null?`<button class="t" onclick="seek(${Number(i.t)})">${Number(i.t).toFixed(1)}s</button>`:`<span></span>`}<div><b class="sev-${esc(i.severity)}">${AREAS[i.area]||esc(i.area)}</b> · ${esc(i.problem)}</div><div class="fix">→ ${esc(i.fix)}</div></div>`).join("")}</div>`:""}
+    ${(a.strengths||[]).length?`<div><div class="label">Lo que funciona</div><ul style="margin:4px 0 0;padding-left:18px;font-size:13.5px">${a.strengths.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
+    ${(a.hook_options||[]).length?`<div><div class="label">Ganchos alternativos <small class="muted">(toca uno para usarlo al rehacer)</small></div><div class="opts" id="hooks">${a.hook_options.map((h,i)=>`<button type="button" data-h="${i}" onclick="pickHook(this)">${esc(h)}</button>`).join("")}</div></div>`:""}
+    ${(a.title_options||[]).length?`<div><div class="label">Títulos alternativos <small class="muted">(toca para usarlo)</small></div><div class="opts">${a.title_options.map(t=>`<button type="button" onclick="$('#f-title').value=this.textContent;toast('Título cambiado')">${esc(t)}</button>`).join("")}</div></div>`:""}
+    <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn pri" onclick="applyAnalysis()">Aplicar y rehacer el vídeo</button><button class="btn" onclick="analysisToGuide()">Añadir lo aprendido a la guía</button><button class="btn ghost" onclick="analyzeVideo()">Analizar otra vez</button></div>
+  </div>`;
+}
+function seek(t){ const vd=$("#sheet video"); if(!vd) return; vd.currentTime=Math.max(0,t-0.5); vd.play().catch(()=>{}); vd.scrollIntoView({behavior:"smooth",block:"center"}); }
+let HOOK=null;
+function pickHook(b){ $("#hooks").querySelectorAll("button").forEach(x=>x.style.borderColor=""); if(HOOK===b.textContent){ HOOK=null; return; } HOOK=b.textContent; b.style.borderColor="var(--accent)"; toast("Gancho elegido para la nueva versión"); }
+async function analyzeVideo(){
+  const v=S.open.v;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"analyze",video_id:v.id}); if(error) throw error; await sb.from("videos").update({analysis:{status:"running"}}).eq("id",v.id); await kick(); await refreshOpenVideo(); }, "Analizando el vídeo…");
+}
+async function applyAnalysis(){
+  const v=S.open.v, a=v.analysis||{};
+  const extra=$("#f-fb")?.value.trim();
+  const fb=[a.script_feedback, HOOK?`Usa exactamente este gancho como primera frase: «${HOOK}»`:"", ...(a.issues||[]).filter(i=>i.severity!=="baja").map(i=>`${i.t!=null?`(${i.t}s) `:""}${i.problem} → ${i.fix}`), extra].filter(Boolean).join("\n");
+  HOOK=null;
+  await run(async()=>{ const {error}=await sb.from("videos").update({review_feedback:fb.slice(0,6000),status:"scripting"}).eq("id",v.id); if(error) throw error; await kick(); closeSheet(); }, "Reescribiendo el guion con el análisis…");
+}
+async function analysisToGuide(){
+  const v=S.open.v, a=v.analysis||{};
+  const fb=`Análisis del vídeo «${v.title}» (${a.score}/10, potencial ${a.viral_potential}).\n${a.verdict}\nReglas para todos los vídeos:\n${(a.guide_rules||[]).map(r=>"- "+r).join("\n")}\nProblemas detectados:\n${(a.issues||[]).map(i=>`- ${AREAS[i.area]||i.area}: ${i.problem} → ${i.fix}`).join("\n")}\nLo que funciona:\n${(a.strengths||[]).map(x=>"- "+x).join("\n")}`;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"guide",channel_id:v.channel_id,payload:{feedback:fb}}); if(error) throw error; await kick(); }, "Actualizando la guía del canal…");
+}
+function thumbBlock(v,c){
+  if(c.format==="short") return "";
+  const th=v.thumbnails||[];
+  const busy=S.jobs.some(j=>j.video_id===v.id&&j.step==="thumbs");
+  const txt=v.script?.thumbnail_text||"";
+  return `<div class="card an" style="gap:10px"><div class="spread"><div class="label">Miniatura ${th.length?`<small class="muted">(toca la que prefieras)</small>`:""}</div>${busy?`<span class="mono muted">Generando…</span>`:""}</div>
+    ${th.length?`<div class="tgrid">${th.map(t=>`<button class="${t.selected?"on":""}" onclick="pickThumb('${esc(t.id)}')" title="${esc(t.concept||"")}"><img src="${esc(t.url)}" alt="Opción de miniatura" loading="lazy"></button>`).join("")}</div>`:(busy?`<p class="why" style="margin:0">Creando 3 opciones distintas…</p>`:"")}
+    <div class="fgrid" style="align-items:end"><label class="f">Texto de la miniatura<input type="text" id="t-text" value="${esc(txt)}" maxlength="40"></label>
+    <div class="row" style="gap:8px">${th.length?`<button class="btn" onclick="thumbText()" ${busy?"disabled":""}>Aplicar texto</button>`:""}<button class="btn" onclick="moreThumbs()" ${busy?"disabled":""}>${th.length?"Otras 3":"Generar miniaturas"}</button></div></div></div>`;
+}
+async function pickThumb(id){
+  const v=S.open.v; const th=(v.thumbnails||[]).map(t=>({...t,selected:t.id===id})); const sel=th.find(t=>t.selected);
+  await run(async()=>{ const {error}=await sb.from("videos").update({thumbnails:th,thumbnail_url:sel.url}).eq("id",v.id); if(error) throw error; await refreshOpenVideo(); }, "Miniatura elegida");
+}
+async function thumbText(){
+  const v=S.open.v, text=$("#t-text").value.trim(); if(!text) return toast("Escribe el texto");
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"thumbs",video_id:v.id,payload:{recompose:true,text}}); if(error) throw error; await kick(); await refreshOpenVideo(); }, "Poniendo el texto nuevo…");
+}
+async function moreThumbs(){
+  const v=S.open.v, text=$("#t-text").value.trim();
+  const batch=Math.max(-1,...(v.thumbnails||[]).map(t=>t.batch??0))+1;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"thumbs",video_id:v.id,payload:{batch,...(text?{text}:{})}}); if(error) throw error; await kick(); await refreshOpenVideo(); }, "Generando miniaturas…");
+}
+async function publish(){
+  const at=$("#f-at").value;
+  const patch={ title:$("#f-title").value.trim(), description:$("#f-desc").value, tags:$("#f-tags").value.split(",").map(t=>t.trim()).filter(Boolean), ai_disclosure:$("#f-ai").checked, publish_at: at?new Date(at).toISOString():null, status:"publishing", stage:"Subiendo a YouTube" };
+  await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, at?"Programando en YouTube…":"Publicando en YouTube…");
+}
+async function discardVideo(){ await run(async()=>{ const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",S.open.v.id); if(error) throw error; closeSheet(); }, "Descartado"); }
+async function rerender(id){ await run(async()=>{ const {error}=await sb.rpc("rerender_video",{p_id:id}); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Volviendo a montar el vídeo…"); }
+async function retry(id){ await run(async()=>{ const {error}=await sb.rpc("retry_video",{p_id:id}); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Reintentando…"); }
+
+// ---------- canales ----------
+const PALETTE=["#2F45E8","#D2462C","#1C8A5A","#B8860B","#8B3FD1","#0E8FA3","#C2367A"];
+function openChannel(id, preset){
+  const c = id ? {...ch(id)} : { name:"", niche:"", language:"es", format:"long", target_minutes:8, image_source:"mix", ideas_per_run:5, auto_ideas:true, publish_privacy:"private", music_volume:12, music_mode:"video", sfx_enabled:true, sfx_volume:55, color:PALETTE[S.channels.length%PALETTE.length], reference_channels:[], ...(preset||{}) };
+  S.open={kind:"channel", c}; renderChannelSheet(true);
+}
+function renderChannelSheet(first){
+  if(!first) return;
+  const c=S.open.c;
+  const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div>`:""}<div class="fgrid">
+    <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
+    <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
+    <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
+    <label class="f">Formato<select id="c-format"><option value="long" ${c.format==="long"?"selected":""}>Vídeo largo (16:9)</option><option value="short" ${c.format==="short"?"selected":""}>Shorts (9:16)</option></select></label>
+    <label class="f">Duración objetivo (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(c.target_minutes)}"></label>
+    <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["ca","Catalán"],["pt","Portugués"],["fr","Francés"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>
+    <label class="f">Imágenes<select id="c-img"><option value="mix" ${c.image_source==="mix"?"selected":""}>Mezcla (recomendado)</option><option value="ai" ${c.image_source==="ai"?"selected":""}>Solo IA</option><option value="stock" ${c.image_source==="stock"?"selected":""}>Solo stock real</option></select></label>
+    <label class="f full">Audiencia<input type="text" id="c-aud" value="${esc(c.audience)}" placeholder="Ej.: adultos de 25-45 interesados en actualidad internacional"></label>
+    <label class="f full">Tono y voz editorial <small>Tu sello: opiniones, estructura, muletillas, lo que nunca harías</small><textarea id="c-tone" rows="3">${esc(c.tone)}</textarea></label>
+    <label class="f full">Estilo visual <small>En inglés funciona mejor</small><textarea id="c-style" rows="2" placeholder="cinematic documentary, muted colors, 35mm film grain">${esc(c.style_prompt)}</textarea></label>
+    <label class="f">Voz de ElevenLabs <small>Voice ID de tu librería</small><input type="text" id="c-voice" value="${esc(c.voice_id)}" class="mono"></label>
+    <label class="f">Ideas por tanda<input type="number" id="c-ipr" min="1" max="10" value="${esc(c.ideas_per_run)}"></label>
+    <label class="f full">Canales de referencia <small>IDs de canal (empiezan por UC), separados por comas</small><input type="text" id="c-refs" value="${esc((c.reference_channels||[]).join(", "))}" class="mono"></label>
+    <div class="full label" style="margin-top:6px">Sonido · ElevenLabs</div>
+    <label class="f">Música de fondo<select id="c-mmode">${[["video","Compuesta a medida para cada vídeo"],["channel","Tema propio del canal (se compone una vez)"],["url","Mi propio MP3"],["off","Sin música"]].map(([k,l])=>`<option value="${k}" ${(c.music_mode||"video")===k?"selected":""}>${l}</option>`).join("")}</select></label>
+    <label class="f">Volumen música (%)<input type="number" id="c-mvol" min="0" max="50" value="${esc(c.music_volume)}"></label>
+    <label class="f full">Sello sonoro del canal <small>Género, instrumentos, mood. En inglés funciona mejor</small><textarea id="c-mstyle" rows="2" placeholder="dark cinematic documentary score, low strings, soft pulses, 80 BPM">${esc(c.music_style)}</textarea></label>
+    <label class="f full" ${c.music_mode==="url"?"":"hidden"} id="c-music-w">URL del MP3 <small>Libre de derechos</small><input type="url" id="c-music" value="${esc(c.music_url)}"></label>
+    <label class="check"><input type="checkbox" id="c-sfx" ${c.sfx_enabled!==false?"checked":""}> Efectos de sonido en momentos clave</label>
+    <label class="f">Volumen efectos (%)<input type="number" id="c-sfxvol" min="0" max="100" value="${esc(c.sfx_volume ?? 55)}"></label>
+    ${c.generated_music_url?`<div class="full"><div class="label" style="margin-bottom:6px">Tema actual del canal</div><audio controls src="${esc(c.generated_music_url)}" style="width:100%"></audio><button class="btn sm ghost" type="button" onclick="resetTheme()">Componer un tema nuevo en el próximo vídeo</button></div>`:""}
+    <label class="f">Privacidad al publicar<select id="c-priv">${[["private","Privado"],["unlisted","Oculto"],["public","Público"]].map(([k,l])=>`<option value="${k}" ${c.publish_privacy===k?"selected":""}>${l}</option>`).join("")}</select></label>
+    <label class="f">Estado<select id="c-status"><option value="active" ${c.status!=="paused"?"selected":""}>Activo</option><option value="paused" ${c.status==="paused"?"selected":""}>En pausa</option></select></label>
+    <label class="check full"><input type="checkbox" id="c-auto" ${c.auto_ideas?"checked":""}> Proponer ideas nuevas cada mañana</label>
+  </div>`;
+  const foot=`${c.id?`<button class="btn ghost danger" onclick="archiveChannel()">Archivar</button>`:""}${c.id?`<button class="btn" onclick="connectYT('${c.id}')">${c.youtube_connected?"Reconectar YouTube":"Conectar YouTube"}</button>`:""}<button class="btn pri" onclick="saveChannel()">${c.id?"Guardar":"Crear canal y pedir ideas"}</button>`;
+  sheetShell(c.id?c.name:"Nuevo canal", c.id?`<span class="chip">${c.youtube_connected?"YouTube conectado":"Sin YouTube"}</span>`:"", body, foot);
+  $("#c-mmode").onchange = (e) => { $("#c-music-w").hidden = e.target.value !== "url"; };
+  $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); $("#sheet").setAttribute("aria-hidden","false");
+}
+async function saveChannel(){
+  const c=S.open.c;
+  const row={ name:$("#c-name").value.trim(), color:$("#c-color").value.trim()||"#2F45E8", niche:$("#c-niche").value.trim(), format:$("#c-format").value, target_minutes:+$("#c-min").value||8,
+    language:$("#c-lang").value, image_source:$("#c-img").value, audience:$("#c-aud").value.trim()||null, tone:$("#c-tone").value.trim()||null, style_prompt:$("#c-style").value.trim()||null,
+    voice_id:$("#c-voice").value.trim()||null, ideas_per_run:+$("#c-ipr").value||5, reference_channels:$("#c-refs").value.split(",").map(s=>s.trim()).filter(Boolean),
+    music_url:$("#c-music").value.trim()||null, music_volume:+$("#c-mvol").value||0, music_mode:$("#c-mmode").value, music_style:$("#c-mstyle").value.trim()||null,
+    sfx_enabled:$("#c-sfx").checked, sfx_volume:+$("#c-sfxvol").value||0, publish_privacy:$("#c-priv").value, status:$("#c-status").value, auto_ideas:$("#c-auto").checked };
+  if(!row.name||!row.niche) return toast("El canal necesita nombre y nicho");
+  await run(async()=>{
+    if(c.id){ const {error}=await sb.from("channels").update(row).eq("id",c.id); if(error) throw error; }
+    else { const {data,error}=await sb.from("channels").insert(row).select().single(); if(error) throw error;
+      await sb.from("jobs").insert({channel_id:data.id, step:"ideas"}); await kick(); }
+    closeSheet(); await load();
+  }, c.id?"Canal guardado":"Canal creado. Buscando las primeras ideas…");
+}
+async function resetTheme(){ await run(async()=>{ const {error}=await sb.from("channels").update({generated_music_url:null}).eq("id",S.open.c.id); if(error) throw error; S.open.c.generated_music_url=null; renderChannelSheet(true); await load(); }, "Se compondrá un tema nuevo"); }
+async function archiveChannel(){ await run(async()=>{ const {error}=await sb.from("channels").update({status:"archived"}).eq("id",S.open.c.id); if(error) throw error; closeSheet(); await load(); }, "Canal archivado"); }
+async function askIdeas(id){ await run(async()=>{ const {error}=await sb.from("jobs").insert({channel_id:id, step:"ideas"}); if(error) throw error; await kick(); await load(); }, "Buscando ideas. Llegarán a Revisar en un par de minutos."); }
+async function connectYT(id){
+  await run(async()=>{ const { data:{ session } } = await sb.auth.getSession();
+    const r=await fetch(SB_URL+"/functions/v1/youtube-auth",{method:"POST",headers:{Authorization:"Bearer "+session.access_token,apikey:SB_KEY,"Content-Type":"application/json"},body:JSON.stringify({channel_id:id})});
+    const d=await r.json(); if(!r.ok) throw new Error(d.error||"No se pudo iniciar la conexión");
+    window.open(d.url,"_blank","width=520,height=680"); });
+}
+window.addEventListener("message",e=>{ if(e.data==="yt-connected"){ toast("YouTube conectado"); load(); } });
+
+
+// ---------- guía del canal ----------
+const GUIDE_TEMPLATE = `## Identidad y promesa
+Qué es el canal en una frase y qué se lleva el espectador de cada vídeo.
+
+## Público
+Quién lo ve, qué sabe ya y qué busca.
+
+## Tono y voz
+Cómo habla el narrador. Palabras o expresiones propias. Lo que nunca diría.
+
+## Estructura del guion
+Bloques y tiempos aproximados (por ejemplo: 0-3 s gancho, 3-9 s contexto, conflicto, giro, cierre).
+
+## Gancho
+Cómo arrancan los primeros 3 segundos. Qué no hacer al empezar.
+
+## Ritmo y planos
+Cada cuántos segundos cambia la imagen. Cuántos planos por vídeo.
+
+## Imágenes
+Mezcla de imágenes IA, fotos reales, mapas y documentos. Estética.
+
+## Subtítulos y texto en pantalla
+Palabras por línea, colores, qué se resalta.
+
+## Cierre
+Cómo terminan los vídeos. Si hay pregunta o llamada a la acción, dónde va.
+
+## Prohibido
+Lo que nunca debe aparecer.`;
+function openGuide(id){
+  const c={...ch(id)};
+  S.open={kind:"guide", c, original:c.style_guide||""};
+  renderGuideSheet(true);
+}
+function renderGuideSheet(first){
+  const o=S.open; const c=o.c;
+  const live=ch(c.id);
+  const running=S.jobs.some(j=>j.step==="guide"&&j.channel_id===c.id);
+  // Si la guía se actualizó en el servidor y no la has tocado, se muestra la nueva
+  if(!first){
+    const ta=$("#g-text");
+    if(live.style_guide!==o.c.style_guide && ta && ta.value===(o.c.style_guide||"")){ o.c={...live}; o.original=live.style_guide||""; toast("Guía actualizada con el análisis"); first=true; }
+    else { const b=$("#g-run"); if(b){ b.disabled=running; b.textContent=running?"Analizando…":"Extraer reglas y actualizar la guía"; } const st=$("#g-status"); if(st) st.hidden=!running; return; }
+  }
+  const text=o.c.style_guide||"";
+  const body=`<p class="why" style="margin:0">El guionista sigue esta guía en cada vídeo de <b>${esc(c.name)}</b>, y prevalece sobre las reglas generales del estudio. Escríbela con tus palabras o deja que se construya a partir de análisis y feedback.</p>
+    <label class="f">Guía del canal <small>${text?`${text.split(/\s+/).length} palabras`:"Vacía"}${o.c.guide_updated_at?` · actualizada ${ago(o.c.guide_updated_at)}`:""}</small>
+      <textarea id="g-text" class="guide-ta" rows="20" placeholder="Escribe la guía o pulsa «Usar plantilla»">${esc(text)}</textarea></label>
+    ${text?"":`<div><button class="btn sm" type="button" onclick="$('#g-text').value=GUIDE_TEMPLATE">Usar plantilla</button></div>`}
+    <div class="card guide-fb">
+      <h3>Mejorar la guía con un análisis</h3>
+      <p class="why" style="margin:0">Pega un análisis de un vídeo (por ejemplo, el de ChatGPT), comentarios de espectadores o tus notas. Se convierten en reglas que valen para todos los vídeos del canal y se integran en la guía.</p>
+      <textarea id="g-fb" rows="7" placeholder="Pega aquí el análisis o el feedback"></textarea>
+      <div class="row end"><span class="chip st-warn" id="g-status" ${running?"":"hidden"}>Analizando, tarda un minuto</span><button class="btn pri" id="g-run" type="button" ${running?"disabled":""} onclick="improveGuide()">${running?"Analizando…":"Extraer reglas y actualizar la guía"}</button></div>
+    </div>`;
+  const foot=`<button class="btn ghost" onclick="closeSheet()">Cerrar</button><button class="btn pri" onclick="saveGuide()">Guardar guía</button>`;
+  sheetShell(`Guía · ${c.name}`, `<span class="chip">${c.format==="short"?"Shorts":"Vídeo largo"}</span>`, body, foot);
+  $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); $("#sheet").setAttribute("aria-hidden","false");
+}
+async function saveGuide(silent){
+  const text=$("#g-text").value.trim();
+  const id=S.open.c.id;
+  const {error}=await sb.from("channels").update({style_guide:text||null, guide_updated_at:new Date().toISOString()}).eq("id",id);
+  if(error){ toast(error.message); return false; }
+  S.open.c.style_guide=text||null; S.open.original=text;
+  const c=S.channels.find(x=>x.id===id); if(c) c.style_guide=text||null;
+  if(!silent) toast("Guía guardada");
+  return true;
+}
+async function improveGuide(){
+  const fb=$("#g-fb").value.trim();
+  if(fb.length<40) return toast("Pega un análisis o feedback un poco más largo");
+  if(!(await saveGuide(true))) return;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"guide", channel_id:S.open.c.id, payload:{feedback:fb}}); if(error) throw error; $("#g-fb").value=""; await kick(); await load(); }, "Analizando el feedback…");
+}
+
+// ---------- descubrir ----------
+async function askProposals(){
+  S.pfocus=$("#pfocus").value.trim();
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"proposals", payload:{focus:S.pfocus||null, language:S.plang||"es"}}); if(error) throw error; await kick(); await load(); }, "Analizando el mercado…");
+}
+async function rejectProposal(id){ await run(async()=>{ await sb.from("channel_proposals").update({status:"rejected"}).eq("id",id); await load(); }); }
+async function acceptProposal(id){
+  const p=S.proposals.find(x=>x.id===id);
+  await sb.from("channel_proposals").update({status:"accepted"}).eq("id",id);
+  openChannel(null,{ name:p.name, niche:p.description?`${p.niche}. ${p.description}`:p.niche, format:p.format==="short"?"short":"long", target_minutes:p.format==="short"?1:8, language:p.language||"es", audience:p.audience });
+}
+
+// ---------- ajustes ----------
+async function saveKey(name){
+  const v=$(`#k-${name}`).value; if(!v.trim()) return toast("Pega la clave primero");
+  await run(async()=>{ const {error}=await sb.rpc("set_api_key",{p_name:name,p_value:v}); if(error) throw error; await load(); }, "Clave guardada");
+}
+async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
+
+// ---------- arranque ----------
+function route(){ const h=location.hash.slice(1); S.view=["hoy","canales","descubrir","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+window.addEventListener("hashchange", route);
+document.addEventListener("change", e=>{ if(e.target.id==="fch"){ S.filterCh=e.target.value; render(); } });
+
+let channel;
+sb.auth.onAuthStateChange((_e, session)=>{
+  const was=!!S.session; S.session=session;
+  if(session && !was){
+    const h=location.hash.slice(1); S.view=["hoy","canales","descubrir","ajustes"].includes(h)?h:"hoy";
+    load();
+    channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
+      .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)
+      .on("postgres_changes",{event:"*",schema:"public",table:"activity"},reload)
+      .on("postgres_changes",{event:"*",schema:"public",table:"channel_proposals"},reload)
+      .on("postgres_changes",{event:"*",schema:"public",table:"channels"},reload).subscribe();
+  } else if(!session){ if(channel) sb.removeChannel(channel); render(); }
+});
+</script>
+</body>
+</html>

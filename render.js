@@ -25,7 +25,8 @@ export function run(cmd, args, { onStderr } = {}) {
 }
 
 async function download(url, file) {
-  const r = await fetch(url);
+  // Wikimedia y otros archivos exigen identificarse con un User-Agent propio
+  const r = await fetch(url, { headers: { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" } });
   if (!r.ok || !r.body) throw new Error(`No se pudo descargar ${url.slice(0, 120)} (${r.status})`);
   await pipeline(Readable.fromWeb(r.body), createWriteStream(file));
   return file;

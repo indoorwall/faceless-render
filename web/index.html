@@ -589,7 +589,7 @@ function renderSheet(first){
     d.scenes=(d.scenes||[]).map(withShots);
     const words=d.scenes.reduce((a,sc)=>a+sc.shots.reduce((b,sh)=>b+String(sh.line||"").split(/\s+/).filter(Boolean).length,0),0);
     const dr=d.director;
-    body=`${dr?.skipped?`<div class="card spread"><div><div class="label">Director</div><div class="why" style="margin-top:4px">No ha tenido que intervenir: el borrador ya cumple lo aprendido del canal.${(dr.weak_points||[]).length?` A vigilar: ${esc(dr.weak_points.join(" · "))}`:""}</div></div><span class="mono"><b>${dr.score_before}</b>/10</span></div>`:""}${dr&&!dr.skipped?`<div class="card an" style="gap:8px"><div class="spread"><div class="label">${dr.merged?"Autorrevisión del guionista":"Revisión del director"}</div><span class="mono">${dr.merged?"":`${dr.score_before??"?"} → `}<b>${dr.score_after??"?"}</b>/10</span></div>
+    body=`${dr?.skipped?`<div class="card spread"><div><div class="label">Director</div><div class="why" style="margin-top:4px">No ha tenido que intervenir: el borrador ya cumple lo aprendido del canal.${(dr.weak_points||[]).length?` A vigilar: ${esc(dr.weak_points.join(" · "))}`:""}</div></div><span class="mono"><b>${dr.score_before}</b>/10</span></div>`:""}${dr&&!dr.skipped?`<div class="card an" style="gap:8px"><div class="spread"><div class="label">${dr.revised?"Cambios aplicados":dr.merged?"Autorrevisión del guionista":"Revisión del director"}</div><span class="mono">${dr.merged?"":`${dr.score_before??"?"} → `}<b>${dr.score_after??"?"}</b>/10</span></div>
         ${(dr.changes||[]).length?`<ul style="margin:0;padding-left:18px;font-size:13.5px">${dr.changes.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:""}
         ${(dr.title_options||[]).length?`<div class="label" style="margin-top:4px">Otros títulos <small class="muted">(toca para usarlo)</small></div><div class="opts">${dr.title_options.map(t=>`<button type="button" onclick="$('#s-title').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}
         ${(d.thumbnail_texts||[]).length?`<div class="label" style="margin-top:4px">Textos de miniatura</div><div class="opts">${d.thumbnail_texts.map(t=>`<button type="button" onclick="$('#s-thumb').value=this.textContent">${esc(t)}</button>`).join("")}</div>`:""}</div>`:""}
@@ -742,7 +742,7 @@ function analysisBlock(v){
     ${(a.strengths||[]).length?`<div><div class="label">Lo que funciona</div><ul style="margin:4px 0 0;padding-left:18px;font-size:13.5px">${a.strengths.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
     ${(a.hook_options||[]).length?`<div><div class="label">Ganchos alternativos <small class="muted">(toca uno para usarlo al rehacer)</small></div><div class="opts" id="hooks">${a.hook_options.map((h,i)=>`<button type="button" data-h="${i}" onclick="pickHook(this)">${esc(h)}</button>`).join("")}</div></div>`:""}
     ${(a.title_options||[]).length?`<div><div class="label">Títulos alternativos <small class="muted">(toca para usarlo)</small></div><div class="opts">${a.title_options.map(t=>`<button type="button" onclick="$('#f-title').value=this.textContent;toast('Título cambiado')">${esc(t)}</button>`).join("")}</div></div>`:""}
-    <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn pri" onclick="applyAnalysis()">Aplicar y rehacer el vídeo</button><button class="btn" onclick="analysisToGuide()">Añadir lo aprendido a la guía</button><button class="btn ghost" onclick="analyzeVideo()">Analizar otra vez</button></div>
+    <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn pri" onclick="applyAnalysis()">Aplicar y rehacer el vídeo</button><button class="btn" onclick="analysisToGuide()">Añadir lo aprendido a la guía</button>${a.video_url===v.video_url?"":`<button class="btn ghost" onclick="analyzeVideo()">Analizar otra vez</button>`}</div>
   </div>`;
 }
 function seek(t){ const vd=$("#sheet video"); if(!vd) return; vd.currentTime=Math.max(0,t-0.5); vd.play().catch(()=>{}); vd.scrollIntoView({behavior:"smooth",block:"center"}); }
@@ -750,6 +750,7 @@ let HOOK=null;
 function pickHook(b){ $("#hooks").querySelectorAll("button").forEach(x=>x.style.borderColor=""); if(HOOK===b.textContent){ HOOK=null; return; } HOOK=b.textContent; b.style.borderColor="var(--accent)"; toast("Gancho elegido para la nueva versión"); }
 async function analyzeVideo(){
   const v=S.open.v;
+  if(v.analysis?.status==="done" && v.analysis?.video_url===v.video_url) return toast("Este montaje ya está analizado: cambia el vídeo y vuelve a analizar");
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"analyze",video_id:v.id}); if(error) throw error; await sb.from("videos").update({analysis:{status:"running"}}).eq("id",v.id); await kick(); await refreshOpenVideo(); }, "Analizando el vídeo…");
 }
 async function applyAnalysis(){

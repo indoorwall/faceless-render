@@ -31,6 +31,16 @@ async function download(url, file) {
   return file;
 }
 
+async function probeSize(file) {
+  return new Promise((resolve) => {
+    const p = spawn("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", file]);
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("close", () => { const [w, h] = out.trim().split(",").map(Number); resolve([w || 0, h || 0]); });
+    p.on("error", () => resolve([0, 0]));
+  });
+}
+
 async function probeDuration(file) {
   return new Promise((resolve) => {
     const p = spawn("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", file]);
@@ -69,6 +79,9 @@ const assColor = (hex) => {
   return `&H00${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}`.toUpperCase();
 };
 const assEsc = (s) => s.replace(/\\/g, "").replace(/[{}]/g, "");
+// Palabras vacías que nunca se resaltan aunque formen parte de una palabra clave compuesta
+const STOP = new Set("de del la las el los lo un una unos unas y e o u a al en con por para que se su sus es fue era the of and a an to in on".split(" "));
+const norm = (w) => String(w).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ]/g, "");
 
 export function buildAss(spec, starts) {
   const W = spec.width, H = spec.height;
@@ -108,6 +121,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       cur.push(w);
     }
     if (cur.length) chunks.push(cur);
+    // Palabras clave de la escena: van siempre en amarillo. Sin lista (vídeos antiguos), se resalta la palabra que suena
+    const keys = new Set((sc.keywords || []).flatMap((k) => cleanWords(k)).map(norm).filter((w) => w && !STOP.has(w)));
+    const keyMode = keys.size > 0;
     chunks.forEach((chunk, ci) => {
       const next = chunks[ci + 1]?.[0];
       const chunkEnd = next ? next.s : chunk[chunk.length - 1].e + 0.25;
@@ -115,11 +131,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       // Si una sola palabra es demasiado larga, se reduce la línea entera para que quepa
       const fit = Math.min(100, Math.floor((budget / textW(full)) * 100));
       const pre = fit < 100 ? `{\\fscx${fit}\\fscy${fit}}` : "";
-      const hi = Math.round(fit * 1.06);
+      const hi = Math.round(fit * (keyMode ? 1.08 : 1.06));
+      const yellow = `{\\c${assColor(sub.highlight)}}`;
       chunk.forEach((w, j) => {
         const s = starts[i] + w.s;
         const e = starts[i] + (j < chunk.length - 1 ? chunk[j + 1].s : Math.min(chunkEnd, chunk[j].e + 0.6));
-        const text = chunk.map((x, n) => (n === j ? `{\\c${assColor(sub.highlight)}\\fscx${hi}\\fscy${hi}}${assEsc(x.w.toUpperCase())}{\\r}${pre}` : assEsc(x.w.toUpperCase()))).join(" ");
+        const text = chunk.map((x, n) => {
+          const word = assEsc(x.w.toUpperCase());
+          const isKey = keyMode && keys.has(norm(x.w));
+          if (!keyMode) return n === j ? `{\\c${assColor(sub.highlight)}\\fscx${hi}\\fscy${hi}}${word}{\\r}${pre}` : word;
+          const pop = n === j ? `{\\fscx${hi}\\fscy${hi}}` : "";
+          if (isKey) return `${yellow}${pop}${word}{\\r}${pre}`;
+          return n === j ? `${pop}${word}{\\r}${pre}` : word;
+        }).join(" ");
         lines.push(`Dialogue: 0,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Cap,,0,0,0,,${pre}${text}`);
       });
     });
@@ -134,45 +158,120 @@ export async function render(spec, workdir, progress = () => {}) {
   const scenes = spec.scenes;
   if (!scenes?.length) throw new Error("Sin escenas");
 
-  // 1) Descargas
+  // Cada escena tiene uno o varios planos. Los vídeos antiguos tienen un solo plano por escena
+  for (const sc of scenes) {
+    if (!Array.isArray(sc.shots) || !sc.shots.length || sc.shots.some((x) => !x.media_url)) {
+      sc.shots = [{ media_url: sc.media_url, media_kind: sc.media_kind, fit: "cover", line: sc.narration }];
+    }
+  }
+
+  // 1) Descargas (cada archivo una sola vez, aunque lo usen varios planos)
   progress(2, "Descargando material");
-  await Promise.all(scenes.map(async (s, i) => {
-    s._media = await download(s.media_url, path.join(workdir, `m${i}${s.media_kind === "video" ? ".mp4" : ".img"}`));
-    s._voice = await download(s.audio_url, path.join(workdir, `v${i}.mp3`));
-    if (s.sfx_url) s._sfx = await download(s.sfx_url, path.join(workdir, `s${i}.mp3`));
+  const files = new Map();
+  const fetchOnce = (url, ext) => {
+    if (!files.has(url)) files.set(url, download(url, path.join(workdir, `f${files.size}${ext}`)));
+    return files.get(url);
+  };
+  await Promise.all(scenes.map(async (sc, i) => {
+    for (const sh of sc.shots) sh._file = await fetchOnce(sh.media_url, sh.media_kind === "video" ? ".mp4" : ".img");
+    sc._voice = await download(sc.audio_url, path.join(workdir, `v${i}.mp3`));
+    if (sc.sfx_url) sc._sfx = await download(sc.sfx_url, path.join(workdir, `s${i}.mp3`));
   }));
   let musicFile = null;
   if (spec.music?.url) musicFile = await download(spec.music.url, path.join(workdir, "music.mp3"));
 
   // Duración real de cada voz y de cada escena
-  for (const s of scenes) {
-    s.voice_duration = s.voice_duration || (await probeDuration(s._voice)) || 3;
-    s.dur = Math.max(1.6, s.voice_duration + 0.6);
+  for (const sc of scenes) {
+    sc.voice_duration = sc.voice_duration || (await probeDuration(sc._voice)) || 3;
+    sc.dur = Math.max(1.6, sc.voice_duration + 0.6);
   }
   const starts = [];
   let t = 0;
-  scenes.forEach((s, i) => { starts.push(t); t += s.dur - (i < scenes.length - 1 ? T : 0); });
+  scenes.forEach((sc, i) => { starts.push(t); t += sc.dur - (i < scenes.length - 1 ? T : 0); });
   const total = t;
 
-  // 2) Un clip por escena
+  // 2) Imágenes preparadas a doble resolución (para movimientos y reencuadres nítidos).
+  //    Las fotos que no encajan en el formato (p. ej. de archivo apaisadas en vertical) van enteras sobre su versión difuminada
+  const stills = new Map();
+  const W2 = W * 2, H2 = H * 2;
+  const stillFor = async (sh) => {
+    const key = `${sh._file}|${sh.fit || "cover"}`;
+    if (stills.has(key)) return stills.get(key);
+    const job = (async () => {
+      const out = path.join(workdir, `still${stills.size}.png`);
+      let contain = sh.fit === "contain";
+      if (contain) {
+        const [iw, ih] = await probeSize(sh._file);
+        if (iw && ih && Math.abs(iw / ih - W / H) / (W / H) < 0.15) contain = false; // casi el mismo formato: basta con recortar
+      }
+      const vf = contain
+        ? `[0:v]scale=${W2}:${H2}:force_original_aspect_ratio=increase,crop=${W2}:${H2},boxblur=40:3,eq=brightness=-0.12:saturation=0.85[bg];[0:v]scale=${W2}:${H2}:force_original_aspect_ratio=decrease:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,format=rgb24`
+        : `[0:v]scale=${W2}:${H2}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W2}:${H2},format=rgb24`;
+      await run("ffmpeg", ["-y", "-v", "error", "-i", sh._file, "-filter_complex", vf, "-frames:v", "1", out]);
+      return out;
+    })();
+    stills.set(key, job);
+    return job;
+  };
+
+  // 3) Planos: cada uno empieza justo antes de la primera palabra de su frase
+  const enc = ["-c:v", "libx264", "-preset", PRESET, "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(FPS)];
+  let shotNo = 0;
+  const totalShots = scenes.reduce((a, sc) => a + sc.shots.length, 0);
   for (let i = 0; i < scenes.length; i++) {
-    const s = scenes[i];
-    const out = path.join(workdir, `c${i}.mp4`);
-    const frames = Math.ceil(s.dur * FPS);
-    if (s.media_kind === "video") {
-      await run("ffmpeg", ["-y", "-v", "error", "-stream_loop", "-1", "-i", s._media, "-t", s.dur.toFixed(3), "-an",
-        "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},fps=${FPS},setsar=1,format=yuv420p`,
-        "-c:v", "libx264", "-preset", PRESET, "-crf", "18", out]);
-    } else {
-      // Ken Burns suave: alterna acercar/alejar y la dirección del desplazamiento
-      const zin = i % 2 === 0;
-      const pan = [["iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"], ["(iw-iw/zoom)*on/" + frames, "ih/2-(ih/zoom/2)"], ["iw/2-(iw/zoom/2)", "(ih-ih/zoom)*(1-on/" + frames + ")"]][i % 3];
-      const z = zin ? `1+0.12*on/${frames}` : `1.12-0.12*on/${frames}`;
-      await run("ffmpeg", ["-y", "-v", "error", "-i", s._media,
-        "-vf", `scale=${W * 2}:${H * 2}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W * 2}:${H * 2},zoompan=z='${z}':x='${pan[0]}':y='${pan[1]}':d=${frames}:s=${W}x${H}:fps=${FPS},setsar=1,format=yuv420p`,
-        "-frames:v", String(frames), "-c:v", "libx264", "-preset", PRESET, "-crf", "18", out]);
+    const sc = scenes[i];
+    const words = (sc.words?.length ? sc.words : estimateWords(sc.narration, sc.voice_duration)).filter((w) => !/^\[.*\]$/.test(w.w));
+    const counts = sc.shots.map((sh) => cleanWords(sh.line).length);
+    const sum = counts.reduce((a, b) => a + b, 0) || 1;
+    const cuts = [0];
+    let cum = 0;
+    for (let k = 1; k < sc.shots.length; k++) {
+      cum += counts[k - 1];
+      const idx = Math.min(words.length - 1, Math.round((cum / sum) * words.length));
+      const at = words.length ? words[Math.max(0, idx)].s - 0.08 : (sc.dur * cum) / sum;
+      cuts.push(Math.max(cuts[k - 1] + 0.7, Math.min(sc.dur - 0.7, at)));
     }
-    progress(5 + Math.round(55 * (i + 1) / scenes.length), `Montando escena ${i + 1} de ${scenes.length}`);
+    cuts.push(sc.dur);
+    const list = [];
+    for (let k = 0; k < sc.shots.length; k++) {
+      const sh = sc.shots[k];
+      const d = Math.max(0.3, cuts[k + 1] - cuts[k]);
+      const frames = Math.max(2, Math.round(d * FPS));
+      const out = path.join(workdir, `p${i}_${k}.mp4`);
+      const rf = sh.reframe;
+      const fx = Math.min(0.85, Math.max(0.15, Number(rf?.x ?? 0.5)));
+      const fy = Math.min(0.85, Math.max(0.15, Number(rf?.y ?? 0.5)));
+      if (sh.media_kind === "video") {
+        const Z = rf ? Math.min(2, Math.max(1.2, Number(rf.zoom ?? 1.4))) : 1;
+        const zw = Math.round(W * Z / 2) * 2, zh = Math.round(H * Z / 2) * 2;
+        await run("ffmpeg", ["-y", "-v", "error", "-stream_loop", "-1", "-i", sh._file, "-an", "-frames:v", String(frames),
+          "-vf", `scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},scale=${zw}:${zh},crop=${W}:${H}:${Math.round((zw - W) * fx)}:${Math.round((zh - H) * fy)},fps=${FPS},setsar=1`,
+          ...enc, out]);
+      } else {
+        const still = await stillFor(sh);
+        let z, x, y;
+        if (rf) {
+          // Reencuadre: acercamiento a una zona de la imagen con una leve deriva
+          const Z = Math.min(2.2, Math.max(1.25, Number(rf.zoom ?? 1.5)));
+          z = `${Z}+0.06*on/${frames}`;
+          x = `max(0,min(iw-iw/zoom,${fx}*iw-iw/zoom/2))`;
+          y = `max(0,min(ih-ih/zoom,${fy}*ih-ih/zoom/2))`;
+        } else {
+          // Movimiento suave: alterna acercar/alejar y la dirección del desplazamiento
+          const zin = shotNo % 2 === 0;
+          z = zin ? `1+0.1*on/${frames}` : `1.1-0.1*on/${frames}`;
+          [x, y] = [["iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"], [`(iw-iw/zoom)*on/${frames}`, "ih/2-(ih/zoom/2)"], ["iw/2-(iw/zoom/2)", `(ih-ih/zoom)*(1-on/${frames})`]][shotNo % 3];
+        }
+        await run("ffmpeg", ["-y", "-v", "error", "-loop", "1", "-framerate", String(FPS), "-i", still, "-frames:v", String(frames),
+          "-vf", `zoompan=z='${z}':x='${x}':y='${y}':d=1:s=${W}x${H}:fps=${FPS},setsar=1`, ...enc, out]);
+      }
+      list.push(`file '${out}'`);
+      shotNo++;
+      progress(5 + Math.round(55 * shotNo / totalShots), `Montando plano ${shotNo} de ${totalShots}`);
+    }
+    const listFile = path.join(workdir, `l${i}.txt`);
+    await writeFile(listFile, list.join("\n") + "\n");
+    await run("ffmpeg", ["-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", listFile, ...enc, "-t", sc.dur.toFixed(3), path.join(workdir, `c${i}.mp4`)]);
   }
 
   // 3) Unión con fundidos y subtítulos quemados

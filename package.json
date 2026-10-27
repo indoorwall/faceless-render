@@ -1,0 +1,10 @@
+{
+  "name": "faceless-render",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Servidor de montaje con FFmpeg para Faceless Studio",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=20" }
+}

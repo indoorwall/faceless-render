@@ -7,7 +7,7 @@ COPY fonts/ /usr/share/fonts/truetype/montserrat/
 RUN fc-cache -f && fc-list | grep -i "Montserrat ExtraBold"
 WORKDIR /app
 COPY package.json ./
-COPY server.js render.js ./
+COPY server.js render.js tools.js ./
 ENV NODE_ENV=production
 EXPOSE 8080
 CMD ["node", "server.js"]

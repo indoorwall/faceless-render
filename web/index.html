@@ -272,6 +272,28 @@ const ICON = {
 
 // ---------- utilidades ----------
 const $ = (s, el=document) => el.querySelector(s);
+const slug = (t) => String(t||"video").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\w]+/g,"-").replace(/^-+|-+$/g,"").toLowerCase().slice(0,60)||"video";
+const dlUrl = (u,name) => u ? u.replace(/([?&])download=[^&]*/,"$1").replace(/[?&]$/,"") + (u.includes("?")?"&":"?") + "download=" + encodeURIComponent(name) : "";
+function dlBlock(v){
+  if(!v.video_url) return "";
+  const n=slug(v.title||v.idea_title);
+  return `<div class="card"><div class="label">Descargar <small class="muted">para subirlo a mano</small></div><div class="opts" style="margin-top:6px">
+    <a class="btn" href="${esc(dlUrl(v.video_url,n+".mp4"))}" download>Vídeo (MP4)</a>
+    ${v.thumbnail_url?`<a class="btn" href="${esc(dlUrl(v.thumbnail_url,n+"-miniatura.jpg"))}" download>Miniatura</a>`:""}
+    <button type="button" class="btn" onclick="copyMeta()">Copiar título, descripción y etiquetas</button></div></div>`;
+}
+async function copyMeta(){
+  const v=S.open.v;
+  const t=$("#f-title")?.value ?? v.title ?? "", d=$("#f-desc")?.value ?? v.description ?? "", g=$("#f-tags")?.value ?? (v.tags||[]).join(", ");
+  try{ await navigator.clipboard.writeText(`${t}\n\n${d}\n\nEtiquetas: ${g}`); toast("Copiado"); }catch(_){ toast("No se pudo copiar"); }
+}
+async function markPublished(){
+  const link=($("#f-yt")?.value||"").trim();
+  const m=link.match(/(?:youtu\.be\/|v=|shorts\/)([\w-]{11})/);
+  if(link && !m){ toast("Ese enlace de YouTube no es válido"); return; }
+  const patch={ title:$("#f-title").value.trim(), description:$("#f-desc").value, tags:$("#f-tags").value.split(",").map(t=>t.trim()).filter(Boolean), status:"published", stage:null, published_at:new Date().toISOString(), ...(m?{youtube_video_id:m[1]}:{}) };
+  await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",S.open.v.id); if(error) throw error; closeSheet(); }, "Guardando…");
+}
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ch = (id) => S.channels.find(c => c.id === id) || {};
 const fmtN = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n ?? 0);
@@ -596,6 +618,7 @@ function renderSheet(first){
   } else if(v.status==="final_review"){
     const pa = v.publish_at ? new Date(new Date(v.publish_at).getTime()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16) : "";
     body=`<video src="${esc(v.video_url)}" controls playsinline preload="metadata" ${v.thumbnail_url?`poster="${esc(v.thumbnail_url)}"`:""}></video>
+      ${dlBlock(v)}
       ${analysisBlock(v)}
       ${thumbBlock(v,c)}
       <label class="f">Título<input type="text" id="f-title" value="${esc(v.title)}" maxlength="100"></label>
@@ -603,9 +626,10 @@ function renderSheet(first){
       <label class="f">Etiquetas <small>Separadas por comas</small><input type="text" id="f-tags" value="${esc((v.tags||[]).join(", "))}"></label>
       <div class="fgrid"><label class="f">Programar publicación <small>Vacío = publicar ahora</small><input type="datetime-local" id="f-at" value="${pa}"></label>
       <label class="check" style="align-self:end"><input type="checkbox" id="f-ai" ${v.ai_disclosure?"checked":""}> Declarar contenido sintético (IA)</label></div>
-      <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span>`}</p>
+      <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span> Descárgalo, súbelo a mano y márcalo como publicado.`}</p>
+      ${c.youtube_connected?"":`<label class="f">Enlace del vídeo en YouTube <small>Opcional: con él la IA aprende de sus visitas</small><input type="url" id="f-yt" placeholder="https://youtu.be/…"></label>`}
       <label class="f">Si no te convence <small>Describe qué cambiar y se reescribe el guion</small><textarea id="f-fb" rows="2"></textarea></label>`;
-    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn pri" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}`;
+    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
   } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
     body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
       <p class="why" style="margin:0">${{scripting:"Investigando y escribiendo el guion con fuentes verificadas, y revisándolo para que sea viral. Suele tardar 2–4 minutos.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
@@ -614,7 +638,7 @@ function renderSheet(first){
     body=`<div class="card" style="border-color:var(--bad)"><div class="label" style="color:var(--bad)">Qué ha fallado</div><div class="mono" style="word-break:break-word">${esc(v.error)}</div></div>`;
     foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button>${/^(render|render_check)/.test(v.error||"")?`<button class="btn" onclick="rerender('${v.id}')">Volver a montar</button>`:""}<button class="btn pri" onclick="retry('${v.id}')">Reintentar desde ese paso</button>`;
   } else {
-    body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>`:""}
+    body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>${dlBlock(v)}`:""}
       <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>`;
   }
   body += `<div class="muted mono" style="font-size:11.5px">Consumo: ${usageTxt}</div>`;

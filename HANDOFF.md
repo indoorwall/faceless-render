@@ -1,0 +1,88 @@
+# Faceless Studio — traspaso a Claude Code (28/10/2026)
+
+Sistema automático de canales de YouTube faceless: ideas → guion → voz → música/efectos → imágenes → montaje → revisión → publicación. Hablar con el usuario (Giol) en español, tuteando, conciso. Prioridad: **máxima calidad con mínimo coste**; el tiempo de producción da igual.
+
+## Piezas
+
+| Pieza | Dónde | Cómo se despliega |
+|---|---|---|
+| Web (una sola página, `web/index.html`) | Vercel, desde este repo | Push a `main` |
+| Motor (`supabase/functions/worker/index.ts`, Deno) | Supabase Edge Function `worker`, proyecto `embjkwggqooawqnzkoam` (org "Heartbeat", plan Pro) | `supabase functions deploy worker --project-ref embjkwggqooawqnzkoam --no-verify-jwt` |
+| Servidor de montaje (`server.js`, `render.js`, `tools.js`, FFmpeg) | Google Cloud Run (`europe-southwest1`), Cloud Build trigger sobre `main` | Push a `main` (Cloud Build) |
+| Base de datos, cola, cron | Supabase Postgres | SQL de referencia en `supabase/sql/functions_and_cron.sql` |
+
+**Ojo con Cloud Build:** cualquier push a `main` que no esté en el filtro de ignorados redespliega Cloud Run y **mata los montajes en curso**. Ya se ignora `web/**`. **Antes de fusionar esta rama**, añadir también `supabase/**` y `**/*.md` en Cloud Build → Activadores → (activador de faceless-render) → filtro de archivos ignorados. Si no, comprobar antes que no hay vídeos en "producing".
+
+## Cómo funciona el motor
+
+- **Cola:** tabla `jobs`. `claim_job()` reparte trabajos y relanza los colgados más de 10 min; a los 3 cuelgues marca el vídeo como fallido.
+- **Disparo:** pg_cron `fs-worker` cada minuto llama a `kick_worker()` si hay trabajos pendientes o colgados. Cada ejecución del worker procesa trabajos durante 60 s y se vuelve a llamar si queda cola.
+- **Trigger `on_video_status_change`:**
+  - `scripting` → `revise` si hay guion y feedback, si no `script`.
+  - `producing` → `voice`.
+  - `publishing` → `publish`.
+  - No dispara si el estado anterior es `failed` ni si `stage = 'Volviendo a montar'`. Esta etapa se usa para relanzar solo un paso sin que el trigger cree trabajos duplicados.
+- **Pasos:**
+  - `script`: Opus por la API de lotes (mitad de precio), con documentación de Wikipedia y sin búsquedas web. Guionista y director van en una sola llamada. Devuelve solo el JSON y corta en `</json>`.
+  - `revise`: Sonnet por lotes; aplica parches mínimos al guion.
+  - `voice`: ElevenLabs `eleven_v3` con tiempos por palabra. Reaprovecha la voz y las imágenes que no han cambiado.
+  - `audio`:
+    - Música: biblioteca de como mucho 4 pistas por canal (`MUSIC_LIBRARY`). Después se rotan sin coste.
+    - Efectos: catálogo fijo `SFX_LIB` de 10, que se genera una vez por canal en `channels/{id}/sfx/`.
+  - `visuals`:
+    - IA: `gpt-image-2` en calidad media y JPEG, con tope de 4 por Short y 12 por largo. Genera 2 por ejecución para no agotar la CPU de la función.
+    - Archivo: Wikimedia Commons, con filtro de coincidencia `matchScore`.
+    - También usa Pexels (solo para stock) y reencuadres.
+  - `render` y `render_check`: el servidor propio en Cloud Run.
+  - `thumbs`: 2 fondos IA más el texto compuesto en el servidor.
+  - `analyze`: Sonnet por lotes con fotogramas del vídeo.
+  - `learn`: Haiku; mantiene el manual del canal.
+  - `refill_ideas`: Sonnet por lotes; banco de ideas con formato Short o largo.
+  - `fix_visuals`: revisión de imágenes sin Claude; con `payload {dry:true}` solo informa.
+  - `metrics`: API de YouTube.
+- **Claves:** en Supabase Vault con el prefijo `fs_` (las lee `get_api_keys()`). Las que hay:
+  - Modelos y servicios: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`, `PEXELS_API_KEY`, `CREATOMATE_API_KEY`.
+  - YouTube y Google: `YOUTUBE_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
+  - Montaje: `RENDER_URL`, `RENDER_SECRET`.
+- **Coste por vídeo:** queda en `videos.usage` (tokens por modelo, con los de lotes aparte; imágenes, caracteres de voz, segundos de música y efectos). La web calcula el coste de Claude a partir de ahí.
+- **Errores sin crédito:** si OpenAI o ElevenLabs se quedan sin saldo, el paso falla como `UserError`, sin reintentos y con un mensaje claro.
+
+## Canal actual
+- "Frente insólito", id `9aa16a1f-0a4d-42dd-9c8e-cac2090deb1e`, historias insólitas de guerra. Publica Shorts y largos de 8 min (`formats ['short','long']`).
+- Cada vídeo lleva su propio `format` y `target_minutes`; `getVideo()` los aplica sobre los del canal.
+
+## Lo hecho hoy (28/10)
+1. **Imágenes que no encajaban** (11-S, colegio, inodoro de Milang…):
+   - Causas: el plan B generaba la imagen IA a partir de la frase suelta, y Commons aceptaba cualquier resultado.
+   - Arreglo: `ctxPrompt()` con contexto de la historia y la época, `matchScore` en Commons, nada de stock moderno para fotos de archivo, y el paso `fix_visuals`.
+   - Revisados y vueltos a montar Emús, Plaga, Fútbol, Cadáver e Inodoro. A la Paloma se le quitaron las imágenes malas; las rehará al producirse.
+   - **El Oso está publicado con 11 imágenes malas. No se ha tocado**: queda pendiente de que Giol decida.
+2. **Gasto de Claude:** el director se fusionó con el guionista; lotes a mitad de precio; Wikipedia en vez de búsquedas web; revisión en silencio, sin borradores; los Shorts sin conceptos de miniatura.
+   - Esta mañana se gastaron unos 2,5 $ de Opus en 6 guiones a precio completo, todos anteriores a los lotes.
+   - Estimación actual: unos 0,08–0,10 $ por Short y unos 0,25 $ por largo. **Sin verificar todavía** con un guion real.
+3. **Cuelgues:** «CPU Time exceeded» al decodificar imágenes en base64.
+   - Decodificador rápido propio, imágenes en JPEG y 2 imágenes por ejecución.
+   - El cron ahora también despierta al worker cuando hay trabajos colgados.
+4. **Créditos agotados de OpenAI y ElevenLabs:**
+   - Biblioteca de música por canal y catálogo de efectos.
+   - Tope de imágenes IA más bajo y 2 miniaturas.
+   - Fallo sin reintentos cuando no hay crédito.
+
+## Pendiente (por orden)
+1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.
+   - **Voz:** probar **Fish Audio `s2-pro`** (15 $ por millón de bytes de texto) frente a ElevenLabs v3 con el mismo Short, y que Giol elija de oído.
+     - Si se cambia, los tiempos por palabra para los subtítulos saldrían de la transcripción de OpenAI (Whisper, 0,006 $/min) o del alineado forzado.
+     - El proveedor de voz debería ser configurable por canal.
+   - **Imágenes:** OpenAI solo para el gancho y las miniaturas; el resto con **FLUX schnell en fal.ai** (unos 0,003 $ por imagen). También configurable por canal.
+   - **Claves:** hace falta que Giol cree las cuentas de Fish Audio y fal.ai. Añadir `FISH_AUDIO_API_KEY` y `FAL_KEY` a `set_api_key()`, a `api_key_status()` y a la pantalla de Ajustes de la web.
+2. **«4 tormentas que decidieron guerras»** (largo) ha fallado en `voice` por falta de créditos de ElevenLabs. Hay que relanzarlo con `retry_video` cuando haya crédito o voz nueva.
+3. **Comprobar el coste real** del próximo guion por lotes (`videos.usage`, claves `opus_batch_in/out`).
+4. **Antes de fusionar** esta rama `handoff-worker` en `main`: el filtro de Cloud Build (ver arriba).
+5. **Opcional:**
+   - Pasar los guiones de Shorts a Sonnet si la calidad aguanta (ahorraría alrededor de la mitad).
+   - Que la web muestre también el coste de imágenes, voz y música, no solo el de Claude.
+
+## Precauciones
+- No borrar datos con DELETE salvo que haga falta; mejor actualizaciones.
+- No poner el email del usuario en cabeceras como User-Agent.
+- Los mensajes de commit terminan con la atribución de Claude.

@@ -188,6 +188,115 @@ function valRoom(c) {
   return out.length ? out : [true];
 }
 
+
+// ================= D. MEMORIA VISUAL: «¿QUÉ FALTA?» / «¿QUÉ HA CAMBIADO?» =================
+// Estantería con objetos cotidianos. Se cierra el telón y, al abrirse, falta uno (o uno ha cambiado de color).
+export const MEM_OBJECTS = {
+  apple: { name: "la manzana", color: 0 }, pear: { name: "la pera", color: 4 }, mug: { name: "la taza", color: 1 }, book: { name: "el libro", color: 3 },
+  plant: { name: "la planta", color: 4 }, clock: { name: "el despertador", color: 2 }, ball: { name: "la pelota", color: 0 }, umbrella: { name: "el paraguas", color: 3 },
+  key: { name: "la llave", color: 2 }, hat: { name: "el sombrero", color: 1 }, gift: { name: "el regalo", color: 5 }, bottle: { name: "la botella", color: 1 },
+  banana: { name: "el plátano", color: 2 }, crown: { name: "la corona", color: 2 },
+};
+// Colores con nombre: un cambio de color siempre es entre dos colores claramente distintos
+export const MEM_COLORS = [["#FF6B6B", "rojo"], ["#35B8C5", "turquesa"], ["#FFC83D", "amarillo"], ["#9B7BFF", "morado"], ["#22C55E", "verde"], ["#FF8FB1", "rosa"], ["#FF9F43", "naranja"]];
+function genMemoryScene(r, d) {
+  const L = di(d), n = [6, 8, 9, 12][L], mode = L >= 2 ? "changed" : "missing";
+  const kinds = r.shuffle(Object.keys(MEM_OBJECTS)).slice(0, n);
+  const before = kinds.map((k) => ({ kind: k, color: L >= 1 && r() < 0.5 ? r.int(0, MEM_COLORS.length - 1) : MEM_OBJECTS[k].color }));
+  const at = r.int(0, n - 1), after = before.map((x) => ({ ...x }));
+  if (mode === "missing") after[at] = null;
+  else { let c2 = after[at].color; while (c2 === after[at].color) c2 = r.int(0, MEM_COLORS.length - 1); after[at].color = c2; }
+  const nm = MEM_OBJECTS[before[at].kind].name;
+  const label = mode === "missing" ? `¡Faltaba ${nm}!` : `¡${nm[0].toUpperCase()}${nm.slice(1)} era ${MEM_COLORS[before[at].color][1]}!`;
+  return { question: mode === "missing" ? "¿Qué falta?" : "¿Qué ha cambiado?", instructions: "¡Memoriza!", memo: [4, 5, 6, 7][L], data: { before, after, mode }, answer: { at, kind: before[at].kind, label }, explanation: "" };
+}
+function valMemoryScene(c) {
+  const { before, after, mode } = c.data || {}, out = [];
+  if (!Array.isArray(before) || !Array.isArray(after) || before.length !== after.length || before.length < 4) return ["Escena de memoria mal formada"];
+  if (new Set(before.map((x) => x.kind)).size !== before.length) out.push("Hay objetos repetidos");
+  if (!before.every((x) => MEM_OBJECTS[x.kind] && MEM_COLORS[x.color])) out.push("Objeto o color desconocido");
+  const diff = before.map((x, i) => { const y = after[i]; return !y ? "missing" : y.kind !== x.kind ? "kind" : y.color !== x.color ? "changed" : null; });
+  const idx = diff.map((x, i) => (x ? i : -1)).filter((i) => i >= 0);
+  if (idx.length !== 1) out.push(`Hay ${idx.length} cambios (debe haber 1)`);
+  else { if (idx[0] !== c.answer?.at) out.push("La respuesta no es el objeto que cambió"); if (diff[idx[0]] !== mode) out.push("El tipo de cambio no coincide"); }
+  return out.length ? out : [true];
+}
+
+// ================= E. DIFERENCIAS ENTRE DOS ESCENAS ILUSTRADAS =================
+// Dos habitaciones iguales salvo en N rasgos comprobables (un objeto que falta, otro color, otra hora…)
+export const SCENE_DIFFS = {
+  plant: { field: "plant", what: "Falta la planta" }, lamp: { field: "lamp", what: "Falta la lámpara" }, candle: { field: "candle", what: "Falta la vela" }, cup: { field: "cup", what: "Falta la taza" },
+  sofa: { field: "sofa", what: "El sofá cambia de color" }, rug: { field: "rug", what: "La alfombra cambia de color" }, curtain: { field: "curtain", what: "Las cortinas cambian de color" },
+  book: { field: "book", what: "Un libro cambia de color" }, clock: { field: "clock", what: "El reloj marca otra hora" }, calendar: { field: "calendar", what: "Otro día en el calendario" },
+  picture: { field: "picture", what: "El cuadro es otro" }, window: { field: "sun", what: "No hay sol en la ventana" },
+};
+// Objeto de la escena donde se marca cada diferencia
+export const DIFF_SPOT = { plant: "plant", lamp: "lamp", candle: "candle", cup: "cup", sofa: "sofa", rug: "rug", curtain: "window", book: "shelf", clock: "clock", calendar: "calendar", picture: "picture", window: "window" };
+const SOFA_COLS = ["#5DA9E9", "#FF8FA3", "#F4A259", "#43AA8B", "#9B7BFF"], RUG_COLS = ["#FF9F8E", "#FFD166", "#8ECAE6", "#B8A1E3"], CURT_COLS = ["#FF8FA3", "#7FC8F0", "#FFC83D", "#9BD47D"], BOOK_COLS = ["#9B7BFF", "#FF7A6B", "#22C55E", "#35B8C5"];
+export function sceneBase(r) {
+  return { palette: r.int(0, 3), sofa: r.pick(SOFA_COLS), rug: r.pick(RUG_COLS), curtain: r.pick(CURT_COLS), book: r.pick(BOOK_COLS), clock: { h: r.int(1, 11), m: r.pick([0, 15, 30, 45]) }, calendar: { day: r.int(1, 28), month: r.pick(["MAR", "ABR", "MAY", "JUN", "OCT"]) }, picture: r.pick(["mountain", "house", "boat"]), sun: true, plant: true, lamp: true, candle: true, cup: true };
+}
+function genSceneDiff(r, d) {
+  const L = di(d), n = [3, 4, 5, 5][L];
+  const left = sceneBase(r), right = JSON.parse(JSON.stringify(left));
+  // En extremo se evitan las más evidentes (objetos que desaparecen)
+  const pool = r.shuffle(Object.keys(SCENE_DIFFS).filter((k) => L < 3 || !["lamp", "plant"].includes(k)));
+  const diffs = pool.slice(0, n);
+  const other = (arr, v) => r.pick(arr.filter((x) => x !== v));
+  for (const k of diffs) {
+    const f = SCENE_DIFFS[k].field;
+    if (["plant", "lamp", "candle", "cup"].includes(f)) right[f] = false;
+    else if (f === "sofa") right.sofa = other(SOFA_COLS, left.sofa); else if (f === "rug") right.rug = other(RUG_COLS, left.rug);
+    else if (f === "curtain") right.curtain = other(CURT_COLS, left.curtain); else if (f === "book") right.book = other(BOOK_COLS, left.book);
+    else if (f === "clock") right.clock = { h: ((left.clock.h + r.int(3, 7) - 1) % 12) + 1, m: left.clock.m };
+    else if (f === "calendar") right.calendar = { ...left.calendar, day: ((left.calendar.day + r.int(3, 12) - 1) % 28) + 1 };
+    else if (f === "picture") right.picture = other(["mountain", "house", "boat"], left.picture);
+    else if (f === "sun") right.sun = false;
+  }
+  return { question: `Encuentra las ${n} diferencias`, instructions: "", data: { left, right }, answer: { diffs, label: `${n} diferencias` }, explanation: "" };
+}
+function valSceneDiff(c) {
+  const { left, right } = c.data || {}, out = [];
+  if (!left || !right) return ["Escenas incompletas"];
+  const changed = Object.keys(SCENE_DIFFS).filter((k) => JSON.stringify(left[SCENE_DIFFS[k].field]) !== JSON.stringify(right[SCENE_DIFFS[k].field]));
+  const extra = Object.keys(left).filter((f) => !Object.values(SCENE_DIFFS).some((x) => x.field === f) && JSON.stringify(left[f]) !== JSON.stringify(right[f]));
+  if (extra.length) out.push(`Diferencias no marcadas: ${extra.join(", ")}`);
+  const ans = c.answer?.diffs || [];
+  if (changed.length !== ans.length || !changed.every((k) => ans.includes(k))) out.push(`Las diferencias reales (${changed.length}) no coinciden con la respuesta (${ans.length})`);
+  if (!/^\d+/.test(String(c.question).replace(/\D+/, "")) || !String(c.question).includes(String(ans.length))) out.push("La pregunta no dice el número de diferencias");
+  return out.length ? out : [true];
+}
+
+// ================= F. ESCAPE VISUAL: «¿CON QUÉ LLAVE ESCAPA PIX?» =================
+// La cerradura tiene un perfil de dientes; solo una llave tiene exactamente ese perfil.
+function genEscape(r, d) {
+  const L = di(d), teeth = [3, 4, 5, 5][L], nk = [3, 3, 4, 4][L];
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const lock = Array.from({ length: teeth }, () => r.int(1, 3));
+    const keys = [lock.slice()];
+    while (keys.length < nk) {
+      const k = lock.slice(); const changes = L === 0 ? r.int(2, teeth) : 1;
+      for (const i of r.shuffle([...Array(teeth).keys()]).slice(0, changes)) { let v = k[i]; while (v === k[i]) v = r.int(1, 3); k[i] = v; }
+      if (L === 3 && keys.length === 1 && lock.join() !== lock.slice().reverse().join()) { keys.push(lock.slice().reverse()); continue; } // la del revés despista
+      if (!keys.some((x) => x.join() === k.join())) keys.push(k);
+    }
+    const order = r.shuffle([...Array(nk).keys()]), ks = order.map((i) => keys[i]), ok = order.indexOf(0);
+    if (ks.filter((k) => k.join() === lock.join()).length !== 1) continue;
+    return { question: "¿Con qué llave escapa PIX?", instructions: "Solo una encaja en la cerradura", data: { lock, keys: ks, side: r.pick(["left", "right"]), wall: r.int(0, 2) }, answer: { key: ok, label: `Llave ${LETTERS[ok]}` }, explanation: "" };
+  }
+  throw new Error("escape sin solución única");
+}
+function valEscape(c) {
+  const { lock, keys } = c.data || {}, out = [];
+  if (!Array.isArray(lock) || !Array.isArray(keys) || keys.length < 2 || !keys.every((k) => k.length === lock.length)) return ["Llaves o cerradura mal definidas"];
+  const fits = keys.map((k, i) => (k.join() === lock.join() ? i : -1)).filter((i) => i >= 0);
+  if (fits.length !== 1) out.push(`Encajan ${fits.length} llaves (debe ser 1)`);
+  else if (fits[0] !== c.answer?.key) out.push("La respuesta no es la llave que encaja");
+  return out.length ? out : [true];
+}
+// Guion del escape: PIX va a por la llave buena, la lleva a la puerta, gira, abre y sale
+export const escapeScript = () => ({ toKey: [0.15, 1.0], grab: 1.05, toDoor: [1.3, 2.4], turn: 2.55, open: 2.95, out: [3.3, 4.2], end: 4.4 });
+
 // ---------- Registro de juegos: generador, validador y guion de la revelación ----------
 // reveal(c) → { dur, solved, events:[{t, code, gain}] } en segundos desde el inicio de la revelación.
 // Las duraciones salen de la misma simulación que valida la respuesta.
@@ -230,11 +339,26 @@ export const WORLD = {
     reveal() { const k = roomScript(); return { dur: k.end + 0.9, solved: k.mark, events: [{ t: k.zoomIn, code: "S22", gain: 0.9 }, { t: k.fix, code: "S17", gain: 0.9 }] }; },
   },
 };
+WORLD.memory_scene = {
+  category: "wmemory", gen: genMemoryScene, val: valMemoryScene, time: [6, 8, 9, 10],
+  reveal() { return { dur: 2.8, solved: 0.45, events: [{ t: 0.3, code: "S17", gain: 0.9 }] }; },
+};
+WORLD.scene_diff = {
+  category: "wdiff", gen: genSceneDiff, val: valSceneDiff, time: [16, 20, 24, 28],
+  reveal(c) { const n = c.answer.diffs.length, ev = []; for (let k = 0; k < n; k++) ev.push({ t: 0.35 + k * 0.45, code: k ? "S09" : "S17", gain: k ? 0.65 : 0.9 }); return { dur: 0.35 + (n - 1) * 0.45 + 2.2, solved: 0.35 + (n - 1) * 0.45, events: ev }; },
+};
+WORLD.escape = {
+  category: "escape", gen: genEscape, val: valEscape, time: [8, 10, 12, 14],
+  reveal() { const k = escapeScript(); return { dur: k.end + 1.1, solved: k.open, events: [{ t: k.toKey[0], code: "S19", gain: 0.7 }, { t: k.grab, code: "S17", gain: 0.8 }, { t: k.toDoor[0], code: "S19", gain: 0.7 }, { t: k.turn, code: "S14", gain: 1 }, { t: k.open, code: "S16", gain: 1 }, { t: k.out[0] + 0.1, code: "S19", gain: 0.9 }] }; },
+};
 export const WORLD_CATEGORIES = {
   maze: { label: "Laberintos", emoji: "🌀", mechanics: ["maze"], world: true },
   machine: { label: "Máquinas y mecanismos", emoji: "⚙️", mechanics: ["machine"], world: true },
   error: { label: "Encuentra el error", emoji: "🔎", mechanics: ["room_error"], world: true },
+  wmemory: { label: "Memoria visual", emoji: "🧠", mechanics: ["memory_scene"], world: true },
+  wdiff: { label: "Diferencias ilustradas", emoji: "👀", mechanics: ["scene_diff"], world: true },
+  escape: { label: "Escape visual", emoji: "🗝️", mechanics: ["escape"], world: true },
 };
-export const WORLD_ORDER = ["maze", "machine", "error"];
+export const WORLD_ORDER = ["maze", "machine", "error", "wmemory", "wdiff", "escape"];
 export const isWorld = (c) => !!(c && WORLD[c.mechanic]);
 export { rng };

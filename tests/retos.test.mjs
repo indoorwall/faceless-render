@@ -19,7 +19,9 @@ for (const m of mechs) {
   const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: "medium", seed: `neg-${m}` });
   const bad = JSON.parse(JSON.stringify(c));
   if ("option" in bad.answer) bad.answer.option = (bad.answer.option + 1) % 4;
-  else if ("at" in bad.answer) { bad.data.at = (bad.data.at + 1) % 5; }
+  else if ("at" in bad.answer && "at" in bad.data) { bad.data.at = (bad.data.at + 1) % 5; }
+  else if ("at" in bad.answer) bad.answer.at = (bad.answer.at + 1) % bad.data.before.length;
+  else if ("key" in bad.answer) bad.answer.key = (bad.answer.key + 1) % bad.data.keys.length;
   else if ("diffs" in bad.answer) bad.answer.diffs = bad.answer.diffs.slice(1);
   else if ("entrance" in bad.answer) bad.answer.entrance = (bad.answer.entrance + 1) % 3;
   else if ("bucket" in bad.answer) bad.answer.bucket = (bad.answer.bucket + 1) % (bad.data.levels + 1);
@@ -67,6 +69,9 @@ if (canvasMod) {
     ok(same < n * 0.2, `${style}/${format}: ${same} de ${n} fotogramas idénticos (¿lienzo bloqueado?)`);
   }
 }
+// 7b) Cada diferencia ilustrada tiene dónde marcarse
+{ const W0 = await import("../web/retos/world.js"); for (const k of Object.keys(W0.SCENE_DIFFS)) ok(!!W0.DIFF_SPOT[k], `diferencia ${k} sin sitio`);
+  if (canvasMod) { const { drawFrame } = await import("../web/retos/draw.js"); for (let i = 0; i < 40; i++) { const c = E.makeChallenge({ category: "wdiff", mechanic: "scene_diff", difficulty: E.DIFFS[i % 4], seed: `sd${i}` }); for (const format of ["short", "long"]) { const p = { game_style: "world", format, challenges: [c], config: {} }, t2 = E.timeline(p), sg = t2.segments.find((x) => x.type === "challenge"); const cv = canvasMod.createCanvas(108, 192); try { drawFrame(cv.getContext("2d"), 108, 192, p, t2, sg.reveal[0] + 3); } catch (e) { ok(false, `diferencias ${c.answer.diffs}: ${e.message}`); } } } } }
 // 8) Playable World: la animación sale de la misma simulación que la respuesta
 const W = await import("../web/retos/world.js");
 for (let i = 0; i < 60; i++) {

@@ -17,7 +17,7 @@ El propietario es responsable de los vídeos que publica y de que cumplan las no
 
 ## Datos
 
-El tratamiento de datos se describe en la política de privacidad: https://github.com/indoorwall/faceless-render/blob/main/web/privacidad.md
+El tratamiento de datos se describe en la política de privacidad: https://faceless-studio-xzen.vercel.app/privacidad.html
 
 ## Acceso
 

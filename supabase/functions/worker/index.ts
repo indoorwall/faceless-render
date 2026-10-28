@@ -39,6 +39,35 @@ let CRON_SECRET = "";
 class UserError extends Error {}
 // La petición va por la API de lotes (mitad de precio) y aún no tiene respuesta: el trabajo vuelve a la cola
 class Pending extends Error {}
+// Presupuesto diario (app_config.daily_cap_eur) agotado: el trabajo espera a mañana
+class OverBudget extends Error {}
+async function reserve(k: string, n: number) {
+  if (!n) return;
+  const { data, error } = await sb.rpc("reserve_spend", { p_key: k, p_n: n });
+  if (error) throw new Error(`Presupuesto: ${error.message}`);
+  if (data !== true) throw new OverBudget(k);
+}
+// Claude: antes de llamar se comprueba que queda margen; al recibir la respuesta se apunta lo gastado
+async function claudeGuard(model: string) {
+  const { data, error } = await sb.rpc("budget_left");
+  if (error) throw new Error(`Presupuesto: ${error.message}`);
+  if (Number(data ?? 0) < (model.includes("opus") ? 0.3 : 0.05)) throw new OverBudget("claude");
+}
+// deno-lint-ignore no-explicit-any
+async function claudeSpent(model: string, d: any, batch = false) {
+  const tier = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
+  const f = batch ? 0.5 : 1;
+  await sb.rpc("record_spend", { p_key: `${tier}_in`, p_n: (d?.usage?.input_tokens ?? 0) * f });
+  await sb.rpc("record_spend", { p_key: `${tier}_out`, p_n: (d?.usage?.output_tokens ?? 0) * f });
+  const ws = d?.usage?.server_tool_use?.web_search_requests ?? 0;
+  if (ws) await sb.rpc("record_spend", { p_key: "web_searches", p_n: ws });
+}
+// Mañana a las 00:05, hora de Madrid
+function nextMadridDay() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
+  const sec = Number(p.hour) * 3600 + Number(p.minute) * 60 + Number(p.second);
+  return new Date(Date.now() + (86400 - sec + 300) * 1000).toISOString();
+}
 function key(name: string) {
   const v = KEYS[name];
   if (!v) throw new UserError(`Falta la clave ${name}. Añádela en Ajustes.`);
@@ -71,7 +100,7 @@ async function runLoop() {
   const t0 = Date.now();
   const { data: k } = await sb.rpc("get_api_keys");
   KEYS = (k ?? {}) as Record<string, string>;
-  let processed = 0;
+  let processed = 0; let budgetLogged = false;
   while (Date.now() - t0 < 60_000) {
     const { data: job } = await sb.rpc("claim_job");
     if (!job || !job.id) break;
@@ -80,6 +109,12 @@ async function runLoop() {
       await runStep(job);
       await sb.from("jobs").update({ status: "done", error: null }).eq("id", job.id);
     } catch (e) {
+      if (e instanceof OverBudget) {
+        await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: nextMadridDay() }).eq("id", job.id);
+        if (job.video_id) await sb.from("videos").update({ stage: "Esperando al presupuesto de mañana" }).eq("id", job.video_id);
+        if (!budgetLogged) { budgetLogged = true; await log(job, `Presupuesto diario agotado (${e.message}): ${job.step} y lo que venga detrás siguen mañana`, "warn"); }
+        continue;
+      }
       if (e instanceof Pending) {
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: new Date(Date.now() + 90_000).toISOString() }).eq("id", job.id);
         continue;
@@ -191,6 +226,7 @@ async function batched(job: Job, tag: string, body: any): Promise<any> {
   const st = job.payload.batches?.[tag];
   if (st?.message) return st.message;
   if (!st) {
+    await claudeGuard(String(body.model));
     const r = await fetch("https://api.anthropic.com/v1/messages/batches", { method: "POST", headers: AH(), body: JSON.stringify({ requests: [{ custom_id: tag.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60), params: body }] }) });
     if (!r.ok) throw new Error(`Claude lotes ${r.status}: ${(await r.text()).slice(0, 300)}`);
     const d = await r.json();
@@ -212,6 +248,7 @@ async function batched(job: Job, tag: string, body: any): Promise<any> {
     await sb.from("jobs").update({ payload: job.payload }).eq("id", job.id);
     throw new Error(`Claude lotes: ${res?.type ?? "sin resultado"} ${JSON.stringify(res?.error ?? "").slice(0, 200)}`);
   }
+  await claudeSpent(String(body.model), res.message, true);
   job.payload.batches[tag] = { ...st, message: res.message };
   await sb.from("jobs").update({ payload: job.payload }).eq("id", job.id);
   return res.message;
@@ -229,9 +266,11 @@ async function claude(model: string, system: string, user: string, opts: { searc
     let d: any;
     if (opts.batch) d = await batched(opts.batch.job, `${opts.batch.tag}_${i}`, body);
     else {
+      await claudeGuard(model);
       const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: AH(), body: JSON.stringify(body) });
       if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
       d = await r.json();
+      await claudeSpent(model, d);
     }
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0; searches += d.usage?.server_tool_use?.web_search_requests ?? 0;
     // deno-lint-ignore no-explicit-any
@@ -365,6 +404,7 @@ async function claudeWithTool(model: string, system: string, user: string, tool:
   const messages: any[] = [{ role: "user", content: user }];
   let inTok = 0; let outTok = 0;
   for (let i = 0; i < 4; i++) {
+    await claudeGuard(model);
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01", "content-type": "application/json" },
@@ -372,6 +412,7 @@ async function claudeWithTool(model: string, system: string, user: string, tool:
     });
     if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
     const d = await r.json();
+    await claudeSpent(model, d);
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0;
     // deno-lint-ignore no-explicit-any
     const call = (d.content ?? []).find((b: any) => b.type === "tool_use" && b.name === tool.name);
@@ -740,9 +781,27 @@ async function stepVoice(job: Job) {
     if (reusedVoice || reusedShots) await log(job, `Se reaprovechan ${reusedVoice} escenas de voz y ${reusedShots} imágenes del montaje anterior`);
   }
   const voice = v.channel.voice_id || "JBFqnCBsd6RMkjVDRZzb";
-  const { data: pending } = await sb.from("scenes").select("*").eq("video_id", v.id).is("audio_url", null).order("n").limit(8);
-  let chars = 0;
+  const ch = v.channel;
+  const fish = ch.voice_provider === "fish";
+  if (fish && !ch.fish_voice_id) throw new UserError("El canal usa Fish Audio pero no tiene voz elegida. Pon el ID de la voz en el canal.");
+  const { data: pending } = await sb.from("scenes").select("*").eq("video_id", v.id).is("audio_url", null).order("n").limit(fish ? 4 : 8);
+  let chars = 0; let fishBytes = 0; let sttSec = 0;
   for (const s of pending ?? []) {
+    if (fish) {
+      // Fish Audio: voz por escena y tiempos por palabra con la transcripción de OpenAI (si falla, el montaje los estima)
+      const text = plain(s.narration);
+      const bytes = await fishTts(text, ch.fish_voice_id, FISH_MODEL);
+      const url = await upload(`${v.id}/a_${String(s.n).padStart(3, "0")}_${Date.now()}.mp3`, bytes, "audio/mpeg");
+      // deno-lint-ignore no-explicit-any
+      let t: any = null;
+      if (KEYS["OPENAI_API_KEY"]) {
+        try { t = await whisperWords(bytes, text, ch.language); sttSec += t.duration; } catch (e) { await log(job, `Escena ${s.n}: sin tiempos por palabra (${(e as Error).message || (e as Error).constructor.name}); se estiman`, "warn"); }
+      }
+      await sb.from("scenes").update({ audio_url: url, audio_duration: t?.duration ?? bytes.length / 16000, words: t?.words ?? null }).eq("id", s.id);
+      fishBytes += new TextEncoder().encode(text).length;
+      continue;
+    }
+    await reserve("tts_chars", s.narration.length);
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice}/with-timestamps?output_format=mp3_44100_128`, {
       method: "POST",
       headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
@@ -757,7 +816,7 @@ async function stepVoice(job: Job) {
   }
   const { count: total } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id);
   const { count: left } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id).is("audio_url", null);
-  await bumpUsage(v.id, { tts_chars: chars }, { progress: Math.round(2 + 33 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
+  await bumpUsage(v.id, { tts_chars: chars, ...(fishBytes ? { fish_bytes: fishBytes } : {}), ...(sttSec ? { stt_sec: Math.round(sttSec) } : {}) }, { progress: Math.round(2 + 33 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
   if ((left ?? 0) > 0) await enqueue("voice", { video_id: v.id, payload: { cont: true } });
   else { await enqueue("audio", { video_id: v.id }); await log(job, "Voz terminada"); }
 }
@@ -769,6 +828,7 @@ async function elevenFail(r: Response, what: string): Promise<never> {
   throw new Error(`ElevenLabs ${what} ${r.status}: ${t}`);
 }
 async function elevenMusic(prompt: string, seconds: number) {
+  await reserve("music_sec", seconds);
   const r = await fetch(`https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128`, {
     method: "POST",
     headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
@@ -778,6 +838,7 @@ async function elevenMusic(prompt: string, seconds: number) {
   return new Uint8Array(await r.arrayBuffer());
 }
 async function elevenSfx(text: string) {
+  await reserve("sfx", 1);
   const r = await fetch(`https://api.elevenlabs.io/v1/sound-generation?output_format=mp3_44100_128`, {
     method: "POST",
     headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
@@ -848,6 +909,7 @@ async function stepAudio(job: Job) {
 
 // ---------- Paso: imágenes y vídeo de stock (por lotes) ----------
 async function aiImage(prompt: string, short: boolean) {
+  await reserve("ai_images", 1);
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
@@ -947,15 +1009,17 @@ function ctxPrompt(sh: any, v: any, ch: any) {
 async function stepVisuals(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
+  // FLUX (fal.ai) para los planos IA; OpenAI solo para el primero del vídeo (el gancho)
+  const fluxOn = ch.image_provider === "flux" && !!KEYS["FAL_KEY"];
   await sb.from("videos").update({ stage: "Generando imágenes" }).eq("id", v.id);
   const { data: allScenes } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
   const used = new Set<string>();
   for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) if (sh.media_url) used.add(sh.media_url);
   // Tope de imágenes IA por vídeo: el resto, archivo, stock gratis o acercamientos
-  const aiCap = short ? 4 : 12;
+  const aiCap = fluxOn ? (short ? 10 : 40) : (short ? 4 : 12);
   // deno-lint-ignore no-explicit-any
   let aiUsed = (allScenes ?? []).flatMap((sc: any) => sc.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url).length;
-  let aiBudget = 2; let images = 0;
+  let aiBudget = fluxOn ? 5 : 2; let images = 0; let fluxN = 0;
   // deno-lint-ignore no-explicit-any
   let prev: any = null;
   for (const sc of allScenes ?? []) {
@@ -969,7 +1033,7 @@ async function stepVisuals(job: Job) {
       if (type === "reframe" && !prev) type = "ai";
       if (ch.image_source === "ai" && !["ai", "reframe"].includes(type)) type = "ai";
       if (ch.image_source === "stock" && type === "ai") type = "stock_photo";
-      if (type === "ai" && !KEYS["OPENAI_API_KEY"]) type = "stock_photo";
+      if (type === "ai" && !KEYS["OPENAI_API_KEY"] && !fluxOn) type = "stock_photo";
       if (type === "reframe") { Object.assign(sh, { media_url: prev.media_url, media_kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: sh.reframe ?? { x: 0.5, y: 0.4, zoom: 1.5 } }); prev = sh; continue; }
       // deno-lint-ignore no-explicit-any
       let media: any = null;
@@ -990,21 +1054,28 @@ async function stepVisuals(job: Job) {
         }
         if (!media && prev?.media_url) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.35 + Math.random() * 0.3, y: 0.35, zoom: 1.4 + Math.random() * 0.3 } };
       }
-      if (!media && ch.image_source !== "stock" && KEYS["OPENAI_API_KEY"]) {
+      if (!media && ch.image_source !== "stock" && (KEYS["OPENAI_API_KEY"] || fluxOn)) {
         if (aiBudget <= 0) break;
-        const bytes = await safeImage(ctxPrompt(sh, v, ch), short);
+        const viaFlux = fluxOn && !(sc.n === 1 && shots.indexOf(sh) === 0 && KEYS["OPENAI_API_KEY"]);
+        let bytes: Uint8Array | null;
+        try { bytes = viaFlux ? await fluxImage(ctxPrompt(sh, v, ch), short) : await safeImage(ctxPrompt(sh, v, ch), short); } catch (e) {
+          // Sin presupuesto a mitad de escena: se guarda lo ya generado para no pagarlo otra vez
+          if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images: images, flux_images: fluxN }); }
+          throw e;
+        }
         if (bytes) {
-          media = { url: await upload(`${v.id}/i_${String(sc.n).padStart(3, "0")}_${shots.indexOf(sh)}_${Date.now()}.jpg`, bytes, "image/jpeg"), kind: "image", fit: "cover", gen: "ai" };
-          images++; aiBudget--; aiUsed++;
+          media = { url: await upload(`${v.id}/i_${String(sc.n).padStart(3, "0")}_${shots.indexOf(sh)}_${Date.now()}.jpg`, bytes, "image/jpeg"), kind: "image", fit: "cover", gen: "ai", provider: viaFlux ? "flux" : "openai" };
+          if (viaFlux) fluxN++; else images++;
+          aiBudget--; aiUsed++;
         } else {
           // OpenAI no quiere generarla: foto de archivo del tema o, si no hay, un acercamiento al plano anterior
           try { media = await commons(sh.archive_query || v.idea_title, used); } catch (_) { /* sigue */ }
           if (!media && prev?.media_url) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.5, y: 0.4, zoom: 1.4 } };
-          await log(job, `OpenAI rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
+          await log(job, `${viaFlux ? "FLUX" : "OpenAI"} rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
         }
       }
       if (!media) throw new UserError(`No se encontró imagen para el plano «${String(sh.line).slice(0, 60)}». Revisa las claves de Pexels u OpenAI.`);
-      Object.assign(sh, { media_url: media.url, media_kind: media.kind, fit: media.fit ?? "cover", reframe: media.reframe ?? null, credit: media.credit ?? null, gen: media.gen ?? null });
+      Object.assign(sh, { media_url: media.url, media_kind: media.kind, fit: media.fit ?? "cover", reframe: media.reframe ?? null, credit: media.credit ?? null, gen: media.gen ?? null, provider: media.provider ?? null });
       used.add(media.url); prev = sh;
     }
     const done = shots.every((x) => x.media_url);
@@ -1013,7 +1084,7 @@ async function stepVisuals(job: Job) {
   }
   const { count: total } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id);
   const { count: left } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id).is("media_url", null);
-  await bumpUsage(v.id, { ai_images: images }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
+  await bumpUsage(v.id, { ai_images: images, ...(fluxN ? { flux_images: fluxN } : {}) }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
   if ((left ?? 0) > 0) await enqueue("visuals", { video_id: v.id });
   else {
     // Créditos a partir de las fotos de archivo realmente usadas (también las reaprovechadas)
@@ -1204,9 +1275,11 @@ async function claudeTool(model: string, system: string, content: any, tool: any
     let d: any;
     if (batch) d = await batched(batch.job, `${batch.tag}_${i}`, body);
     else {
+      await claudeGuard(model);
       const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: AH(), body: JSON.stringify(body) });
       if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
       d = await r.json();
+      await claudeSpent(model, d);
     }
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0;
     // deno-lint-ignore no-explicit-any
@@ -1597,12 +1670,12 @@ async function stepFixVisuals(job: Job) {
   await enqueue("visuals", { video_id: v.id });
 }
 
-// ---------- Paso: prueba de proveedores (Fish Audio frente a ElevenLabs, FLUX frente a GPT Image) ----------
-// No toca el vídeo: genera la voz y las imágenes de un Short ya hecho con los proveedores nuevos
-// y deja todo en media/tests/{video}/compare.json para compararlo con lo que ya tiene.
-// payload: { fish_voice?: id de voz de Fish, fish_model?: "s2-pro", flux_model?: "fal-ai/flux/schnell", images?: 4, skip_voice?, skip_images? }
+// ---------- Proveedores baratos: Fish Audio (voz), transcripción de OpenAI (tiempos por palabra) y FLUX en fal.ai (imágenes) ----------
+const FISH_MODEL = "s2-pro";
+const FLUX_MODEL = "fal-ai/flux/schnell";
 const plain = (t: unknown) => String(t ?? "").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
-async function fishTts(text: string, voiceId: string | undefined, model: string) {
+async function fishTts(text: string, voiceId: string | undefined, model = FISH_MODEL) {
+  await reserve("fish_bytes", new TextEncoder().encode(text).length);
   const r = await fetch("https://api.fish.audio/v1/tts", {
     method: "POST",
     headers: { Authorization: `Bearer ${key("FISH_AUDIO_API_KEY")}`, "Content-Type": "application/json", model },
@@ -1615,11 +1688,58 @@ async function fishTts(text: string, voiceId: string | undefined, model: string)
   }
   return new Uint8Array(await r.arrayBuffer());
 }
-async function fluxImage(prompt: string, short: boolean, model: string) {
+// Voces de la biblioteca de Fish en un idioma, de más a menos valoradas
+async function fishVoices(lang: string, n: number) {
+  const r = await fetch(`https://api.fish.audio/model?page_size=${n}&page_number=1&sort_by=score&language=${encodeURIComponent(lang)}`, { headers: { Authorization: `Bearer ${key("FISH_AUDIO_API_KEY")}` } });
+  if (!r.ok) throw new Error(`Fish Audio voces ${r.status}: ${(await r.text()).slice(0, 150)}`);
+  const d = await r.json();
+  // deno-lint-ignore no-explicit-any
+  return (d.items ?? []).map((x: any) => ({ id: String(x._id ?? x.id), title: String(x.title ?? "") })).filter((x: { id: string }) => x.id && x.id !== "undefined");
+}
+const normW = (w: string) => String(w).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ]/g, "");
+// Los subtítulos muestran el texto del guion con los tiempos de la transcripción; las palabras que no casan (cifras, nombres) se reparten entre sus vecinas
+function alignWords(text: string, ww: { word: string; start: number; end: number }[], dur: number) {
+  const sw = text.split(/\s+/).filter(Boolean);
+  const nw = ww.map((x) => normW(x.word));
+  const out = sw.map((w) => ({ w, s: NaN, e: NaN }));
+  let j = 0;
+  sw.forEach((w, i) => {
+    const n = normW(w); if (!n) return;
+    for (let k = j; k < Math.min(j + 5, nw.length); k++) if (nw[k] === n) { out[i].s = Number(ww[k].start); out[i].e = Number(ww[k].end); j = k + 1; break; }
+  });
+  for (let i = 0; i < out.length; i++) {
+    if (!isNaN(out[i].s)) continue;
+    let k = i; while (k < out.length && isNaN(out[k].s)) k++;
+    const a = i > 0 ? out[i - 1].e : 0; const b = k < out.length ? out[k].s : dur;
+    const step = Math.max(0, b - a) / (k - i);
+    for (let m = i; m < k; m++) { out[m].s = a + step * (m - i); out[m].e = a + step * (m - i + 1); }
+    i = k - 1;
+  }
+  return out.map((x) => ({ w: x.w, s: Math.round(x.s * 1000) / 1000, e: Math.round(x.e * 1000) / 1000 }));
+}
+async function whisperWords(bytes: Uint8Array, text: string, lang: string) {
+  const est = bytes.length / 16000; // mp3 a 128 kbps
+  await reserve("stt_sec", Math.ceil(est));
+  const fd = new FormData();
+  fd.append("file", new Blob([bytes as unknown as BlobPart], { type: "audio/mpeg" }), "voice.mp3");
+  fd.append("model", "whisper-1");
+  fd.append("response_format", "verbose_json");
+  fd.append("timestamp_granularities[]", "word");
+  if (lang) fd.append("language", String(lang).slice(0, 2));
+  fd.append("prompt", text.slice(0, 800));
+  const r = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}` }, body: fd });
+  if (!r.ok) throw new Error(`transcripción ${r.status}: ${(await r.text()).slice(0, 150)}`);
+  const d = await r.json();
+  const duration = Number(d.duration) || est;
+  return { words: alignWords(text, d.words ?? [], duration), duration };
+}
+// FLUX: devuelve null si el filtro de contenido la marca (se busca alternativa, como con OpenAI)
+async function fluxImage(prompt: string, short: boolean, model = FLUX_MODEL) {
+  await reserve("flux_images", 1);
   const r = await fetch(`https://fal.run/${model}`, {
     method: "POST",
     headers: { Authorization: `Key ${key("FAL_KEY")}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, image_size: short ? "portrait_16_9" : "landscape_16_9", num_images: 1, output_format: "jpeg", enable_safety_checker: true }),
+    body: JSON.stringify({ prompt, image_size: short ? { width: 864, height: 1536 } : { width: 1536, height: 864 }, num_images: 1, output_format: "jpeg", enable_safety_checker: true }),
   });
   if (!r.ok) {
     const t = (await r.text()).slice(0, 200);
@@ -1627,12 +1747,18 @@ async function fluxImage(prompt: string, short: boolean, model: string) {
     throw new Error(`fal.ai ${r.status}: ${t}`);
   }
   const d = await r.json();
+  if (d.has_nsfw_concepts?.[0]) return null;
   const url = d.images?.[0]?.url;
   if (!url) throw new Error("fal.ai no devolvió imagen");
   const img = await fetch(url);
   if (!img.ok) throw new Error(`fal.ai descarga ${img.status}`);
   return new Uint8Array(await img.arrayBuffer());
 }
+
+// ---------- Paso: prueba de proveedores (no toca el vídeo) ----------
+// Genera la narración de un Short ya hecho con varias voces de Fish y sus imágenes IA con FLUX,
+// y lo deja en media/tests/{video}/compare.json junto a la voz de ElevenLabs y las imágenes de GPT que ya tenía.
+// payload: { fish_voice?: un ID concreto, voices?: 3 (si no hay ID, las más valoradas en el idioma del canal), fish_model?, flux_model?, images?: 4, skip_voice?, skip_images? }
 async function stepCompare(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
@@ -1640,30 +1766,45 @@ async function stepCompare(job: Job) {
   const dir = `tests/${v.id}`;
   const { data: scenes } = await sb.from("scenes").select("n,narration,audio_url,audio_duration,shots").eq("video_id", v.id).order("n");
   if (!scenes?.length) throw new UserError("El vídeo no tiene escenas");
+  // Lo ya generado se guarda en el payload: si el trabajo se corta, no se paga dos veces
   // deno-lint-ignore no-explicit-any
-  const out: any = { video_id: v.id, title: v.title, format: ch.format, created: new Date().toISOString() };
-  if (!p.skip_voice) {
+  const out: any = p.out ?? { video_id: v.id, title: v.title, format: ch.format, created: new Date().toISOString(), notes: [] };
+  const save = async () => { job.payload = { ...p, out }; await sb.from("jobs").update({ payload: job.payload }).eq("id", job.id); };
+  if (!p.skip_voice && KEYS["FISH_AUDIO_API_KEY"] && !out.voice?.done) {
     const text = scenes.map((s) => plain(s.narration)).join(" ");
-    const model = p.fish_model || "s2-pro";
-    const t0 = Date.now();
-    const bytes = await fishTts(text, p.fish_voice || ch.fish_voice_id || undefined, model);
-    out.voice = {
-      text, chars: text.length, bytes_text: new TextEncoder().encode(text).length,
-      eleven: scenes.map((s) => ({ n: s.n, url: s.audio_url, duration: s.audio_duration })),
-      fish: { model, voice: p.fish_voice || ch.fish_voice_id || null, url: await upload(`${dir}/fish_${Date.now()}.mp3`, bytes, "audio/mpeg"), seconds_to_generate: Math.round((Date.now() - t0) / 100) / 10 },
-    };
-  }
-  if (!p.skip_images) {
-    const model = p.flux_model || "fal-ai/flux/schnell";
+    const model = p.fish_model || FISH_MODEL;
+    out.voice = out.voice ?? { text, chars: text.length, bytes_text: new TextEncoder().encode(text).length, model, eleven: scenes.map((s) => ({ n: s.n, url: s.audio_url, duration: s.audio_duration })), fish: [] };
+    let voices: { id: string; title: string }[] = p.fish_voice ? [{ id: String(p.fish_voice), title: "elegida" }] : [];
+    if (!voices.length) { try { voices = await fishVoices(String(ch.language || "es"), Number(p.voices ?? 3)); } catch (e) { out.notes.push(`No se pudo listar voces: ${(e as Error).message}`); } }
+    if (!voices.length) voices = [{ id: "", title: "por defecto" }];
+    for (const vo of voices) {
+      if (out.voice.fish.some((x: { id: string }) => x.id === vo.id)) continue;
+      const t0 = Date.now();
+      const bytes = await fishTts(text, vo.id || undefined, model);
+      // deno-lint-ignore no-explicit-any
+      const item: any = { id: vo.id, title: vo.title, url: await upload(`${dir}/fish_${vo.id || "default"}.mp3`, bytes, "audio/mpeg"), seconds_to_generate: Math.round((Date.now() - t0) / 100) / 10, audio_seconds: Math.round(bytes.length / 1600) / 10 };
+      // Con la primera voz se prueba también el cálculo de tiempos de los subtítulos
+      if (!out.voice.fish.length && KEYS["OPENAI_API_KEY"]) {
+        try { const w = await whisperWords(bytes, text, ch.language); item.words_sample = w.words.slice(0, 25); item.duration = w.duration; } catch (e) { out.notes.push(`Tiempos por palabra: ${(e as Error).message || (e as Error).constructor.name}`); }
+      }
+      out.voice.fish.push(item);
+      await save();
+    }
+    out.voice.done = true;
+  } else if (!p.skip_voice && !KEYS["FISH_AUDIO_API_KEY"]) out.notes.push("Falta FISH_AUDIO_API_KEY: no se ha probado la voz");
+  if (!p.skip_images && KEYS["FAL_KEY"] && !out.images?.done) {
+    const model = p.flux_model || FLUX_MODEL;
     // deno-lint-ignore no-explicit-any
     const shots = scenes.flatMap((s) => (s.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url)).slice(0, Number(p.images ?? 4));
-    out.images = { model, items: [] };
-    for (const sh of shots) {
+    out.images = out.images ?? { model, items: [] };
+    for (const sh of shots.slice(out.images.items.length)) {
       const prompt = ctxPrompt(sh, v, ch);
       const bytes = await fluxImage(prompt, short, model);
-      out.images.items.push({ line: sh.line, prompt, gpt: sh.media_url, flux: await upload(`${dir}/flux_${out.images.items.length}_${Date.now()}.jpg`, bytes, "image/jpeg") });
+      out.images.items.push({ line: sh.line, prompt, gpt: sh.media_url, flux: bytes ? await upload(`${dir}/flux_${out.images.items.length}.jpg`, bytes, "image/jpeg") : null });
+      await save();
     }
-  }
+    out.images.done = true;
+  } else if (!p.skip_images && !KEYS["FAL_KEY"]) out.notes.push("Falta FAL_KEY: no se han probado las imágenes");
   await upload(`${dir}/compare.json`, new TextEncoder().encode(JSON.stringify(out, null, 2)), "application/json");
-  await log(job, `Prueba de proveedores lista: ${out.voice ? "voz de Fish" : ""}${out.voice && out.images ? " y " : ""}${out.images ? `${out.images.items.length} imágenes FLUX` : ""} en media/${dir}/compare.json`);
+  await log(job, `Prueba de proveedores lista: ${out.voice?.fish?.length ?? 0} voces de Fish y ${out.images?.items?.length ?? 0} imágenes FLUX en media/${dir}/compare.json`);
 }

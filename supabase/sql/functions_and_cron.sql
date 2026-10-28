@@ -154,3 +154,57 @@ $function$;
 -- fs-worker         * * * * *   select public.kick_worker() where exists (select 1 from public.jobs where (status = 'queued' and run_after <= now()) or (status = 'running' and updated_at < now() - interval '10 minutes'));
 -- fs-daily-ideas    30 6 * * *  select public.enqueue_daily_ideas();
 -- fs-daily-metrics  15 5 * * *  insert into public.jobs(step) values ('metrics');
+
+-- ===== Proveedores por canal y presupuesto diario (28/10) =====
+-- channels: voice_provider ('elevenlabs' | 'fish'), fish_voice_id, image_provider ('openai' | 'flux')
+alter table public.channels
+  add column if not exists voice_provider text not null default 'elevenlabs',
+  add column if not exists fish_voice_id text,
+  add column if not exists image_provider text not null default 'openai';
+
+-- Gasto por día (hora de Madrid): una fila 'eur' con el total y otra por unidad (tts_chars, flux_images, opus_in…)
+create table if not exists public.spend_daily (day date not null, k text not null, n numeric not null default 0, primary key (day, k));
+alter table public.spend_daily enable row level security;
+-- policy spend_daily_members: select para miembros (is_member())
+
+-- app_config: daily_cap_eur = '3' (tope total diario) y prices_eur = precio aproximado por unidad, en euros:
+-- {"tts_chars":0.0002,"fish_bytes":0.000014,"ai_images":0.05,"flux_images":0.004,"music_sec":0.01,"sfx":0.02,"stt_sec":0.0001,
+--  "opus_in":0.0000037,"opus_out":0.0000186,"sonnet_in":0.00000186,"sonnet_out":0.0000093,"haiku_in":0.000000093,"haiku_out":0.000000465,"web_searches":0.0093}
+
+create or replace function public.spend_cost(p_key text, p_n numeric)
+ returns numeric language sql stable security definer set search_path to 'public' as $f$
+  select coalesce((select (value::jsonb ->> p_key)::numeric from app_config where key = 'prices_eur'), 0) * p_n;
+$f$;
+
+-- Antes de gastar: false si se pasaría del tope del día
+create or replace function public.reserve_spend(p_key text, p_n numeric)
+ returns boolean language plpgsql security definer set search_path to 'public' as $function$
+declare v_cap numeric; v_day date := (now() at time zone 'Europe/Madrid')::date; v_cost numeric := public.spend_cost(p_key, p_n); v_ok boolean;
+begin
+  select value::numeric into v_cap from app_config where key = 'daily_cap_eur';
+  insert into spend_daily(day, k, n) values (v_day, 'eur', 0) on conflict do nothing;
+  update spend_daily set n = n + v_cost
+   where day = v_day and k = 'eur' and (v_cap is null or n + v_cost <= v_cap)
+   returning true into v_ok;
+  if v_ok then
+    insert into spend_daily(day, k, n) values (v_day, p_key, p_n) on conflict (day, k) do update set n = spend_daily.n + excluded.n;
+  end if;
+  return coalesce(v_ok, false);
+end $function$;
+
+-- Gasto ya hecho (Claude: los tokens se saben al recibir la respuesta)
+create or replace function public.record_spend(p_key text, p_n numeric)
+ returns void language plpgsql security definer set search_path to 'public' as $function$
+declare v_day date := (now() at time zone 'Europe/Madrid')::date;
+begin
+  if coalesce(p_n, 0) = 0 then return; end if;
+  insert into spend_daily(day, k, n) values (v_day, 'eur', public.spend_cost(p_key, p_n)) on conflict (day, k) do update set n = spend_daily.n + excluded.n;
+  insert into spend_daily(day, k, n) values (v_day, p_key, p_n) on conflict (day, k) do update set n = spend_daily.n + excluded.n;
+end $function$;
+
+create or replace function public.budget_left()
+ returns numeric language sql stable security definer set search_path to 'public' as $f$
+  select coalesce((select value::numeric from app_config where key = 'daily_cap_eur'), 1e9)
+       - coalesce((select n from spend_daily where k = 'eur' and day = (now() at time zone 'Europe/Madrid')::date), 0);
+$f$;
+-- spend_cost, reserve_spend y record_spend: solo service_role. budget_left: authenticated y service_role.

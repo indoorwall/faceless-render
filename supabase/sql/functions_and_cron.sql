@@ -168,7 +168,7 @@ alter table public.spend_daily enable row level security;
 -- policy spend_daily_members: select para miembros (is_member())
 
 -- app_config: daily_cap_eur = '3' (tope total diario) y prices_eur = precio aproximado por unidad, en euros:
--- {"tts_chars":0.0002,"fish_bytes":0.000014,"ai_images":0.05,"flux_images":0.004,"music_sec":0.01,"sfx":0.02,"stt_sec":0.0001,
+-- {"tts_chars":0.0002,"fish_bytes":0.000014,"ai_images":0.05,"ai_images_low":0.016,"flux_images":0.004,"music_sec":0.01,"sfx":0.02,"stt_sec":0.0001,
 --  "opus_in":0.0000037,"opus_out":0.0000186,"sonnet_in":0.00000186,"sonnet_out":0.0000093,"haiku_in":0.000000093,"haiku_out":0.000000465,"web_searches":0.0093}
 
 create or replace function public.spend_cost(p_key text, p_n numeric)

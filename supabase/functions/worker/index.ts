@@ -908,12 +908,12 @@ async function stepAudio(job: Job) {
 }
 
 // ---------- Paso: imágenes y vídeo de stock (por lotes) ----------
-async function aiImage(prompt: string, short: boolean) {
-  await reserve("ai_images", 1);
+async function aiImage(prompt: string, short: boolean, quality = "medium") {
+  await reserve(quality === "low" ? "ai_images_low" : "ai_images", 1);
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "gpt-image-2", prompt, size: short ? "1024x1536" : "1536x1024", quality: "medium", n: 1, output_format: "jpeg", output_compression: 90 }),
+    body: JSON.stringify({ model: "gpt-image-2", prompt, size: short ? "1024x1536" : "1536x1024", quality, n: 1, output_format: "jpeg", output_compression: 90 }),
   });
   if (!r.ok) { const t = (await r.text()).slice(0, 200); if (/insufficient_quota|billing|exceeded your current quota/i.test(t)) throw new UserError("OpenAI se ha quedado sin crédito. Recárgalo y vuelve a lanzar el vídeo."); throw new Error(`OpenAI ${r.status}: ${t}`); }
   const d = await r.json();
@@ -1758,7 +1758,7 @@ async function fluxImage(prompt: string, short: boolean, model = FLUX_MODEL) {
 // ---------- Paso: prueba de proveedores (no toca el vídeo) ----------
 // Genera la narración de un Short ya hecho con varias voces de Fish y sus imágenes IA con FLUX,
 // y lo deja en media/tests/{video}/compare.json junto a la voz de ElevenLabs y las imágenes de GPT que ya tenía.
-// payload: { fish_voice?: un ID concreto, voices?: 3 (si no hay ID, las más valoradas en el idioma del canal), fish_model?, flux_model?, images?: 4, skip_voice?, skip_images? }
+// payload: { gpt_quality?: "low" (GPT Image en esa calidad, mismos planos), shots?: [índices de planos IA], fish_voice?: un ID concreto, voices?: 3 (si no hay ID, las más valoradas en el idioma del canal), fish_model?, flux_model?, images?: 4, skip_voice?, skip_images? }
 async function stepCompare(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
@@ -1805,6 +1805,20 @@ async function stepCompare(job: Job) {
     }
     out.images.done = true;
   } else if (!p.skip_images && !KEYS["FAL_KEY"]) out.notes.push("Falta FAL_KEY: no se han probado las imágenes");
+  if (p.gpt_quality && !out.gpt?.done) {
+    // deno-lint-ignore no-explicit-any
+    const all = scenes.flatMap((s) => (s.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url));
+    // deno-lint-ignore no-explicit-any
+    const pick: any[] = Array.isArray(p.shots) ? p.shots.map((i: number) => all[i]).filter(Boolean) : all.slice(0, Number(p.images ?? 4));
+    out.gpt = out.gpt ?? { quality: p.gpt_quality, items: [] };
+    for (const sh of pick.slice(out.gpt.items.length)) {
+      const prompt = ctxPrompt(sh, v, ch);
+      const bytes = await aiImage(prompt, short, String(p.gpt_quality));
+      out.gpt.items.push({ line: sh.line, prompt, medium: sh.media_url, [String(p.gpt_quality)]: await upload(`${dir}/gpt_${p.gpt_quality}_${out.gpt.items.length}.jpg`, bytes, "image/jpeg") });
+      await save();
+    }
+    out.gpt.done = true;
+  }
   await upload(`${dir}/compare.json`, new TextEncoder().encode(JSON.stringify(out, null, 2)), "application/json");
   await log(job, `Prueba de proveedores lista: ${out.voice?.fish?.length ?? 0} voces de Fish y ${out.images?.items?.length ?? 0} imágenes FLUX en media/${dir}/compare.json`);
 }

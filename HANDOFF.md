@@ -134,7 +134,11 @@ Giol quiere que Reto Imposible parezca una colección de pequeños videojuegos, 
     - `maze`: laberinto con 3 entradas y una meta. Se corta un tramo del camino de cada entrada equivocada (comprobado por recorrido en anchura); las bolas equivocadas chocan y la buena recorre el camino hasta el cofre. Proporciones según el formato.
     - `machine`: tablero de palancas que cambian de lado al pasar cada bola; caen 1–3 bolas y se pregunta por la última.
     - `room_error`: habitación con 12 objetos y un solo error comprobable (8 tipos). La revelación hace zoom al error y lo corrige.
-  - Pendientes de la petición (secciones 4 C, E y F): memoria visual con escenas, diferencias con escenas ilustradas y escape visual. Para añadir un juego: un generador, un validador y `reveal()` en `WORLD` (world.js), más su escena en `SCENES` (world-draw.js).
+    - `memory_scene`: estantería con 6–12 objetos cotidianos (14 dibujados por código). Se cierra un telón y falta uno; en difícil, uno cambia de color. Usa `memo` como el clásico.
+    - `scene_diff`: dos habitaciones ilustradas con 3–5 diferencias comprobables (objeto que falta, color, hora, día, cuadro, sol). Se marcan una a una.
+    - `escape`: PIX elige la llave con el perfil de dientes exacto de la cerradura; en extremo hay una llave con el perfil del revés que despista. Revelación: coge la llave, abre la puerta y sale.
+  - Para añadir un juego: un generador, un validador y `reveal()` en `WORLD` (world.js), más su escena en `SCENES` (world-draw.js) y su icono y nombre en el mapa (draw.js).
+- En vídeos largos, `buildProject` alterna las categorías en vueltas barajadas y, si se pasa de duración, rehace el reparto con un reto menos. Con muchos niveles, el mapa muestra un tramo de 7 nodos (5 en vertical).
 - `web/retos/world-draw.js`: escenas ilustradas por código. `web/retos/pix.js`: mascota PIX con 8 expresiones, en Canvas y en SVG (`pixSVG`).
 - `engine.js`: categorías `maze`, `machine` y `error` y `GAME_STYLES`. `buildProject({game_style:"world"})` marca el proyecto, y entonces `timeline` añade una portada con PIX (`intro`) y un mapa de niveles entre retos (`map`), sin pantallas de ronda. El último nivel se presenta como «Desafío final». `solvedAt(c)` marca cuándo suenan el acierto y los puntos.
 - **Efectos nuevos S13–S22** (rodadura, palanca, engranajes, puerta, aparecer, desaparecer, salto, choque, caída en cubo y zoom):
@@ -147,7 +151,7 @@ Giol quiere que Reto Imposible parezca una colección de pequeños videojuegos, 
 - El primer Short `77b98d23…` se ha vuelto a montar con el estilo claro.
 
 ## Pendiente (por orden)
-0. **Playable World:** que Giol valore las demos y, si le gustan, completar memoria visual, diferencias con escenas y escape visual, más PIX en las pantallas de resultados. Valorar los efectos sintetizados frente a ElevenLabs.
+0. **Playable World:** a Giol le encanta el formato y ya están los 6 juegos. Queda valorar los efectos sintetizados frente a ElevenLabs y, si hace falta, añadir más variantes por juego (más escenas, más objetos o laberintos con obstáculos).
 0. **YouTube (en cola, lo pidió Giol el 28/10):** redactar el texto del formulario «YouTube API Services Audit and Quota Extension» y dejar lista la programación desde la plataforma (subir como privado con `publishAt`, cuota diaria). Está detrás del motor de retos.
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.
    - **Voz:** probar **Fish Audio `s2-pro`** (15 $ por millón de bytes de texto) frente a ElevenLabs v3 con el mismo Short, y que Giol elija de oído.

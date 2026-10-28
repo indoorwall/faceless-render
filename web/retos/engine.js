@@ -445,7 +445,7 @@ export function validateChallenge(c) {
   if (!c || !GEN[c.mechanic]) return { ok: false, errors: ["Mecánica desconocida"] };
   try { for (const r of VAL[c.mechanic](c)) if (r !== true) errors.push(r); } catch (e) { errors.push(`Error al validar: ${e.message}`); }
   if (!(c.time >= 3 && c.time <= 30)) errors.push("El temporizador debe durar entre 3 y 30 s");
-  if (c.mechanic === "memory_missing" && !(c.memo >= 2 && c.memo <= 12)) errors.push("El tiempo para memorizar no es razonable");
+  if ((c.mechanic === "memory_missing" || "memo" in c) && !(c.memo >= 2 && c.memo <= 12)) errors.push("El tiempo para memorizar no es razonable");
   if (!DIFFS.includes(c.difficulty)) errors.push("Dificultad no válida");
   return { ok: errors.length === 0, errors };
 }
@@ -483,10 +483,12 @@ export function buildProject(opts) {
   const target = format === "short" ? (opts.seconds || 30) : (opts.minutes || cfg.long_minutes) * 60;
   const plan = (k) => diffMode !== "progressive" ? Array(k).fill(diffMode) : format === "short" ? Array.from({ length: k }, (_, i) => (i === 0 ? "medium" : "hard")) : Array.from({ length: k }, (_, i) => DIFFS[Math.min(3, Math.floor((i / k) * 4))]);
   // Mixto: las categorías se reparten por turnos (barajadas) para que todas aparezcan
-  const order = r.shuffle(cats);
+  // Cada vuelta por las categorías va en un orden nuevo, sin repetir juego en el cambio de vuelta
+  const orders = [];
+  const catAt = (k) => { const cyc = Math.floor(k / cats.length); while (orders.length <= cyc) { let o = r.shuffle(cats); const prev = orders[orders.length - 1]; if (prev && cats.length > 1 && o[0] === prev[prev.length - 1]) o = [...o.slice(1), o[0]]; orders.push(o); } return orders[cyc][k % cats.length]; };
   const make = (diff, i) => {
     for (let t = 0; t < 8; t++) {
-      const cat = order[(i + t) % order.length];
+      const cat = catAt(i + t);
       const c = makeChallenge({ category: cat, difficulty: diff, seed: `${opts.seed ?? "p"}-${i}-${t}-${r()}`, config: cfg, format });
       if (!recent.has(c.signature)) { recent.add(c.signature); return c; }
     }
@@ -499,12 +501,12 @@ export function buildProject(opts) {
     n = format === "short" ? 1 : 4;
     for (let guard = 0; guard < 80; guard++) {
       challenges = plan(n).map(make);
-      const dur = timeline({ format, challenges, config: cfg, title: opts.title }).duration;
+      const dur = timeline({ format, challenges, config: cfg, title: opts.title, game_style: opts.game_style }).duration;
       if (dur >= target * (format === "short" ? 0.6 : 0.92) || (format === "short" && n >= 2)) break;
       n += format === "short" ? 1 : Math.max(1, Math.round((target - dur) / 16));
     }
-    // Si se ha pasado más de un 5 %, se quita el último reto de la ronda más larga
-    while (format !== "short" && challenges.length > 4 && timeline({ format, challenges, config: cfg }).duration > target * 1.05) challenges.splice(Math.floor(challenges.length * 0.4), 1);
+    // Si se ha pasado más de un 5 %, se rehace con un reto menos (las dificultades quedan bien repartidas)
+    while (format !== "short" && n > 4 && timeline({ format, challenges, config: cfg, game_style: opts.game_style }).duration > target * 1.05) { n--; challenges = plan(n).map(make); }
   }
   // Variedad: dos retos seguidos no repiten mecánica si se puede evitar
   for (let i = 1; i < challenges.length; i++) if (challenges[i].mechanic === challenges[i - 1].mechanic) { const j = challenges.findIndex((c, k) => k > i && c.difficulty === challenges[i].difficulty && c.mechanic !== challenges[i - 1].mechanic); if (j > 0) [challenges[i], challenges[j]] = [challenges[j], challenges[i]]; }
@@ -521,14 +523,14 @@ export function validateProject(p) {
 const fr = (t) => Math.round(t * FPS) / FPS;
 // Revelación: la primera solución aparece a REVEAL_FIRST s y las siguientes cada REVEAL_STEP s (cada una con su sonido)
 export const REVEAL_FIRST = 0.35, REVEAL_STEP = 0.45;
-export function revealCount(c) { return c.mechanic === "differences" ? (c.answer?.diffs || []).length : 1; }
+export function revealCount(c) { return c.mechanic === "differences" || c.mechanic === "scene_diff" ? (c.answer?.diffs || []).length : 1; }
 // Playable World: la revelación es la acción simulada (la bola recorre el camino, la máquina se activa…)
 export function worldReveal(c) { return WORLD[c.mechanic] ? WORLD[c.mechanic].reveal(c) : null; }
 // Momento (desde el inicio de la revelación) en que la solución queda a la vista: aquí suenan el acierto y los puntos
 export function solvedAt(c) { const w = worldReveal(c); return w ? w.solved : REVEAL_FIRST + (revealCount(c) - 1) * REVEAL_STEP; }
 export function timingOf(c, short) {
   const n = revealCount(c), w = worldReveal(c);
-  const intro = short ? 1.0 : 1.4, memo = c.mechanic === "memory_missing" ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = w ? w.dur : REVEAL_FIRST + (n - 1) * REVEAL_STEP + 2.0;
+  const intro = short ? 1.0 : 1.4, memo = c.memo ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = w ? w.dur : REVEAL_FIRST + (n - 1) * REVEAL_STEP + 2.0;
   const explain = c.explanation && c.show_explanation !== false ? Math.min(4, 1.6 + c.explanation.length / 40) : 0, out = 0.5;
   return { intro, memo, play, timeout, reveal, explain, out, total: intro + memo + play + timeout + reveal + explain + out };
 }

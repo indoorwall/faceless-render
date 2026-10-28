@@ -2113,7 +2113,8 @@ async function stepRenderRetos(job: Job, v: any) {
   const voice = [...new Set(tl.voice.map((x: { text: string }) => x.text))].map((t) => ({ text: t, url: get("voice", voiceKey(voiceId, t as string))?.url })).filter((x) => x.url);
   const sign = async (path: string) => { const { data, error } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true }); if (error || !data) throw new Error(`No se pudo preparar la subida: ${error?.message}`); return data.signedUrl; };
   const spec = {
-    kind: "retos", id: v.id, width: short ? 1080 : 1920, height: short ? 1920 : 1080, fps: 30,
+    // scenes vacío: los servidores anteriores exigen esta lista aunque los retos no la usen
+    kind: "retos", id: v.id, width: short ? 1080 : 1920, height: short ? 1920 : 1080, fps: 30, scenes: [],
     upload_url: await sign(`${v.id}/final.mp4`), ...(short ? {} : { thumb_upload_url: await sign(`${v.id}/thumb_retos.jpg`) }),
     project: { ...project, title: v.title ?? project.title }, sounds, music, voice,
   };

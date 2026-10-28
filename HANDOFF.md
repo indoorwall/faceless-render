@@ -97,7 +97,7 @@ Canal «Reto Imposible» (`production_type = 'challenges'`). Cada canal usa siem
 - `render-retos.js` (Cloud Run): fotogramas con node-canvas que se pasan a FFmpeg.
   - Mezcla de audio en código, con sincronía exacta: unos 4 ms medidos en el MP4 final.
   - Música por niveles con fundidos y bajada bajo la voz.
-  - Volumen a -14 LUFS: se mide, se aplica ganancia + limitador y se vuelve a medir (método de la secante, hasta ±0,12 LU, máx. 6 pasadas). El informe guarda `loudness_passes` y `gain_db`.
+  - Volumen a -14 LUFS: se mide, se aplica ganancia + limitador y se vuelve a medir (método de la secante, hasta ±0,12 LU, máx. 6 pasadas). El informe guarda `loudness_passes` y `gain_db`. Después de codificar se mide el pico real: el AAC de FFmpeg en Cloud Run se pasa del limitador (llegó a +1 dB). Si supera -1 dB, se recodifica solo el audio (el vídeo se copia) con un techo más bajo y la ganancia compensada; el informe lo anota en `true_peak_fixes`.
   - Miniatura programática.
 - `web/retos/ui.js`: la interfaz.
   - En el canal: tipo de producción, identidad visual, identidad sonora (12 efectos y 3 músicas, con versiones), volúmenes, narración y temporizador.
@@ -141,7 +141,10 @@ Giol quiere que Reto Imposible parezca una colección de pequeños videojuegos, 
   - S13 está generado con ElevenLabs.
   - S14–S22 son la versión 1 sintetizada por código: `tools/synth-sfx.mjs` los escribe en `web/sfx/` y se sirven desde Vercel. El 28/10 se había agotado el tope de 3 € y ElevenLabs no pudo generarlos.
   - Se pueden regenerar con ElevenLabs desde «Identidad sonora» cuando haya presupuesto.
-- Demos piloto (3 niveles): 9:16 de unos 69 s y 16:9 de unos 80 s, en `final_review` en la plataforma.
+- Demos piloto (3 niveles), en `final_review` en la plataforma con el título «PILOTO Playable World · 3 niveles»:
+  - Short `659e004e…`: unos 69 s.
+  - Largo `33cde24c…`: unos 80 s.
+- El primer Short `77b98d23…` se ha vuelto a montar con el estilo claro.
 
 ## Pendiente (por orden)
 0. **Playable World:** que Giol valore las demos y, si le gustan, completar memoria visual, diferencias con escenas y escape visual, más PIX en las pantallas de resultados. Valorar los efectos sintetizados frente a ElevenLabs.

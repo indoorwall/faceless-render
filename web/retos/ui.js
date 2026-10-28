@@ -5,7 +5,10 @@ import * as E from "./engine.js";
 import { drawFrame, drawThumbnail, palette } from "./draw.js";
 
 // Fuente de los retos para el canvas del navegador
-try { const f = new FontFace("Montserrat", "url(fonts/Montserrat-ExtraBold.ttf)", { weight: "800" }); f.load().then((x) => { document.fonts.add(x); }); } catch (_) { /* sin FontFace: se usa la fuente de reserva */ }
+// (Montserrat y Nunito: cuando cargan se redibujan las previsualizaciones)
+for (const [fam, file] of [["Montserrat", "Montserrat-ExtraBold.ttf"], ["Nunito", "Nunito-ExtraBold.ttf"]]) {
+  try { const f = new FontFace(fam, `url(fonts/${file})`, { weight: "800" }); f.load().then((x) => { document.fonts.add(x); try { previewTheme(); RS.player?.draw(); } catch (_) { /* aún no hay nada que redibujar */ } }); } catch (_) { /* sin FontFace: se usa la fuente de reserva */ }
+}
 
 const RS = { lib: {}, edit: null, player: null, gen: { format: "long", category: "mixed", minutes: 8, seconds: 30, difficulty: "progressive", count: "", channel: "" }, polling: null };
 const isRetos = (c) => c && c.production_type === "challenges";
@@ -132,6 +135,7 @@ function renderEditor(first) {
         <input type="range" id="rt-seek" min="0" max="1000" value="0" style="flex:1;min-width:120px" oninput="RetosUI.seekPct(this.value)">
         <span class="mono muted" id="rt-time">0:00</span>
       </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center"><span class="why">Estilo</span>${sel("rt-ed-style", STYLE_OPTS.slice(0, 3).map(([k, l]) => [k, l]).concat(c.theme?.style === "custom" ? [["custom", "Personalizado"]] : []), E.mergeTheme(P.theme || c.theme).style, `onchange="RetosUI.edStyle(this.value)"`)}<button class="btn sm ghost" id="rt-ed-use" style="display:${P.theme ? "" : "none"}" onclick="RetosUI.useStyle()">Usar como estilo del canal</button></div>
       <div class="why" id="rt-audio-note"></div>
     </div>
     <label class="f full">Título del vídeo<input type="text" id="rt-title" value="${esc(RS.edit.title)}" oninput="RetosUI.setTitle(this.value)"></label>
@@ -150,7 +154,7 @@ function renderEditor(first) {
   renderList();
   loadLib(c.id, true).then(() => { const lib = RS.lib[c.id] || []; const sfx = E.SOUNDS.filter((s) => lib.some((x) => x.kind === "sfx" && x.code === s.code && x.url)).length; const n = document.getElementById("rt-audio-note"); if (n) n.innerHTML = sfx < 12 ? `La previsualización suena con los ${sfx} efectos que ya tiene el canal. Los que faltan se generan una vez al montar, o antes en <a href="#" onclick="openChannel('${c.id}');return false">Identidad sonora</a>.` : "Se oye con la identidad sonora guardada del canal."; });
 }
-const withChannel = (p, c, short) => ({ ...p, format: short ? "short" : "long", config: E.mergeConfig(c.retos_config), theme: c.theme || {} });
+const withChannel = (p, c, short) => ({ ...p, format: short ? "short" : "long", config: E.mergeConfig(c.retos_config), theme: p.theme || c.theme || {} });
 function summary() {
   const v = S.open.v, c = ch(v.channel_id), p = withChannel(RS.edit.project, c, v.format === "short");
   const val = E.validateProject(p); let tl = null; try { tl = E.timeline(p); } catch (_) { /* proyecto vacío */ }
@@ -219,14 +223,37 @@ async function approve() {
 }
 
 // ================= Panel del canal: identidad visual y sonora =================
-const THEME_FIELDS = [["bg", "Fondo principal"], ["timer", "Temporizadores"], ["ok", "Soluciones"], ["alert", "Alertas"], ["text", "Textos"], ["teal", "Secundario"]];
+// Estilo visual del juego: tres estilos listos (Light por defecto) o uno personalizado a partir de ellos
+const STYLE_OPTS = [["light", "Light Game", "Claro y limpio (recomendado)"], ["arcade", "Soft Arcade", "Más color y tarjetas con relieve"], ["dark", "Soft Dark", "Fondo oscuro suave"], ["custom", "Personalizado", "Tus colores y acabados"]];
+const COLOR_FIELDS = [["bg", "Fondo general"], ["card", "Tarjetas"], ["ink", "Textos"], ["timer", "Color principal / temporizador"], ["ok", "Respuestas correctas"], ["alert", "Alertas y fin de tiempo"], ["teal", "Secundario"]];
+const BG_FIELDS = [["observation", "Fondo · observación"], ["memory", "Fondo · memoria"], ["logic", "Fondo · lógica"], ["extreme", "Fondo · extremo"]];
+const SAMPLE_OPTS = [["differences", "Diferencias"], ["odd_symbol", "Encuentra el diferente"], ["sequence_number", "Serie con opciones"], ["hidden_object", "Objeto escondido"]];
 const VOL_FIELDS = [["music", "Música"], ["voice", "Voz"], ["sfx", "Efectos generales"], ["clock", "Reloj"], ["transition", "Transiciones"], ["reward", "Recompensas"]];
 function channelPanel(c) {
   const cfg = E.mergeConfig(c.retos_config), th = E.mergeTheme(c.theme);
   return `<div class="full" id="retos-panel" style="display:flex;flex-direction:column;gap:14px">
-    <div class="label" style="margin-top:6px">Estilo visual</div>
-    <div class="card" style="gap:10px"><div class="fgrid">${THEME_FIELDS.map(([k, l]) => `<label class="f">${l}<input type="color" id="rt-th-${k}" value="${th[k]}" oninput="RetosUI.previewTheme()"></label>`).join("")}</div>
-      <canvas id="rt-th-prev" width="640" height="360" style="width:100%;max-width:520px;border-radius:10px;align-self:center"></canvas></div>
+    <div class="label" style="margin-top:6px">Estilo visual del juego</div>
+    <div class="card" style="gap:12px">
+      <input type="hidden" id="rt-style" value="${th.style}">
+      <div id="rt-style-cards" class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${styleCards(th.style)}</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+        <label class="f" style="margin:0">Comparar con${sel("rt-sample", SAMPLE_OPTS, RS.sample || "differences", `onchange="RetosUI.setSample(this.value)"`)}</label>
+        <div class="row" style="gap:4px">${[["short", "9:16 Short"], ["long", "16:9 Largo"]].map(([k, l]) => `<button type="button" class="btn sm ${(RS.styleFmt || "short") === k ? "pri" : "ghost"}" onclick="RetosUI.setStyleFmt('${k}')">${l}</button>`).join("")}</div>
+        <label class="f" style="margin:0">Animaciones${sel("rt-anim", [["low", "Suaves"], ["normal", "Normales"], ["high", "Más vivas"]], th.anim, `onchange="RetosUI.previewTheme()"`)}</label>
+      </div>
+      <div id="rt-compare" class="grid" style="gap:10px"></div>
+      <div class="why">Mismo reto en los tres estilos, en el momento de la solución. Toca uno para elegirlo; se guarda como estilo del canal al pulsar «Guardar».</div>
+      <details id="rt-custom" ${th.style === "custom" ? "open" : ""}><summary class="label" style="cursor:pointer">Personalizar colores y acabados</summary>
+        <div class="fgrid" style="margin-top:8px">
+          <label class="f">Partir de${sel("rt-base", STYLE_OPTS.slice(0, 3).map(([k, l]) => [k, l]), (c.theme && c.theme.base) || "light", `onchange="RetosUI.customBase(this.value)"`)}</label>
+          <label class="f">Tipografía${sel("rt-font", Object.entries(E.FONTS), th.font, `onchange="RetosUI.touchCustom()"`)}</label>
+          <label class="f">Bordes${sel("rt-radius", [["small", "Poco redondeados"], ["medium", "Redondeados"], ["large", "Muy redondeados"]], th.radius, `onchange="RetosUI.touchCustom()"`)}</label>
+          <label class="f">Sombras${sel("rt-shadow", [["none", "Sin sombra"], ["soft", "Suaves"], ["medium", "Marcadas"]], th.shadowLevel, `onchange="RetosUI.touchCustom()"`)}</label>
+          ${[...COLOR_FIELDS, ...BG_FIELDS].map(([k, l]) => `<label class="f">${l}<input type="color" id="rt-th-${k}" value="${BG_FIELDS.some(([x]) => x === k) ? th.bgs[k] : th[k]}" oninput="RetosUI.touchCustom()"></label>`).join("")}
+        </div>
+        <div class="why">Al cambiar cualquier valor el estilo pasa a «Personalizado». Los fondos por tipo de juego ayudan a distinguir observación, memoria y lógica sin distraer.</div>
+      </details>
+    </div>
     <div class="label">Temporizador y narración</div>
     <div class="card"><div class="fgrid">
       <label class="f">Modo del reloj${sel("rt-timer", [["normal", "Normal · un tic discreto por segundo"], ["focus", "Concentración · solo los últimos 3 s"], ["extreme", "Extremo · más intenso al final"]], cfg.timer_mode)}</label>
@@ -253,7 +280,7 @@ function channelPanel(c) {
 function collect() {
   const v = (id) => document.getElementById(id);
   if (!v("retos-panel")) return null;
-  const theme = Object.fromEntries(THEME_FIELDS.map(([k]) => [k, v(`rt-th-${k}`).value]));
+  const theme = readTheme();
   const retos_config = {
     timer_mode: v("rt-timer").value, timer_sounds: v("rt-tsound").checked, narration: v("rt-narr").value, music_mode: v("rt-mmode").value,
     volumes: Object.fromEntries(VOL_FIELDS.map(([k]) => [k, Number(v(`rt-v-${k}`).value)])),
@@ -264,10 +291,48 @@ function collect() {
   };
   return { theme, retos_config };
 }
-function previewTheme() {
-  const cv = document.getElementById("rt-th-prev"); if (!cv) return;
-  const t = collect()?.theme; drawThumbnail(cv.getContext("2d"), cv.width, cv.height, { title: "¿Puedes superar estos 25 retos?" }, t);
+function readTheme() {
+  const v = (id) => document.getElementById(id);
+  const style = v("rt-style")?.value || "light", anim = v("rt-anim")?.value || "normal";
+  if (style !== "custom") return { style, anim };
+  return { style, base: v("rt-base").value, font: v("rt-font").value, radius: v("rt-radius").value, shadow: v("rt-shadow").value, anim,
+    overrides: Object.fromEntries([...COLOR_FIELDS, ...BG_FIELDS].map(([k]) => [k, v(`rt-th-${k}`).value])) };
 }
+function styleCards(cur) {
+  return STYLE_OPTS.map(([k, l, d]) => { const P = k === "custom" ? null : E.STYLES[k]; return `<button type="button" class="card" onclick="RetosUI.pickStyle('${k}')" style="gap:6px;text-align:left;cursor:pointer;padding:10px;${cur === k ? "outline:3px solid var(--acc, #FFC83D);outline-offset:-1px" : ""}">
+    <div class="row" style="gap:4px">${(P ? [P.bg, P.card, P.timer, P.ok, P.alert] : ["#ccc", "#fff", "#999", "#666", "#333"]).map((x) => `<span style="width:16px;height:16px;border-radius:50%;background:${x};border:1px solid rgba(0,0,0,.15)"></span>`).join("")}</div>
+    <b>${l}${k === "light" ? " · predeterminado" : ""}</b><span class="why">${d}</span></button>`; }).join("");
+}
+// Mismo reto, en el instante de la solución, para comparar estilos sin montar nada
+function sampleProject(fmt) {
+  const mech = RS.sample || "differences", cat = Object.entries(E.CATEGORIES).find(([, c]) => c.mechanics.includes(mech))[0];
+  const c = E.makeChallenge({ category: cat, mechanic: mech, difficulty: "medium", seed: `estilo-${mech}` });
+  return { format: fmt, challenges: [c], config: {} };
+}
+function sampleTime(tl) { const s = tl.segments.find((x) => x.type === "challenge"); return s.reveal[0] + 1.6; }
+function previewTheme() {
+  const box = document.getElementById("rt-compare"); if (!box) return;
+  const fmt = RS.styleFmt || "short", short = fmt === "short", W = short ? 360 : 640, H = short ? 640 : 360;
+  const cur = readTheme(), list = cur.style === "custom" ? ["light", "arcade", "dark", "custom"] : ["light", "arcade", "dark"];
+  box.style.gridTemplateColumns = short ? `repeat(${list.length},minmax(0,1fr))` : "repeat(auto-fill,minmax(260px,1fr))";
+  box.innerHTML = list.map((k) => `<button type="button" onclick="RetosUI.pickStyle('${k}')" style="all:unset;cursor:pointer;display:flex;flex-direction:column;gap:4px;align-items:center"><canvas data-k="${k}" width="${W}" height="${H}" style="width:100%;border-radius:10px;${cur.style === k ? "outline:3px solid #FFC83D;outline-offset:2px" : "outline:1px solid rgba(0,0,0,.12)"}"></canvas><span class="why">${STYLE_OPTS.find((x) => x[0] === k)[1]}</span></button>`).join("");
+  const base = sampleProject(fmt);
+  box.querySelectorAll("canvas").forEach((cv) => { const k = cv.dataset.k, p = { ...base, theme: k === "custom" ? cur : { style: k, anim: cur.anim } }; const tl = E.timeline(p); drawFrame(cv.getContext("2d"), W, H, p, tl, sampleTime(tl)); });
+}
+function pickStyle(k) {
+  const v = document.getElementById("rt-style"); if (!v) return; v.value = k;
+  const cards = document.getElementById("rt-style-cards"); if (cards) cards.innerHTML = styleCards(k);
+  if (k === "custom") document.getElementById("rt-custom").open = true;
+  previewTheme();
+}
+// Rellena los controles personalizados con los valores del estilo de partida
+function customBase(k) {
+  const T = E.mergeTheme({ style: k }), set = (id, x) => { const el = document.getElementById(id); if (el) el.value = x; };
+  COLOR_FIELDS.forEach(([f]) => set(`rt-th-${f}`, T[f])); BG_FIELDS.forEach(([f]) => set(`rt-th-${f}`, T.bgs[f]));
+  set("rt-font", T.font); set("rt-radius", T.radius); set("rt-shadow", T.shadowLevel);
+  touchCustom();
+}
+function touchCustom() { const v = document.getElementById("rt-style"), d = document.getElementById("rt-custom"); if (d) d.open = true; if (v && v.value !== "custom") { v.value = "custom"; const cards = document.getElementById("rt-style-cards"); if (cards) cards.innerHTML = styleCards("custom"); } clearTimeout(RS.thT); RS.thT = setTimeout(previewTheme, 60); }
 function soundCard(c, kind, def) {
   const row = libGet(c.id, kind, def.code) || {}, st = row.status === "generating" ? ["Generando…", "st-warn"] : row.status === "failed" ? ["Error", "st-bad"] : row.url ? ["Guardado", "st-ok"] : ["Falta", ""];
   const prev = (row.history || [])[0];
@@ -336,6 +401,22 @@ async function restore(chId, kind, code) {
   }, `Recuperada la versión ${prev.version}`);
 }
 // Demostración de ~15 s: nueva pregunta, temporizador con cinco tics, tiempo agotado, solución y cambio de nivel
+// Editor: probar otro estilo en la previsualización y, si convence, guardarlo en el canal
+function edStyle(k) {
+  const v = S.open?.v, c = v && ch(v.channel_id); if (!c || !RS.player) return;
+  const theme = k === E.mergeTheme(c.theme).style ? c.theme || {} : { ...(c.theme?.anim ? { anim: c.theme.anim } : {}), style: k };
+  // El estilo queda guardado en este vídeo (el montaje usa el mismo que se ve aquí)
+  RS.edit.theme = theme; if (k === E.mergeTheme(c.theme).style) delete RS.edit.project.theme; else RS.edit.project.theme = theme;
+  RS.player.setProject({ ...RS.player.project, theme }); RS.player.draw(); changed();
+  const b = document.getElementById("rt-ed-use"); if (b) b.style.display = k === E.mergeTheme(c.theme).style ? "none" : "";
+}
+async function useStyle() {
+  const v = S.open?.v, c = v && ch(v.channel_id), theme = RS.edit?.theme; if (!c || !theme) return;
+  const { error } = await sb.from("channels").update({ theme }).eq("id", c.id); if (error) return toast(error.message);
+  c.theme = theme; toast(`Estilo del canal: ${E.STYLES[theme.style]?.name || "Personalizado"}`);
+  const b = document.getElementById("rt-ed-use"); if (b) b.style.display = "none";
+  if (RS.edit?.project.theme) { delete RS.edit.project.theme; changed(); } // ya es el del canal
+}
 async function demo(chId) {
   const c = ch(chId), form = collect();
   const cfg = E.mergeConfig({ ...(c.retos_config || {}), ...(form?.retos_config || {}), narration: "none" });
@@ -362,6 +443,8 @@ function reportLine(v) {
 
 window.RetosUI = {
   isRetos, producerSection, refreshSoundStatus, setGen, generate, renderEditor, channelPanel, collect, mountChannel, previewTheme, reportLine, newChannel,
+  pickStyle, customBase, touchCustom, edStyle, useStyle,
+  setSample: (k) => { RS.sample = k; previewTheme(); }, setStyleFmt: (k) => { RS.styleFmt = k; const p = document.getElementById("retos-panel"); p?.querySelectorAll("[onclick^=\"RetosUI.setStyleFmt\"]").forEach((b) => { b.classList.toggle("pri", b.getAttribute("onclick").includes(`'${k}'`)); b.classList.toggle("ghost", !b.getAttribute("onclick").includes(`'${k}'`)); }); previewTheme(); },
   listen, regenAudio, genMissing, uploadAudio, setVolume, restore, demo,
   toggle: () => (RS.player?.playing ? RS.player.pause() : RS.player?.play()), step, jump, seekPct: (v) => RS.player?.seek((v / 1000) * (RS.player.tl?.duration || 0)),
   setTitle: (t) => { RS.edit.title = t; clearTimeout(RS.saveT); RS.saveT = setTimeout(() => save(false), 900); },

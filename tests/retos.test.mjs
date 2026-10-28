@@ -42,5 +42,27 @@ ok(tl.events.every((e) => Math.abs(e.t * E.FPS - Math.round(e.t * E.FPS)) < 1e-6
 for (const sg of tl.segments.filter((x) => x.type === "challenge").slice(0, 5)) { const ticks = tl.events.filter((e) => (e.code === "S03" || e.code === "S04") && e.t >= sg.play[0] - 1e-6 && e.t < sg.play[1]); const last = ticks[ticks.length - 1]; ok(Math.abs(last.t - (sg.play[1] - 1)) < 1e-6, "el último tic no cae a 1 s del final"); ok(tl.events.some((e) => e.code === "S06" && Math.abs(e.t - sg.play[1]) < 1e-6), "falta el tiempo agotado justo al final"); }
 // 5) Cambiar posiciones mantiene la solución correcta
 for (const m of mechs) { const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)); for (let i = 0; i < 40; i++) { const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: E.DIFFS[i % 4], seed: `rs-${m}-${i}` }); const x = E.reshuffle(c, `s${i}`); ok(E.validateChallenge(x).ok, `${m}: tras cambiar posiciones la solución no es válida`); } }
+// 6) Diseño: las figuras repartidas caben en su caja y no se tocan
+const { gridLayout, frameLayout } = await import("../web/retos/draw.js");
+for (const n of [3, 4, 6, 9, 11, 12, 16, 20, 25, 30, 36]) for (const box of [{ x: 36, y: 452, w: 1008, h: 1138 }, { x: 0, y: 0, w: 486, h: 556 }, { x: 56, y: 172, w: 1808, h: 858 }]) for (const seed of ["a", "b", "c"]) {
+  const g = gridLayout(n, box, `${n}-${seed}`, 0.41, 0.6);
+  ok(g.pos.length === n, `rejilla ${n}: faltan posiciones`);
+  ok(g.pos.every((p) => p.x - g.r >= box.x - 0.5 && p.x + g.r <= box.x + box.w + 0.5 && p.y - g.r >= box.y - 0.5 && p.y + g.r <= box.y + box.h + 0.5), `rejilla ${n}: figura fuera de la caja`);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) ok(Math.hypot(g.pos[i].x - g.pos[j].x, g.pos[i].y - g.pos[j].y) >= 2 * g.r, `rejilla ${n}: figuras solapadas`);
+}
+ok(frameLayout(1080, 1920).box.y + frameLayout(1080, 1920).box.h <= 1920 - 330, "el Short invade la zona de la interfaz de YouTube");
+// 7) Dibujo en el servidor (node-canvas): fotogramas seguidos de todos los estilos sin que el lienzo se bloquee
+let canvasMod = null; try { canvasMod = await import("canvas"); } catch (_) { console.log("(sin node-canvas: se omite la prueba de dibujo)"); }
+if (canvasMod) {
+  const { drawFrame } = await import("../web/retos/draw.js");
+  for (const style of ["light", "arcade", "dark", "custom"]) for (const format of ["short", "long"]) {
+    const challenges = mechs.map((m, i) => E.makeChallenge({ category: Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)), mechanic: m, difficulty: E.DIFFS[i % 4], seed: `dr-${m}` }));
+    const p = { format, challenges, config: {}, theme: { style, base: "dark", overrides: { timer: "#7C5CFF" } } }, t2 = E.timeline(p);
+    const [W, H] = format === "short" ? [270, 480] : [480, 270], cv = canvasMod.createCanvas(W, H), ctx = cv.getContext("2d");
+    let prev = null, same = 0, n = 0;
+    for (let t = 0; t < t2.duration; t += 0.5) { drawFrame(ctx, W, H, p, t2, t); const b = cv.toBuffer("raw"); if (prev && b.equals(prev)) same++; prev = b; n++; }
+    ok(same < n * 0.2, `${style}/${format}: ${same} de ${n} fotogramas idénticos (¿lienzo bloqueado?)`);
+  }
+}
 console.log(fail ? `\n${fail} FALLOS` : "\nTodo correcto");
 process.exit(fail ? 1 : 0);

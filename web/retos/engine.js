@@ -6,15 +6,29 @@
 export const ENGINE_VERSION = "1.0";
 export const FPS = 30;
 
-// ---------- Identidad por defecto (todo configurable por canal) ----------
-export const DEFAULT_THEME = {
-  bg: "#15213B", // azul marino principal
-  timer: "#FFC83D", // amarillo: temporizadores y acentos
-  ok: "#2ED47A", // verde: soluciones
-  alert: "#FF6B5B", // rojo coral: alertas y últimos segundos
-  text: "#FFFFFF", // blanco: textos
-  teal: "#2EC4C4", // turquesa: elementos secundarios
+// ---------- Estilos visuales del juego (el canal elige uno; «Personalizado» parte de uno y cambia colores) ----------
+// ink = texto sobre el fondo · cardInk = texto sobre las tarjetas · bgs = fondo suave por tipo de juego
+export const STYLES = {
+  light: {
+    name: "Light Game", bg: "#F7F8FA", bg2: "#EDF0F4", card: "#FFFFFF", ink: "#20242B", cardInk: "#20242B", muted: "#6B7280", line: "#E3E7EE",
+    timer: "#FFC83D", ok: "#22C55E", alert: "#F87171", teal: "#35B8C5", shadow: 0.07, pastel: false, font: "Montserrat", radius: "medium", shadowLevel: "soft",
+    bgs: { observation: "#F7F8FA", memory: "#FFF9ED", logic: "#EDF3F8", extreme: "#F0F1F4" },
+  },
+  arcade: {
+    name: "Soft Arcade", bg: "#EEF0F4", bg2: "#E3E7EE", card: "#FFFFFF", ink: "#1F2430", cardInk: "#1F2430", muted: "#666E7E", line: "#DCE1EA",
+    timer: "#FFC23A", ok: "#22C55E", alert: "#F87171", teal: "#3BB8C8", shadow: 0.09, pastel: true, chunky: true,
+    font: "Nunito", radius: "large", shadowLevel: "medium",
+    bgs: { observation: "#E8F3FA", memory: "#FFF0DA", logic: "#EEEAFA", extreme: "#FBEAEA" },
+  },
+  dark: {
+    name: "Soft Dark", bg: "#2B2E35", bg2: "#353943", card: "#F5F6F8", ink: "#F5F6F8", cardInk: "#20242B", muted: "#A9AFBC", line: "#454A55",
+    timer: "#FFC83D", ok: "#34D17A", alert: "#FB8A8A", teal: "#4CC9D6", shadow: 0.25, pastel: false, font: "Montserrat", radius: "medium", shadowLevel: "soft",
+    bgs: { observation: "#2B2E35", memory: "#302D2A", logic: "#29303A", extreme: "#2E2F35" },
+  },
 };
+export const FONTS = { Montserrat: "Montserrat ExtraBold (geométrica)", Nunito: "Nunito ExtraBold (redondeada, amable)" };
+// Tema del canal: { style, overrides: {bg, card, ink, timer, ok, alert, teal, observation, memory, logic, extreme}, font, radius, shadow, anim }
+export const DEFAULT_THEME = { style: "light", overrides: {}, font: "Montserrat", radius: "medium", shadow: "soft", anim: "normal" };
 export const DIFFS = ["easy", "medium", "hard", "extreme"];
 export const DIFF_LABEL = { easy: "Fácil", medium: "Intermedio", hard: "Difícil", extreme: "Extremo" };
 export const DEFAULT_CONFIG = {
@@ -34,7 +48,24 @@ export function mergeConfig(c) {
   const x = c || {};
   return { ...DEFAULT_CONFIG, ...x, points: { ...DEFAULT_CONFIG.points, ...(x.points || {}) }, times: { ...DEFAULT_CONFIG.times, ...(x.times || {}) }, volumes: { ...DEFAULT_CONFIG.volumes, ...(x.volumes || {}) }, ranks: Array.isArray(x.ranks) && x.ranks.length >= 3 ? x.ranks : DEFAULT_CONFIG.ranks };
 }
-export function mergeTheme(t) { return { ...DEFAULT_THEME, ...(t || {}) }; }
+// Texto sobre las tarjetas: el color de texto elegido si contrasta con la tarjeta; si no, oscuro o claro según la tarjeta
+const lumHex = (h) => { const n = parseInt(h.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; };
+function inkOn(card, ink, fallback) { const lc = lumHex(card); if (Math.abs(lc - lumHex(ink)) >= 0.45) return ink; if (Math.abs(lc - lumHex(fallback)) >= 0.45) return fallback; return lc > 0.5 ? "#20242B" : "#F5F6F8"; }
+export function mergeTheme(t) {
+  const x = t && t.style ? t : {}; // los temas anteriores (fondo azul) no tienen «style»: pasan a Light Game
+  const base = STYLES[x.style === "custom" ? (x.base || "light") : x.style] || STYLES.light;
+  const custom = x.style === "custom";
+  const o = custom ? x.overrides || {} : {};
+  const pick = (k) => (typeof o[k] === "string" && /^#[0-9a-f]{6}$/i.test(o[k]) ? o[k] : base[k]);
+  return {
+    ...base, style: x.style || "light",
+    bg: pick("bg"), card: pick("card"), ink: pick("ink"), cardInk: inkOn(pick("card"), pick("ink"), base.cardInk), timer: pick("timer"), ok: pick("ok"), alert: pick("alert"), teal: pick("teal"),
+    bgs: { observation: o.observation || (o.bg ? o.bg : base.bgs.observation), memory: o.memory || base.bgs.memory, logic: o.logic || base.bgs.logic, extreme: o.extreme || base.bgs.extreme },
+    // Light/Arcade/Dark traen su tipografía, bordes y sombras; «Personalizado» deja elegirlos
+    font: custom && FONTS[x.font] ? x.font : base.font, radius: custom && ["small", "medium", "large"].includes(x.radius) ? x.radius : base.radius,
+    shadowLevel: custom && ["none", "soft", "medium"].includes(x.shadow) ? x.shadow : base.shadowLevel, anim: ["low", "normal", "high"].includes(x.anim) ? x.anim : "normal",
+  };
+}
 
 // ---------- Identidad sonora: los 12 efectos del canal (se generan una vez y se reutilizan) ----------
 // group = qué control de volumen les afecta
@@ -487,8 +518,12 @@ export function validateProject(p) {
 
 // ---------- Línea de tiempo: tramos, eventos de sonido, voz y música (en segundos, alineados a fotogramas) ----------
 const fr = (t) => Math.round(t * FPS) / FPS;
+// Revelación: la primera solución aparece a REVEAL_FIRST s y las siguientes cada REVEAL_STEP s (cada una con su sonido)
+export const REVEAL_FIRST = 0.35, REVEAL_STEP = 0.45;
+export function revealCount(c) { return c.mechanic === "differences" ? (c.answer?.diffs || []).length : 1; }
 export function timingOf(c, short) {
-  const intro = short ? 1.0 : 1.4, memo = c.mechanic === "memory_missing" ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = 2.4;
+  const n = revealCount(c);
+  const intro = short ? 1.0 : 1.4, memo = c.mechanic === "memory_missing" ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = REVEAL_FIRST + (n - 1) * REVEAL_STEP + 2.0;
   const explain = c.explanation && c.show_explanation !== false ? Math.min(4, 1.6 + c.explanation.length / 40) : 0, out = 0.5;
   return { intro, memo, play, timeout, reveal, explain, out, total: intro + memo + play + timeout + reveal + explain + out };
 }
@@ -549,7 +584,10 @@ export function timeline(project, opts = {}) {
     s.timeout = [fr(x), fr(x += tm.timeout)];
     ev(s.timeout[0], "S06");
     s.reveal = [fr(x), fr(x += tm.reveal)];
-    ev(s.reveal[0] + 0.05, "S05"); ev(s.reveal[0] + 0.9, "S09", 0.8);
+    // Cada solución con su sonido: la primera con «respuesta correcta», las siguientes con uno breve
+    const nr = revealCount(c);
+    for (let k = 0; k < nr; k++) ev(s.reveal[0] + REVEAL_FIRST + k * REVEAL_STEP, k === 0 ? "S05" : "S09", k === 0 ? 1 : 0.65);
+    ev(s.reveal[0] + REVEAL_FIRST + (nr - 1) * REVEAL_STEP + 0.6, "S09", 0.8); // +N puntos
     if (tm.explain) { s.explain = [fr(x), fr(x += tm.explain)]; if (narr === "moderate" || narr === "full") say(s.explain[0] + 0.1, c.explanation); }
     s.out = [fr(x), fr(x += tm.out)];
     if (i < total - 1) ev(s.out[0], "S11");

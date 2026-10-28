@@ -33,7 +33,16 @@ const voiceKey = (voiceId, text) => `v_${E.hashStr(`${voiceId}|${text}`).toStrin
 
 // ---------- Audio del navegador (previsualización) ----------
 let AC = null; const decoded = new Map();
-function ac() { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
+// En iPhone el interruptor de silencio apaga el audio de las páginas web. Para que la previsualización suene
+// como un reproductor (igual que un vídeo), se declara la sesión como «reproducción» y, en iOS antiguos,
+// se mantiene un <audio> silencioso sonando mientras se reproduce.
+let SILENT = null;
+function silentWav() { const n = 800, b = new Uint8Array(44 + n), v = new DataView(b.buffer), w = (o, t) => [...t].forEach((c, i) => (b[o + i] = c.charCodeAt(0))); w(0, "RIFF"); v.setUint32(4, 36 + n, true); w(8, "WAVEfmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, "data"); v.setUint32(40, n, true); b.fill(128, 44); let s = ""; b.forEach((x) => (s += String.fromCharCode(x))); return "data:audio/wav;base64," + btoa(s); }
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (_) { /* navegador sin audioSession */ }
+  try { if (!SILENT) { SILENT = new Audio(silentWav()); SILENT.loop = true; SILENT.setAttribute("playsinline", ""); } SILENT.play().catch(() => {}); } catch (_) { /* sin <audio> */ }
+}
+function ac() { unlockAudio(); if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
 async function buffer(url) {
   if (!url) return null;
   if (decoded.has(url)) return decoded.get(url);
@@ -67,7 +76,7 @@ class Player {
     const loop = () => { if (!this.playing) return; this.t = base + (A.currentTime - start); if (this.t >= end) { this.t = end; this.pause(); this.draw(); return; } this.draw(); this.raf = requestAnimationFrame(loop); };
     this.raf = requestAnimationFrame(loop);
   }
-  pause() { this.playing = false; cancelAnimationFrame(this.raf); for (const s of this.srcs) { try { s.stop(); } catch (_) { /* ya parado */ } } this.srcs = []; this.onTick(this.t, this.tl?.duration || 0); }
+  pause() { this.playing = false; cancelAnimationFrame(this.raf); try { SILENT?.pause(); } catch (_) { /* nada */ } for (const s of this.srcs) { try { s.stop(); } catch (_) { /* ya parado */ } } this.srcs = []; this.onTick(this.t, this.tl?.duration || 0); }
   seek(t) { const was = this.playing; this.pause(); this.t = Math.max(0, Math.min(t, (this.tl?.duration || 0) - 0.01)); this.draw(); if (was) this.play(); }
   destroy() { this.pause(); }
 }
@@ -155,7 +164,7 @@ function renderEditor(first) {
   RS.player?.destroy();
   RS.player = new Player(document.getElementById("rt-canvas"), withChannel(P, c, short), c.id, { onTick: (t, d) => { const s = document.getElementById("rt-seek"), tm = document.getElementById("rt-time"); if (s) s.value = d ? Math.round((t / d) * 1000) : 0; if (tm) tm.textContent = `${fmtT(t)} / ${fmtT(d)}`; const b = document.getElementById("rt-play"); if (b) b.textContent = RS.player?.playing ? "❚❚ Pausa" : "▶ Reproducir"; } });
   renderList();
-  loadLib(c.id, true).then(() => { const lib = RS.lib[c.id] || []; const sfx = E.SOUNDS.filter((s) => lib.some((x) => x.kind === "sfx" && x.code === s.code && x.url)).length; const n = document.getElementById("rt-audio-note"); if (n) n.innerHTML = sfx < E.SOUNDS.length ? `La previsualización suena con los ${sfx} efectos que ya tiene el canal. Los que faltan se generan una vez al montar, o antes en <a href="#" onclick="openChannel('${c.id}');return false">Identidad sonora</a>.` : "Se oye con la identidad sonora guardada del canal."; });
+  loadLib(c.id, true).then(() => { const lib = RS.lib[c.id] || []; const sfx = E.SOUNDS.filter((s) => lib.some((x) => x.kind === "sfx" && x.code === s.code && x.url)).length; const n = document.getElementById("rt-audio-note"); if (n) n.innerHTML = sfx < E.SOUNDS.length ? `La previsualización suena con los ${sfx} efectos que ya tiene el canal. Los que faltan se generan una vez al montar, o antes en <a href="#" onclick="openChannel('${c.id}');return false">Identidad sonora</a>.` : "Se oye con la identidad sonora guardada del canal. ¿No oyes nada? Sube el volumen del dispositivo."; });
 }
 const withChannel = (p, c, short) => ({ ...p, format: short ? "short" : "long", config: E.mergeConfig(c.retos_config), theme: p.theme || c.theme || {} });
 function summary() {

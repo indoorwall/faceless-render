@@ -53,9 +53,9 @@ export const SOUNDS = [
   { code: "S12", name: "Error", emoji: "❌", event: "Solo si el formato identifica un fallo", group: "sfx", seconds: 0.8, prompt: "soft wrong answer sound, gentle low two-note descending synth, quiz game, not harsh" },
 ];
 export const MUSIC = [
-  { code: "M1", mood: "normal", name: "Normal", emoji: "🎵", seconds: 60, prompt: "light minimal electronic background music for a quiz game, playful and modern, steady pleasant groove around 110 bpm, soft synths and plucks, no vocals, seamless loop, leaves room for sound effects" },
-  { code: "M2", mood: "focus", name: "Concentración", emoji: "🧠", seconds: 60, prompt: "soft calm ambient background music for concentration, very few instruments, gentle pads and a light pulse, no distracting melody, no vocals, seamless loop" },
-  { code: "M3", mood: "extreme", name: "Extremo", emoji: "🔥", seconds: 60, prompt: "intense but not aggressive electronic background music for the final round of a quiz game, driving rhythm, tense synth bass, building energy, no vocals, seamless loop" },
+  { code: "M1", mood: "normal", name: "Normal", emoji: "🎵", seconds: 45, prompt: "light minimal electronic background music for a quiz game, playful and modern, steady pleasant groove around 110 bpm, soft synths and plucks, no vocals, seamless loop, leaves room for sound effects" },
+  { code: "M2", mood: "focus", name: "Concentración", emoji: "🧠", seconds: 45, prompt: "soft calm ambient background music for concentration, very few instruments, gentle pads and a light pulse, no distracting melody, no vocals, seamless loop" },
+  { code: "M3", mood: "extreme", name: "Extremo", emoji: "🔥", seconds: 45, prompt: "intense but not aggressive electronic background music for the final round of a quiz game, driving rhythm, tense synth bass, building energy, no vocals, seamless loop" },
 ];
 export const ROUND_MOOD = { easy: "normal", medium: "normal", hard: "focus", extreme: "extreme" };
 

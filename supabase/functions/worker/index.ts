@@ -1851,7 +1851,7 @@ async function ytGet(token: string, url: string, params: Record<string, string>)
   if (!r.ok) {
     const t = (await r.text()).slice(0, 250);
     if (r.status === 403 && /insufficient|scope|PERMISSION/i.test(t)) throw new UserError("Falta el permiso de analíticas de YouTube: vuelve a conectar el canal (Reconectar YouTube).");
-    if (r.status === 403 && /accessNotConfigured|has not been used|disabled/i.test(t)) throw new UserError("Activa la «YouTube Analytics API» en Google Cloud (APIs y servicios → Biblioteca).");
+    if (r.status === 403 && /accessNotConfigured|has not been used|disabled/i.test(t)) throw new UserError(`Activa la «${/analytics/i.test(url) ? "YouTube Analytics API" : "YouTube Data API v3"}» en Google Cloud (APIs y servicios → Biblioteca) y vuelve a pedir las analíticas.`);
     throw new Error(`YouTube ${r.status}: ${t}`);
   }
   return r.json();
@@ -1895,14 +1895,19 @@ async function stepAnalytics(job: Job) {
   const chId = job.channel_id;
   const token = await ytAccess(chId);
   if (!token) return;
+  // El canal de YouTube de la cuenta conectada (también se guarda si al conectar no se pudo leer)
+  const me = await ytGet(token, "https://www.googleapis.com/youtube/v3/channels", { part: "snippet,contentDetails", mine: "true" });
+  const yc = me.items?.[0];
+  if (!yc) throw new UserError("La cuenta de Google conectada no tiene canal de YouTube. Si el canal es de una cuenta de marca, vuelve a conectar y elígela en la lista.");
+  await sb.from("channels").update({ youtube_channel_id: yc.id }).eq("id", chId).is("youtube_channel_id", null);
+  await sb.from("youtube_tokens").update({ youtube_channel_title: yc.snippet?.title ?? null }).eq("channel_id", chId).is("youtube_channel_title", null);
   const { data: vids } = await sb.from("videos").select("id,title,format,youtube_video_id,published_at,duration_sec,stats,script").eq("channel_id", chId).in("status", ["published", "scheduled"]);
   const all = vids ?? [];
   // 1) Vídeos subidos a mano: se enlazan con los del canal por el título
   const nt = (t: unknown) => String(t ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ]+/g, " ").trim();
   const missing = all.filter((v) => !v.youtube_video_id && v.title);
   if (missing.length && !job.payload?.cont) {
-    const me = await ytGet(token, "https://www.googleapis.com/youtube/v3/channels", { part: "contentDetails", mine: "true" });
-    const up = me.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+    const up = yc.contentDetails?.relatedPlaylists?.uploads;
     // deno-lint-ignore no-explicit-any
     const items: any[] = []; let page = "";
     for (let i = 0; i < 6 && up; i++) {

@@ -12,8 +12,9 @@ const SCOPES = [
 ].join(" ");
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
-const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]!));
-const page = (msg: string) => new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0;background:#0b0b0c;color:#f2f2f2"><div style="text-align:center"><h2>${esc(msg)}</h2><p style="opacity:.6">Ya puedes cerrar esta pestaña.</p></div><script>try{window.opener&&window.opener.postMessage('yt-connected','*')}catch(e){}</script>`, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+// Supabase sirve las funciones como texto plano, no como página: se redirige a una página de la web
+const WEB = "https://faceless-studio-xzen.vercel.app/conectado.html";
+const done = (p: Record<string, string>) => new Response(null, { status: 302, headers: { Location: `${WEB}?${new URLSearchParams(p)}` } });
 
 async function hmac(data: string) {
   const { data: cfg } = await sb.from("app_config").select("value").eq("key", "cron_secret").single();
@@ -46,21 +47,23 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state") ?? "";
-  if (url.searchParams.get("error")) return page("Conexión cancelada");
+  if (url.searchParams.get("error")) return done({ error: "Conexión cancelada" });
   const [channelId, sig] = state.split(".");
-  if (!code || !channelId || sig !== (await hmac(channelId))) return page("Enlace no válido");
+  if (!code || !channelId || sig !== (await hmac(channelId))) return done({ error: "Enlace no válido" });
   const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: K.GOOGLE_CLIENT_ID, client_secret: K.GOOGLE_CLIENT_SECRET, redirect_uri: REDIRECT, grant_type: "authorization_code" }) });
   const tk = await t.json();
-  if (!t.ok || !tk.refresh_token) return page(`No se pudo conectar (${tk.error ?? t.status})`);
+  if (!t.ok || !tk.refresh_token) return done({ error: `No se pudo conectar (${tk.error ?? t.status})` });
   // Sin el permiso de analíticas el canal se conecta igual, pero se avisa
   const granted = String(tk.scope ?? "");
   const me = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", { headers: { Authorization: `Bearer ${tk.access_token}` } }).then((r) => r.json());
   const yc = me.items?.[0];
+  const meErr = String(me.error?.message ?? "");
+  const aviso = /has not been used|disabled|accessNotConfigured/i.test(meErr) ? "Falta activar la «YouTube Data API v3» en Google Cloud." : !yc ? "Esta cuenta de Google no tiene canal de YouTube: si el canal es de una cuenta de marca, vuelve a conectar y elígela en la lista." : "";
   await sb.from("youtube_tokens").upsert({ channel_id: channelId, refresh_token: tk.refresh_token, youtube_channel_title: yc?.snippet?.title ?? null, updated_at: new Date().toISOString() });
   await sb.from("channels").update({ youtube_connected: true, youtube_channel_id: yc?.id ?? null }).eq("id", channelId);
   const noAnalytics = !granted.includes("yt-analytics");
-  await sb.from("activity").insert({ channel_id: channelId, message: `YouTube conectado: ${yc?.snippet?.title ?? "canal"}${noAnalytics ? " (sin permiso de analíticas: vuelve a conectar y marca todas las casillas)" : ""}`, level: noAnalytics ? "warn" : "info" });
+  await sb.from("activity").insert({ channel_id: channelId, message: `YouTube conectado: ${yc?.snippet?.title ?? "canal"}${noAnalytics ? " (sin permiso de analíticas: vuelve a conectar y marca todas las casillas)" : ""}${aviso ? ` · ${aviso}` : ""}`, level: noAnalytics || aviso ? "warn" : "info" });
   // Primeras analíticas en cuanto se conecta
   await sb.from("jobs").insert({ step: "analytics", channel_id: channelId, payload: {} });
-  return page(`Conectado a ${yc?.snippet?.title ?? "YouTube"}`);
+  return done({ ok: "1", canal: yc?.snippet?.title ?? "YouTube", ...(aviso ? { aviso } : {}) });
 });

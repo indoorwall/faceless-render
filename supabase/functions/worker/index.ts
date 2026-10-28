@@ -2044,8 +2044,11 @@ function retosProject(v: any) {
 async function audioPath(chId: string, kind: string, code: string, version: number) { return `channels/${chId}/audio/${kind}/${code}_v${version}_${Date.now() % 100000}.mp3`; }
 // Genera (o regenera) un recurso de audio del canal y guarda la versión anterior en el historial
 // deno-lint-ignore no-explicit-any
-async function generateAudio(chId: string, kind: "sfx" | "music" | "voice", code: string, opts: { prompt?: string; seconds?: number; text?: string; voiceId?: string; language?: string; name?: string }): Promise<any> {
-  const { data: cur } = await sb.from("channel_audio").select("*").eq("channel_id", chId).eq("kind", kind).eq("code", code).maybeSingle();
+async function generateAudio(chId: string, kind: "sfx" | "music" | "voice", code: string, opts: { prompt?: string; seconds?: number; text?: string; voiceId?: string; language?: string; name?: string; onlyIfMissing?: boolean }): Promise<any> {
+  const { data: cur, error: curErr } = await sb.from("channel_audio").select("*").eq("channel_id", chId).eq("kind", kind).eq("code", code).maybeSingle();
+  if (curErr) throw new Error(`Biblioteca de audio: ${curErr.message}`);
+  // Al montar nunca se sustituye un recurso que ya existe: solo «Regenerar» crea versiones nuevas
+  if (opts.onlyIfMissing && cur?.url && cur.status === "ready") return cur;
   let bytes: Uint8Array; let seconds = opts.seconds ?? null;
   if (kind === "sfx") bytes = await elevenSfx(opts.prompt!, opts.seconds ?? 1.5);
   else if (kind === "music") bytes = await elevenMusic(`${opts.prompt}`, opts.seconds ?? 60);
@@ -2076,7 +2079,9 @@ async function stepRetosAssets(job: Job) {
   if (!val.ok) throw new UserError(`Retos sin validar, no se monta: ${val.errors.slice(0, 3).join(" · ")}`);
   const tl = retosTimeline(project);
   await sb.from("videos").update({ stage: "Preparando sonidos del canal", progress: 10, error: null }).eq("id", v.id);
-  const { data: lib } = await sb.from("channel_audio").select("kind,code,url,status").eq("channel_id", ch.id);
+  const { data: lib, error: libErr } = await sb.from("channel_audio").select("kind,code,url,status").eq("channel_id", ch.id);
+  // Si la consulta falla no se supone que falta todo (se regenerarían sonidos ya hechos): se reintenta
+  if (libErr || !lib) throw new Error(`No se pudo leer la biblioteca sonora: ${libErr?.message ?? "sin datos"}`);
   const have = new Set((lib ?? []).filter((x) => x.url && x.status === "ready").map((x) => `${x.kind}|${x.code}`));
   const voiceId = ch.voice_id || "JBFqnCBsd6RMkjVDRZzb";
   const needSfx = RETOS_SOUNDS.filter((s) => tl.events.some((e: { code: string }) => e.code === s.code) && !have.has(`sfx|${s.code}`));
@@ -2088,9 +2093,9 @@ async function stepRetosAssets(job: Job) {
   const needVoice = texts.filter((t) => !have.has(`voice|${voiceKey(voiceId, t)}`));
   // Por ejecución: hasta 4 efectos, 1 música o 6 frases (la función tiene tiempo limitado)
   let made = 0;
-  for (const s of needSfx.slice(0, 4)) { await generateAudio(ch.id, "sfx", s.code, { prompt: s.prompt, seconds: s.seconds, name: s.name }); made++; }
-  if (!made) for (const m of needMusic.slice(0, 1)) { await generateAudio(ch.id, "music", mcode(m.code), { prompt: m.prompt, seconds: m.seconds, name: project.config.music_mode === "video" ? `${m.name} · ${v.title ?? "vídeo"}` : m.name }); made++; }
-  if (!made) for (const t of needVoice.slice(0, 6)) { await generateAudio(ch.id, "voice", voiceKey(voiceId, t), { text: t, voiceId, language: ch.language, name: t.slice(0, 40) }); made++; }
+  for (const s of needSfx.slice(0, 4)) { await generateAudio(ch.id, "sfx", s.code, { prompt: s.prompt, seconds: s.seconds, name: s.name, onlyIfMissing: true }); made++; }
+  if (!made) for (const m of needMusic.slice(0, 1)) { await generateAudio(ch.id, "music", mcode(m.code), { prompt: m.prompt, seconds: m.seconds, name: project.config.music_mode === "video" ? `${m.name} · ${v.title ?? "vídeo"}` : m.name, onlyIfMissing: true }); made++; }
+  if (!made) for (const t of needVoice.slice(0, 6)) { await generateAudio(ch.id, "voice", voiceKey(voiceId, t), { text: t, voiceId, language: ch.language, name: t.slice(0, 40), onlyIfMissing: true }); made++; }
   const left = needSfx.length + needMusic.length + needVoice.length - made;
   if (made) await log(job, `Biblioteca sonora del canal: ${made} recursos nuevos (se reutilizarán en todos los vídeos)`);
   if (left > 0) { await enqueue("retos_assets", { video_id: v.id }); return; }

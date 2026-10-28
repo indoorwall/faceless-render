@@ -1914,16 +1914,42 @@ async function stepAnalytics(job: Job) {
       const d = await ytGet(token, "https://www.googleapis.com/youtube/v3/playlistItems", { part: "snippet", playlistId: up, maxResults: "50", ...(page ? { pageToken: page } : {}) });
       items.push(...(d.items ?? [])); page = d.nextPageToken; if (!page) break;
     }
+    // Títulos parecidos (sin #hashtags ni signos): palabras en común sobre el total, el mejor por encima de 0,6
+    const words = (t: unknown) => new Set(nt(String(t ?? "").replace(/#\S+/g, " ")).split(" ").filter((w) => w.length > 1));
+    const sim = (a: Set<string>, b: Set<string>) => { let n = 0; for (const w of a) if (b.has(w)) n++; return n / Math.max(1, new Set([...a, ...b]).size); };
+    const taken = new Set(all.map((v) => v.youtube_video_id).filter(Boolean));
     let linked = 0;
     for (const v of missing) {
-      const m = items.find((it) => nt(it.snippet?.title) === nt(v.title));
-      if (!m) continue;
-      v.youtube_video_id = m.snippet.resourceId.videoId;
-      v.published_at = v.published_at ?? m.snippet.publishedAt;
+      const wv = words(v.title);
+      // deno-lint-ignore no-explicit-any
+      let best: { it: any; s: number } | null = null;
+      for (const it of items) {
+        const id = it.snippet?.resourceId?.videoId; if (!id || taken.has(id)) continue;
+        const sc = sim(wv, words(it.snippet?.title));
+        if (sc >= 0.6 && (!best || sc > best.s)) best = { it, s: sc };
+      }
+      if (!best) continue;
+      v.youtube_video_id = best.it.snippet.resourceId.videoId; taken.add(v.youtube_video_id);
+      v.published_at = v.published_at ?? best.it.snippet.publishedAt;
       await sb.from("videos").update({ youtube_video_id: v.youtube_video_id, published_at: v.published_at }).eq("id", v.id);
       linked++;
     }
-    if (linked) await log(job, `Enlazados ${linked} vídeos subidos a mano con su vídeo de YouTube`);
+    const still = missing.filter((v) => !v.youtube_video_id).length;
+    await log(job, `Vídeos subidos a mano: ${linked} enlazados con YouTube${still ? `, ${still} sin encontrar (en YouTube hay ${items.length} vídeos)` : ""}`, still ? "warn" : "info");
+  }
+  // Fecha y duración reales de YouTube para los que no las tienen
+  const noDate = all.filter((v) => v.youtube_video_id && (!v.published_at || !v.duration_sec));
+  for (let i = 0; i < noDate.length; i += 50) {
+    const chunk = noDate.slice(i, i + 50);
+    const d = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "snippet,contentDetails", id: chunk.map((v) => v.youtube_video_id).join(",") });
+    for (const it of d.items ?? []) {
+      const v = chunk.find((x) => x.youtube_video_id === it.id); if (!v) continue;
+      const m = String(it.contentDetails?.duration ?? "").match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+      const secs = m ? Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0) : 0;
+      v.published_at = v.published_at ?? it.snippet?.publishedAt ?? null;
+      v.duration_sec = v.duration_sec || secs || null;
+      await sb.from("videos").update({ published_at: v.published_at, duration_sec: v.duration_sec }).eq("id", v.id);
+    }
   }
   const live = all.filter((v) => v.youtube_video_id && v.published_at && new Date(v.published_at) < new Date());
   if (!live.length) return;

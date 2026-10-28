@@ -47,6 +47,10 @@ async function reserve(k: string, n: number) {
   if (error) throw new Error(`Presupuesto: ${error.message}`);
   if (data !== true) throw new OverBudget(k);
 }
+// Si la llamada falla, se devuelve lo reservado (no se ha gastado)
+async function unreserve(k: string, n: number) {
+  if (n) await sb.rpc("record_spend", { p_key: k, p_n: -n });
+}
 // Claude: antes de llamar se comprueba que queda margen; al recibir la respuesta se apunta lo gastado
 async function claudeGuard(model: string) {
   const { data, error } = await sb.rpc("budget_left");
@@ -807,7 +811,7 @@ async function stepVoice(job: Job) {
       headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
       body: JSON.stringify({ text: s.narration, model_id: "eleven_v3", language_code: v.channel.language }),
     });
-    if (!r.ok) await elevenFail(r, "voz");
+    if (!r.ok) { await unreserve("tts_chars", s.narration.length); await elevenFail(r, "voz"); }
     const d = await r.json();
     const ends: number[] = d.alignment?.character_end_times_seconds ?? [];
     const url = await upload(`${v.id}/a_${String(s.n).padStart(3, "0")}_${Date.now()}.mp3`, b64ToBytes(d.audio_base64), "audio/mpeg");
@@ -834,7 +838,7 @@ async function elevenMusic(prompt: string, seconds: number) {
     headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, music_length_ms: Math.round(Math.min(600, Math.max(10, seconds)) * 1000), model_id: MUSIC_MODEL, force_instrumental: true }),
   });
-  if (!r.ok) await elevenFail(r, "música");
+  if (!r.ok) { await unreserve("music_sec", seconds); await elevenFail(r, "música"); }
   return new Uint8Array(await r.arrayBuffer());
 }
 async function elevenSfx(text: string) {
@@ -844,7 +848,7 @@ async function elevenSfx(text: string) {
     headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
     body: JSON.stringify({ text, model_id: SFX_MODEL, duration_seconds: 2.5, prompt_influence: 0.5 }),
   });
-  if (!r.ok) await elevenFail(r, "efecto");
+  if (!r.ok) { await unreserve("sfx", 1); await elevenFail(r, "efecto"); }
   return new Uint8Array(await r.arrayBuffer());
 }
 async function stepAudio(job: Job) {
@@ -909,13 +913,14 @@ async function stepAudio(job: Job) {
 
 // ---------- Paso: imágenes y vídeo de stock (por lotes) ----------
 async function aiImage(prompt: string, short: boolean, quality = "medium") {
-  await reserve(quality === "low" ? "ai_images_low" : "ai_images", 1);
+  const uk = quality === "low" ? "ai_images_low" : "ai_images";
+  await reserve(uk, 1);
   const r = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
     headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "gpt-image-2", prompt, size: short ? "1024x1536" : "1536x1024", quality, n: 1, output_format: "jpeg", output_compression: 90 }),
   });
-  if (!r.ok) { const t = (await r.text()).slice(0, 200); if (/insufficient_quota|billing|exceeded your current quota/i.test(t)) throw new UserError("OpenAI se ha quedado sin crédito. Recárgalo y vuelve a lanzar el vídeo."); throw new Error(`OpenAI ${r.status}: ${t}`); }
+  if (!r.ok) { await unreserve(uk, 1); const t = (await r.text()).slice(0, 200); if (/insufficient_quota|billing|exceeded your current quota/i.test(t)) throw new UserError("OpenAI se ha quedado sin crédito. Recárgalo y vuelve a lanzar el vídeo."); throw new Error(`OpenAI ${r.status}: ${t}`); }
   const d = await r.json();
   return b64ToBytes(d.data[0].b64_json);
 }
@@ -1677,13 +1682,15 @@ const FISH_MODEL = "s2-pro";
 const FLUX_MODEL = "fal-ai/flux/schnell";
 const plain = (t: unknown) => String(t ?? "").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
 async function fishTts(text: string, voiceId: string | undefined, model = FISH_MODEL) {
-  await reserve("fish_bytes", new TextEncoder().encode(text).length);
+  const nb = new TextEncoder().encode(text).length;
+  await reserve("fish_bytes", nb);
   const r = await fetch("https://api.fish.audio/v1/tts", {
     method: "POST",
     headers: { Authorization: `Bearer ${key("FISH_AUDIO_API_KEY")}`, "Content-Type": "application/json", model },
     body: JSON.stringify({ text, ...(voiceId ? { reference_id: voiceId } : {}), format: "mp3", mp3_bitrate: 128, normalize: true, latency: "normal" }),
   });
   if (!r.ok) {
+    await unreserve("fish_bytes", nb);
     const t = (await r.text()).slice(0, 200);
     if (r.status === 401 || r.status === 402 || /balance|credit|payment/i.test(t)) throw new UserError(`Fish Audio: sin crédito o clave no válida (${r.status}): ${t}`);
     throw new Error(`Fish Audio ${r.status}: ${t}`);
@@ -1730,7 +1737,7 @@ async function whisperWords(bytes: Uint8Array, text: string, lang: string) {
   if (lang) fd.append("language", String(lang).slice(0, 2));
   fd.append("prompt", text.slice(0, 800));
   const r = await fetch("https://api.openai.com/v1/audio/transcriptions", { method: "POST", headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}` }, body: fd });
-  if (!r.ok) throw new Error(`transcripción ${r.status}: ${(await r.text()).slice(0, 150)}`);
+  if (!r.ok) { await unreserve("stt_sec", Math.ceil(est)); throw new Error(`transcripción ${r.status}: ${(await r.text()).slice(0, 150)}`); }
   const d = await r.json();
   const duration = Number(d.duration) || est;
   return { words: alignWords(text, d.words ?? [], duration), duration };
@@ -1744,6 +1751,7 @@ async function fluxImage(prompt: string, short: boolean, model = FLUX_MODEL) {
     body: JSON.stringify({ prompt, image_size: short ? { width: 864, height: 1536 } : { width: 1536, height: 864 }, num_images: 1, output_format: "jpeg", enable_safety_checker: true }),
   });
   if (!r.ok) {
+    await unreserve("flux_images", 1);
     const t = (await r.text()).slice(0, 200);
     if (r.status === 401 || r.status === 403 || /balance|credit|locked/i.test(t)) throw new UserError(`fal.ai: sin crédito o clave no válida (${r.status}): ${t}`);
     throw new Error(`fal.ai ${r.status}: ${t}`);

@@ -98,6 +98,11 @@ section{display:flex;flex-direction:column;gap:12px}
 .ev a .mono{color:var(--accent);margin-left:4px}
 .bar{height:6px;background:var(--sunk);border-radius:6px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .6s}
+.budget{display:flex;flex-direction:column;gap:8px;min-width:0}
+.bbar{display:flex;height:12px;background:var(--sunk);border-radius:6px;overflow:hidden}
+.bbar i{display:block;height:100%;transition:width .6s}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
 .empty{border:1px dashed var(--line);border-radius:var(--r);padding:22px;color:var(--muted);text-align:center}
 
 label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;min-width:0}
@@ -311,6 +316,31 @@ function costOf(u){
   return {total:parts.reduce((a,x)=>a+x[1],0),parts};
 }
 const eur = (x) => x.toLocaleString("es-ES",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
+// Gasto de hoy por plataforma (spend_daily × tarifa) frente al tope diario
+const PLATFORMS = [
+  ["Claude", ["opus_in","opus_out","sonnet_in","sonnet_out","haiku_in","haiku_out","web_searches"], "#D97757"],
+  ["ElevenLabs", ["tts_chars","music_sec","sfx"], "#5B6CF0"],
+  ["OpenAI", ["ai_images","ai_images_low","stt_sec"], "#2E9E6B"],
+  ["Fish Audio", ["fish_bytes"], "#D4A017"],
+  ["fal.ai", ["flux_images"], "#A15CD6"],
+];
+function budgetBar(full){
+  if(!S.prices) return "";
+  const P=S.prices.prices||{}, t=S.prices.today||{}, cap=Number(S.prices.cap||0), spent=Number(S.prices.spent_today||0);
+  const parts=PLATFORMS.map(([name,keys,color])=>({name,color,eur:keys.reduce((a,k)=>a+Number(t[k]||0)*Number(P[k]||0),0)})).filter(x=>x.eur>=0.005);
+  const rest=spent-parts.reduce((a,x)=>a+x.eur,0); if(rest>=0.005) parts.push({name:"Otros",color:"#9299A8",eur:rest});
+  const pct=(x)=>cap>0?Math.min(100,x/cap*100):0;
+  return `<div class="budget">
+    <div class="spread"><b style="white-space:nowrap">Gasto de hoy</b><span class="mono" style="font-size:12.5px">${eur(spent)} de ${eur(cap)} · ${spent>=cap-0.005?`<span style="color:var(--bad)">tope alcanzado: lo demás sigue mañana</span>`:`quedan ${eur(cap-spent)}`}</span></div>
+    <div class="bbar" role="img" aria-label="Gasto de hoy por plataforma">${parts.map(x=>`<i style="width:${pct(x.eur)}%;background:${x.color}" title="${x.name}: ${eur(x.eur)}"></i>`).join("")}</div>
+    <div class="legend">${parts.length?parts.map(x=>`<span><i style="background:${x.color}"></i>${x.name} ${eur(x.eur)}</span>`).join(""):`<span class="muted">Hoy aún no se ha gastado nada</span>`}</div>
+    ${full?`<div class="row" style="margin-top:4px;align-items:flex-end"><label class="f" style="margin:0">Tope diario en euros <small>al llegar, los trabajos esperan al día siguiente</small><input type="number" id="cap-eur" min="0" max="200" step="0.5" value="${cap}" style="width:120px"></label><button class="btn sm" onclick="saveCap()">Guardar tope</button></div>`:""}
+  </div>`;
+}
+async function saveCap(){
+  const v=Number($("#cap-eur").value);
+  await run(async()=>{ const {error}=await sb.rpc("set_daily_cap",{p_eur:v}); if(error) throw error; await load(); }, "Tope guardado");
+}
 const costTag = (v) => { const c=costOf(v.usage); return c&&c.total>=0.005?`<span class="mono muted" title="Coste real: consumo del vídeo × tarifa de cada servicio">${eur(c.total)}</span>`:""; };
 const fmtN = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n ?? 0);
 const ago = (d) => { const s=(Date.now()-new Date(d))/1000; if(s<60) return "ahora"; if(s<3600) return Math.floor(s/60)+" min"; if(s<86400) return Math.floor(s/3600)+" h"; return new Date(d).toLocaleDateString("es-ES",{day:"numeric",month:"short"}); };
@@ -402,7 +432,7 @@ function viewHoy(){
   if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal o deja que el estudio te proponga nichos con demanda real.</p></div></div>
     <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button><a class="btn" href="#descubrir">Ver propuestas de canales</a></div>
     ${setupHint()}`;
-  return `<div class="head"><div><h1>Revisar</h1><p>Tú solo decides en tres momentos: la idea, el guion y el vídeo final. El resto lo hace el estudio.</p>${S.prices?`<p class="mono muted" style="font-size:12.5px;margin-top:4px">Gasto de hoy: ${eur(Number(S.prices.spent_today||0))} de ${eur(Number(S.prices.cap||0))}</p>`:""}</div>
+  return `<div class="head"><div><h1>Revisar</h1><p>Tú solo decides en tres momentos: la idea, el guion y el vídeo final. El resto lo hace el estudio.</p>${S.prices?`<div class="card" style="margin-top:12px">${budgetBar(false)}</div>`:""}</div>
     <div class="row"><select id="fch" style="width:auto">${[`<option value="">Todos los canales</option>`,...S.channels.map(c=>`<option value="${c.id}" ${S.filterCh===c.id?"selected":""}>${esc(c.name)}</option>`)].join("")}</select></div></div>
     ${setupHint()}
     <div class="flow">
@@ -558,6 +588,7 @@ function viewDescubrir(){
 // --- Vista: Ajustes
 function viewAjustes(){
   return `<div class="head"><div><h1>Ajustes</h1><p>Las claves se guardan cifradas en tu base de datos. Desde aquí solo se pueden escribir, nunca leer.</p></div></div>
+  <section><h2>Presupuesto diario</h2><div class="card">${budgetBar(true)}</div></section>
   <section><h2>Claves de servicios</h2><div class="card" style="gap:0">${S.keys.map(k=>{const [n,d,url,req]=KEY_INFO[k.name]||[k.name,"",""];return `
     <div class="key-row"><div><div style="font-weight:600">${esc(n)}</div><div class="muted" style="font-size:12.5px">${esc(d)}${req?" · imprescindible":""} · <a href="${url}" target="_blank" rel="noopener">obtener</a></div></div>
     <input type="password" id="k-${k.name}" placeholder="${k.is_set?"Guardada · escribe para reemplazar":"Pega la clave"}" autocomplete="off">

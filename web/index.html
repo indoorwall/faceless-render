@@ -363,7 +363,9 @@ function perfBlock(v){
   if(!a){
     if(!["published","scheduled"].includes(v.status)) return "";
     const ch0=ch(v.channel_id);
-    return `<div class="muted" style="font-size:13px">${ch0?.youtube_connected?"Las analíticas llegan cada mañana, 1-2 días después de publicar.":"Conecta el canal de YouTube para ver aquí la retención, el tráfico y qué frase hace que la gente se vaya."}</div>`;
+    // Subido a mano con otro título: se enlaza pegando su enlace de YouTube
+    const link=!v.youtube_video_id?`<div class="row" style="align-items:flex-end;margin-top:8px"><label class="f" style="margin:0;flex:1;min-width:200px">Enlace del vídeo en YouTube <small>si lo subiste a mano, pégalo para que lleguen sus analíticas</small><input type="url" id="yt-link" placeholder="https://youtube.com/shorts/…"></label><button class="btn sm" onclick="linkYT('${v.id}')">Enlazar</button></div>`:"";
+    return `<div><div class="muted" style="font-size:13px">${ch0?.youtube_connected?"Las analíticas llegan cada mañana, 1-2 días después de publicar.":"Conecta el canal de YouTube para ver aquí la retención, el tráfico y qué frase hace que la gente se vaya."}</div>${link}</div>`;
   }
   const tiles=[["Visitas",fmtN(a.views||0)],["Vista media",`${Math.round(a.avg_pct||0)} %`,`${Math.round(a.avg_view_sec||0)} s de media`],["A los 3 s",pctTxt(a.hold_3s),"siguen viendo"],["Al final",pctTxt(a.hold_end),"llegan al final"],["Suscriptores",`+${a.subs||0}`],["Compartidos",String(a.shares||0)]];
   const traffic=(a.traffic||[]).map(([t,p])=>`${TRAFFIC_ES[t]||t} ${p} %`).join(" · ");
@@ -395,6 +397,12 @@ function retentionChart(pts,dur,drops){
       <line id="ret-x" y1="${T}" y2="${H-B}" stroke="var(--muted)" stroke-width="1" opacity="0"/><circle id="ret-dot" r="4.5" fill="var(--v-line)" stroke="var(--surface)" stroke-width="2" opacity="0"/>
     </svg><div class="tip" id="ret-tip" hidden></div></div>
     <div class="muted" style="font-size:12px">Porcentaje de la audiencia que sigue viendo en cada momento del vídeo. Puede pasar del 100 % si la gente lo vuelve a ver.</div>`;
+}
+async function linkYT(id){
+  const raw=$("#yt-link").value.trim();
+  const m=raw.match(/(?:youtu\.be\/|v=|shorts\/|live\/|embed\/|video\/)([\w-]{11})/)||raw.match(/^([\w-]{11})$/);
+  if(!m) return toast("No reconozco ese enlace de YouTube");
+  await run(async()=>{ const {error}=await sb.from("videos").update({youtube_video_id:m[1]}).eq("id",id); if(error) throw error; await refreshOpenVideo(); await load(); }, "Vídeo enlazado: sus analíticas llegarán mañana");
 }
 function retHover(e){
   const R0=window.__ret, box=document.querySelector(".ret"), tip=$("#ret-tip"), lx=$("#ret-x"), dot=$("#ret-dot");

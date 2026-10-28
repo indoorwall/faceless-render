@@ -97,7 +97,7 @@ Canal «Reto Imposible» (`production_type = 'challenges'`). Cada canal usa siem
 - `render-retos.js` (Cloud Run): fotogramas con node-canvas que se pasan a FFmpeg.
   - Mezcla de audio en código, con sincronía exacta: unos 4 ms medidos en el MP4 final.
   - Música por niveles con fundidos y bajada bajo la voz.
-  - Volumen a -14 LUFS en dos pasadas, con comprobación ebur128.
+  - Volumen a -14 LUFS: se mide, se aplica ganancia + limitador y se vuelve a medir (método de la secante, hasta ±0,12 LU, máx. 6 pasadas). El informe guarda `loudness_passes` y `gain_db`.
   - Miniatura programática.
 - `web/retos/ui.js`: la interfaz.
   - En el canal: tipo de producción, identidad visual, identidad sonora (12 efectos y 3 músicas, con versiones), volúmenes, narración y temporizador.
@@ -116,7 +116,16 @@ Canal «Reto Imposible» (`production_type = 'challenges'`). Cada canal usa siem
 - `challenge_history`.
 - Política de storage para subir archivos a `channels/*/audio/`.
 
-**Pruebas.** `npm test` ejecuta tests/retos.test.mjs: 15.600 retos validados, validación de respuestas manipuladas, sincronía y cambio de posiciones.
+**Pruebas.** `npm test` ejecuta tests/retos.test.mjs: 15.600 retos validados, validación de respuestas manipuladas, sincronía, cambio de posiciones, rejilla de figuras (dentro de su caja y sin solapes) y dibujo con node-canvas en los 4 estilos y 2 formatos.
+
+**Estilo visual (rediseño 28/10).**
+- `engine.js` → `STYLES` (light «Light Game», predeterminado; arcade «Soft Arcade», con Nunito, fondos de color y sombra sólida; dark «Soft Dark»), `FONTS` y `mergeTheme(theme)`.
+- Tema del canal: `{style, anim}` o, en personalizado, `{style:"custom", base, overrides:{bg, card, ink, timer, ok, alert, teal, observation, memory, logic, extreme}, font, radius, shadow, anim}`. Los temas antiguos sin `style` (fondo azul) pasan a Light.
+- Un vídeo puede llevar su propio estilo en `videos.retos.theme` (se elige en el editor). Si no lo lleva, usa el del canal; el worker hace `v.retos?.theme ?? ch.theme`.
+- Fondo suave por tipo de juego (observación, memoria, lógica, extremo). Las figuras se reparten al dibujar con `gridLayout`, sin tocar los datos del reto.
+- Revelación progresiva: `REVEAL_FIRST` (0,35 s) y `REVEAL_STEP` (0,45 s) entre soluciones. Cada una suena con S05 la primera y S09 las demás; el dibujo y el sonido usan las mismas constantes.
+- Short: los últimos 330 px quedan libres para la interfaz de YouTube.
+- **Ojo con cairo (node-canvas):** escalar a 0 deja el lienzo inservible para todos los fotogramas siguientes. En draw.js siempre se escala con `zs()`; la prueba 7 lo detecta.
 
 ## Pendiente (por orden)
 0. **YouTube (en cola, lo pidió Giol el 28/10):** redactar el texto del formulario «YouTube API Services Audit and Quota Extension» y dejar lista la programación desde la plataforma (subir como privado con `publishAt`, cuota diaria). Está detrás del motor de retos.

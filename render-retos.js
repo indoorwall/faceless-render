@@ -14,6 +14,9 @@ import { run, fetchRetry } from "./render.js";
 const FONT_PATHS = ["/usr/share/fonts/truetype/montserrat/Montserrat-ExtraBold.ttf", path.join(path.dirname(new URL(import.meta.url).pathname), "fonts/Montserrat-ExtraBold.ttf")];
 const fontFile = FONT_PATHS.find((p) => existsSync(p));
 if (fontFile) registerFont(fontFile, { family: "Montserrat", weight: "800" });
+// Nunito: tipografía redondeada que el canal puede elegir en «Estilo visual del juego»
+const nunito = [path.join(path.dirname(fontFile || FONT_PATHS[1]), "Nunito-ExtraBold.ttf"), path.join(path.dirname(new URL(import.meta.url).pathname), "fonts/Nunito-ExtraBold.ttf")].find((p) => existsSync(p));
+if (nunito) registerFont(nunito, { family: "Nunito", weight: "800" });
 setCanvasFactory((w, h) => createCanvas(w, h));
 
 const SR = 44100;
@@ -72,18 +75,30 @@ function wav(pcm) {
   h.writeUInt32LE(SR, 24); h.writeUInt32LE(SR * 8, 28); h.writeUInt16LE(8, 32); h.writeUInt16LE(32, 34); h.write("data", 36); h.writeUInt32LE(data.length, 40);
   return Buffer.concat([h, data]);
 }
-// Volumen en dos pasadas: se mide la mezcla y se ajusta de forma lineal a -14 LUFS (igual en todos los vídeos)
+// Volumen: se mide la mezcla, se aplica ganancia + limitador suave y se vuelve a medir el resultado,
+// corrigiendo hasta quedar a -14 LUFS ±0,3 (el limitador se come parte de la ganancia en los vídeos con muchos efectos)
 const PRE = "treble=g=-2:f=9000";
-async function loudnessFilter(wavFile) {
-  const m = await new Promise((resolve) => {
-    const p = spawn("ffmpeg", ["-v", "info", "-nostats", "-i", wavFile, "-af", `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json`, "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
-    let err = ""; p.stderr.on("data", (d) => (err += d)); p.on("close", () => { try { resolve(JSON.parse(err.slice(err.lastIndexOf("{"), err.lastIndexOf("}") + 1))); } catch { resolve(null); } });
+const chain = (gain) => `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=false`;
+// Mide la sonoridad integrada (EBU R128) de la mezcla tras la cadena de filtros, igual que la comprobación final
+function measureI(wavFile, af) {
+  return new Promise((resolve) => {
+    const p = spawn("ffmpeg", ["-v", "info", "-nostats", "-i", wavFile, "-af", `${af},aresample=48000,ebur128`, "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = ""; p.stderr.on("data", (d) => (err += d)); p.on("close", () => { const m = err.slice(err.lastIndexOf("Summary")).match(/I:\s+(-?[\d.]+) LUFS/); resolve(m && isFinite(Number(m[1])) ? Number(m[1]) : null); });
   });
-  if (!m || !isFinite(Number(m.input_i))) return `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=false`;
-  // Ganancia exacta hasta -14 LUFS y un limitador suave para los picos de los efectos
-  // (el loudnorm lineal no sube más si los picos lo impiden y dejaba los largos en -15)
-  const gain = Math.max(-20, Math.min(20, -14 - Number(m.input_i)));
-  return `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=false`;
+}
+async function loudnessFilter(wavFile) {
+  const i0 = await measureI(wavFile, PRE);
+  if (i0 == null) return { af: `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=false`, passes: 1 };
+  // Secante: el limitador hace que cada dB de ganancia suba menos de 1 dB de sonoridad; se estima esa pendiente con las dos últimas medidas
+  const lim = (g) => Math.max(-20, Math.min(24, g));
+  let gPrev = 0, iPrev = i0, gain = lim(-14 - i0), passes = 1;
+  for (; passes < 6; passes++) {
+    const i = await measureI(wavFile, chain(gain));
+    if (i == null || Math.abs(i + 14) <= 0.12) break;
+    const slope = Math.abs(gain - gPrev) > 0.05 ? Math.min(1.2, Math.max(0.25, (i - iPrev) / (gain - gPrev))) : 1;
+    gPrev = gain; iPrev = i; gain = lim(gain + (-14 - i) / slope);
+  }
+  return { af: chain(gain), passes, gain };
 }
 // Comprobación final del sonido del vídeo exportado
 async function audioCheck(file) {
@@ -119,7 +134,7 @@ export async function renderRetos(spec, workdir, onProgress = () => {}) {
   // Vídeo: cada fotograma se dibuja y se pasa a FFmpeg sin comprimir
   const out = path.join(workdir, "final.mp4");
   const frames = Math.round(tl.duration * FPS);
-  const af = await loudnessFilter(wavFile);
+  const loud = await loudnessFilter(wavFile), af = loud.af;
   const ff = spawn("ffmpeg", ["-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", `${W}x${H}`, "-r", String(FPS), "-i", "-", "-i", wavFile,
     "-filter:a", af,
     "-c:v", "libx264", "-preset", PRESET, "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-shortest", out], { stdio: ["pipe", "ignore", "pipe"] });
@@ -149,6 +164,6 @@ export async function renderRetos(spec, workdir, onProgress = () => {}) {
   const res = resourcesOf(project, tl);
   return {
     file: out, size, duration: tl.duration,
-    report: { ...res, sfx_files: Object.keys(buffers.sfx).length, music_files: Object.keys(buffers.music).length, voice_files: Object.keys(buffers.voice).length, sfx_events_mixed: mix.sfx_events, mix_peak: Math.round(mix.peak * 1000) / 1000, audio: check, frames, render_seconds: Math.round(renderSec), total_seconds: Math.round((Date.now() - t0) / 1000), thumbnail: thumb, engine: "retos" },
+    report: { ...res, sfx_files: Object.keys(buffers.sfx).length, music_files: Object.keys(buffers.music).length, voice_files: Object.keys(buffers.voice).length, sfx_events_mixed: mix.sfx_events, mix_peak: Math.round(mix.peak * 1000) / 1000, audio: { ...check, loudness_passes: loud.passes, gain_db: loud.gain != null ? Math.round(loud.gain * 100) / 100 : null }, frames, render_seconds: Math.round(renderSec), total_seconds: Math.round((Date.now() - t0) / 1000), thumbnail: thumb, engine: "retos" },
   };
 }

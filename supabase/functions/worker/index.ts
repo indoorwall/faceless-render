@@ -2039,7 +2039,7 @@ const voiceKey = (voiceId: string, text: string) => `v_${hashStr(`${voiceId}|${t
 // deno-lint-ignore no-explicit-any
 function retosProject(v: any) {
   const ch = v.channel;
-  return { ...(v.retos ?? {}), format: v.format === "short" ? "short" : "long", config: retosConfig({ ...(ch.retos_config ?? {}), ...(v.retos?.overrides ?? {}) }), theme: ch.theme ?? {} };
+  return { ...(v.retos ?? {}), format: v.format === "short" ? "short" : "long", config: retosConfig({ ...(ch.retos_config ?? {}), ...(v.retos?.overrides ?? {}) }), theme: v.retos?.theme ?? ch.theme ?? {} };
 }
 async function audioPath(chId: string, kind: string, code: string, version: number) { return `channels/${chId}/audio/${kind}/${code}_v${version}_${Date.now() % 100000}.mp3`; }
 // Genera (o regenera) un recurso de audio del canal y guarda la versión anterior en el historial

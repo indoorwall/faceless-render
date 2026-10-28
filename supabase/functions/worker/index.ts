@@ -166,6 +166,7 @@ async function runStep(job: Job) {
     case "learn": return stepLearn(job);
     case "metrics": return stepMetrics(job);
     case "compare": return stepCompare(job);
+    case "analytics": return stepAnalytics(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
 }
@@ -1226,12 +1227,9 @@ async function stepRenderCheck(job: Job) {
 // ---------- Paso: publicar en YouTube ----------
 async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
-  const { data: tok } = await sb.from("youtube_tokens").select("refresh_token").eq("channel_id", v.channel_id).maybeSingle();
-  if (!tok) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
-  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: key("GOOGLE_CLIENT_ID"), client_secret: key("GOOGLE_CLIENT_SECRET"), refresh_token: tok.refresh_token, grant_type: "refresh_token" }) });
-  if (!t.ok) throw new UserError(`No se pudo renovar el acceso a YouTube (${t.status}). Vuelve a conectar el canal.`);
-  const { access_token } = await t.json();
+  const access_token = await ytAccess(v.channel_id);
+  if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
     snippet: { title: (v.title ?? v.idea_title).slice(0, 100), description: v.description ?? "", tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
@@ -1623,10 +1621,15 @@ async function stepMetrics(job: Job) {
       Object.assign(v, { stats: { ...st }, published_at: published });
     }
   }
-  // Una vez por semana y canal, la IA aprende de qué vídeos funcionan mejor
+  // Canales conectados con su cuenta de YouTube: analíticas completas (retención, fuentes de tráfico…) y aprenden de ellas
+  const { data: conn } = await sb.from("youtube_tokens").select("channel_id");
+  const connected = new Set((conn ?? []).map((x) => x.channel_id));
+  for (const id of connected) await enqueue("analytics", { channel_id: id });
+  // El resto, una vez por semana y canal, aprende solo de las métricas públicas
   const byCh = new Map<string, typeof list>();
   for (const v of list) { if (!byCh.has(v.channel_id)) byCh.set(v.channel_id, []); byCh.get(v.channel_id)!.push(v); }
   for (const [chId, vs] of byCh) {
+    if (connected.has(chId)) continue;
     const mature = vs.filter((v) => v.published_at && Date.now() - new Date(v.published_at).getTime() > 2 * 864e5);
     if (mature.length < 2) continue;
     const { data: last } = await sb.from("lessons").select("created_at").eq("channel_id", chId).eq("source", "metricas").order("created_at", { ascending: false }).limit(1);
@@ -1831,4 +1834,162 @@ async function stepCompare(job: Job) {
   }
   await upload(`${dir}/compare.json`, new TextEncoder().encode(JSON.stringify(out, null, 2)), "application/json");
   await log(job, `Prueba de proveedores lista: ${out.voice?.fish?.length ?? 0} voces de Fish y ${out.images?.items?.length ?? 0} imágenes FLUX en media/${dir}/compare.json`);
+}
+
+// ---------- YouTube con la cuenta del canal (OAuth): analíticas reales ----------
+async function ytAccess(channelId: string): Promise<string | null> {
+  const { data: tok } = await sb.from("youtube_tokens").select("refresh_token").eq("channel_id", channelId).maybeSingle();
+  if (!tok) return null;
+  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: key("GOOGLE_CLIENT_ID"), client_secret: key("GOOGLE_CLIENT_SECRET"), refresh_token: tok.refresh_token, grant_type: "refresh_token" }) });
+  if (!t.ok) throw new UserError(`No se pudo renovar el acceso a YouTube (${t.status}). Vuelve a conectar el canal.`);
+  return (await t.json()).access_token;
+}
+// deno-lint-ignore no-explicit-any
+async function ytGet(token: string, url: string, params: Record<string, string>): Promise<any> {
+  const u = new URL(url); u.search = new URLSearchParams(params).toString();
+  const r = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
+  if (!r.ok) {
+    const t = (await r.text()).slice(0, 250);
+    if (r.status === 403 && /insufficient|scope|PERMISSION/i.test(t)) throw new UserError("Falta el permiso de analíticas de YouTube: vuelve a conectar el canal (Reconectar YouTube).");
+    if (r.status === 403 && /accessNotConfigured|has not been used|disabled/i.test(t)) throw new UserError("Activa la «YouTube Analytics API» en Google Cloud (APIs y servicios → Biblioteca).");
+    throw new Error(`YouTube ${r.status}: ${t}`);
+  }
+  return r.json();
+}
+const YTA = "https://youtubeanalytics.googleapis.com/v2/reports";
+// Inicio de cada escena en el vídeo montado (como render.js: voz + 0,6 s, fundidos de 0,5 s)
+// deno-lint-ignore no-explicit-any
+function sceneTimeline(scenes: any[]) {
+  let t = 0;
+  return scenes.map((s, i) => {
+    const dur = Math.max(1.6, Number(s.audio_duration ?? 3) + 0.6);
+    const r = { start: t, dur, s };
+    t += dur - (i < scenes.length - 1 ? 0.5 : 0);
+    return r;
+  });
+}
+// La frase que se estaba oyendo en el segundo `sec`
+// deno-lint-ignore no-explicit-any
+function lineAt(tl: { start: number; dur: number; s: any }[], sec: number) {
+  if (!tl.length) return null;
+  const sc = [...tl].reverse().find((x) => x.start <= sec) ?? tl[0];
+  // deno-lint-ignore no-explicit-any
+  const shots: any[] = sc.s.shots?.length ? sc.s.shots : [{ line: sc.s.narration }];
+  const rel = sec - sc.start;
+  let idx = Math.min(shots.length - 1, Math.floor((rel / sc.dur) * shots.length));
+  const words = sc.s.words;
+  if (Array.isArray(words) && words.length) {
+    const k = words.findIndex((w: { s: number }) => w.s > rel);
+    const wi = k < 0 ? words.length - 1 : Math.max(0, k - 1);
+    let acc = 0; idx = shots.length - 1;
+    for (let j = 0; j < shots.length; j++) { acc += String(shots[j].line ?? "").split(/\s+/).filter(Boolean).length; if (wi < acc) { idx = j; break; } }
+  }
+  return { scene: sc.s.n, line: String(shots[idx]?.line ?? sc.s.narration ?? "").slice(0, 160) };
+}
+const mmss = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
+const TRAFFIC: Record<string, string> = { SHORTS: "feed de Shorts", YT_SEARCH: "búsqueda", SUGGESTED_VIDEO: "sugeridos", BROWSE: "inicio y suscripciones", EXT_URL: "webs externas", PLAYLIST: "listas", YT_CHANNEL: "página del canal", NOTIFICATION: "notificaciones", NO_LINK_OTHER: "directo u otros", RELATED_VIDEO: "relacionados", END_SCREEN: "pantalla final", HASHTAGS: "hashtags", SOUND_PAGE: "página de sonido", YT_OTHER_PAGE: "otras páginas de YouTube" };
+
+// ---------- Paso: analíticas de YouTube de un canal (gratis) y aprendizaje ----------
+// Visitas, % visto, retención segundo a segundo (y en qué frase se va la gente), fuentes de tráfico y suscriptores.
+async function stepAnalytics(job: Job) {
+  const chId = job.channel_id;
+  const token = await ytAccess(chId);
+  if (!token) return;
+  const { data: vids } = await sb.from("videos").select("id,title,format,youtube_video_id,published_at,duration_sec,stats,script").eq("channel_id", chId).in("status", ["published", "scheduled"]);
+  const all = vids ?? [];
+  // 1) Vídeos subidos a mano: se enlazan con los del canal por el título
+  const nt = (t: unknown) => String(t ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ]+/g, " ").trim();
+  const missing = all.filter((v) => !v.youtube_video_id && v.title);
+  if (missing.length && !job.payload?.cont) {
+    const me = await ytGet(token, "https://www.googleapis.com/youtube/v3/channels", { part: "contentDetails", mine: "true" });
+    const up = me.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+    // deno-lint-ignore no-explicit-any
+    const items: any[] = []; let page = "";
+    for (let i = 0; i < 6 && up; i++) {
+      const d = await ytGet(token, "https://www.googleapis.com/youtube/v3/playlistItems", { part: "snippet", playlistId: up, maxResults: "50", ...(page ? { pageToken: page } : {}) });
+      items.push(...(d.items ?? [])); page = d.nextPageToken; if (!page) break;
+    }
+    let linked = 0;
+    for (const v of missing) {
+      const m = items.find((it) => nt(it.snippet?.title) === nt(v.title));
+      if (!m) continue;
+      v.youtube_video_id = m.snippet.resourceId.videoId;
+      v.published_at = v.published_at ?? m.snippet.publishedAt;
+      await sb.from("videos").update({ youtube_video_id: v.youtube_video_id, published_at: v.published_at }).eq("id", v.id);
+      linked++;
+    }
+    if (linked) await log(job, `Enlazados ${linked} vídeos subidos a mano con su vídeo de YouTube`);
+  }
+  const live = all.filter((v) => v.youtube_video_id && v.published_at && new Date(v.published_at) < new Date());
+  if (!live.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const start = live.map((v) => String(v.published_at).slice(0, 10)).sort()[0];
+  const base = { ids: "channel==MINE", startDate: start, endDate: today };
+  // 2) Resumen de todos los vídeos de una vez
+  const sum = new Map<string, number[]>();
+  for (let i = 0; i < live.length; i += 200) {
+    const ids = live.slice(i, i + 200).map((v) => v.youtube_video_id);
+    const d = await ytGet(token, YTA, { ...base, metrics: "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,likes,comments,shares,subscribersGained", dimensions: "video", filters: `video==${ids.join(",")}`, maxResults: "200" });
+    for (const row of d.rows ?? []) sum.set(String(row[0]), row.slice(1).map(Number));
+  }
+  // 3) Retención y fuentes de tráfico, vídeo a vídeo (se refrescan cada 3 días; 12 por ejecución)
+  let done = 0; let pending = 0;
+  for (const v of live) {
+    const m = sum.get(v.youtube_video_id);
+    const prev = v.stats?.analytics ?? {};
+    // deno-lint-ignore no-explicit-any
+    const a: any = { ...prev, at: new Date().toISOString() };
+    if (m) Object.assign(a, { views: m[0], minutes: m[1], avg_view_sec: m[2], avg_pct: m[3], likes: m[4], comments: m[5], shares: m[6], subs: m[7] });
+    const fresh = prev.retention_at && Date.now() - new Date(prev.retention_at).getTime() < 3 * 864e5;
+    if (!fresh && (m?.[0] ?? 0) > 0) {
+      if (done >= 12) pending++;
+      else {
+        done++;
+        const r = await ytGet(token, YTA, { ...base, metrics: "audienceWatchRatio,relativeRetentionPerformance", dimensions: "elapsedVideoTimeRatio", filters: `video==${v.youtube_video_id}` });
+        const pts: number[][] = (r.rows ?? []).map((x: number[]) => [Number(x[0]), Math.round(Number(x[1]) * 1000) / 1000, Math.round(Number(x[2]) * 100) / 100]);
+        const tr = await ytGet(token, YTA, { ...base, metrics: "views", dimensions: "insightTrafficSourceType", filters: `video==${v.youtube_video_id}`, sort: "-views" });
+        const tv = (tr.rows ?? []).reduce((s2: number, x: number[]) => s2 + Number(x[1]), 0) || 1;
+        a.traffic = (tr.rows ?? []).slice(0, 5).map((x: [string, number]) => [x[0], Math.round((Number(x[1]) / tv) * 100)]);
+        a.retention = pts.map((x) => [x[0], x[1]]);
+        a.relative = pts.length ? Math.round((pts.reduce((s2, x) => s2 + x[2], 0) / pts.length) * 100) / 100 : null;
+        a.retention_at = new Date().toISOString();
+        // Dónde se va la gente: las dos mayores caídas, con la frase que sonaba
+        const dur = Number(v.duration_sec ?? 0);
+        if (dur > 0 && pts.length > 3) {
+          const at = (sec: number) => { const r0 = sec / dur; let best = pts[0]; for (const x of pts) if (Math.abs(x[0] - r0) < Math.abs(best[0] - r0)) best = x; return best[1]; };
+          a.hold_3s = at(3); a.hold_end = pts[pts.length - 1][1]; a.hold_mid = at(dur / 2);
+          const { data: scenes } = await sb.from("scenes").select("n,audio_duration,words,shots,narration").eq("video_id", v.id).order("n");
+          const tl = sceneTimeline(scenes ?? []);
+          const win = Math.max(1, Math.round(pts.length * 0.04));
+          const drops: { sec: number; from: number; to: number; scene?: number; line?: string }[] = [];
+          for (let i = 0; i + win < pts.length; i++) drops.push({ sec: Math.round(pts[i][0] * dur * 10) / 10, from: pts[i][1], to: pts[i + win][1] });
+          drops.sort((x, y) => (y.from - y.to) - (x.from - x.to));
+          const top: typeof drops = [];
+          for (const d of drops) { if (top.length >= 2) break; if (d.from - d.to < 0.03) break; if (top.some((t2) => Math.abs(t2.sec - d.sec) < dur * 0.1)) continue; top.push({ ...d, ...(lineAt(tl, d.sec) ?? {}) }); }
+          a.drops = top;
+        }
+      }
+    }
+    await sb.from("videos").update({ stats: { ...(v.stats ?? {}), analytics: a } }).eq("id", v.id);
+    v.stats = { ...(v.stats ?? {}), analytics: a };
+  }
+  if (pending) { await enqueue("analytics", { channel_id: chId, payload: { cont: true }, delaySec: 5 }); return; }
+  await log(job, `Analíticas de YouTube actualizadas (${live.length} vídeos)`);
+  // 4) Aprender de los datos: cada 4 días, con al menos 2 vídeos de más de 2 días
+  const mature = live.filter((v) => Date.now() - new Date(v.published_at!).getTime() > 2 * 864e5 && v.stats?.analytics?.views);
+  if (mature.length < 2) return;
+  const { data: last } = await sb.from("lessons").select("created_at").eq("channel_id", chId).eq("source", "metricas").order("created_at", { ascending: false }).limit(1);
+  if (last?.[0] && Date.now() - new Date(last[0].created_at).getTime() < 4 * 864e5 && !job.payload?.force) return;
+  const pct = (x: unknown) => x == null ? "?" : `${Math.round(Number(x) * 100)} %`;
+  const rows = mature.sort((x, y) => Number(y.stats.analytics.views) - Number(x.stats.analytics.views)).slice(0, 30).map((v) => {
+    const a = v.stats.analytics;
+    const days = Math.max(1, (Date.now() - new Date(v.published_at!).getTime()) / 864e5);
+    const first = v.script?.scenes?.[0]?.shots?.[0]?.line ?? v.script?.scenes?.[0]?.narration ?? "";
+    // deno-lint-ignore no-explicit-any
+    const traffic = (a.traffic ?? []).map((t: any) => `${TRAFFIC[t[0]] ?? t[0]} ${t[1]} %`).join(", ");
+    // deno-lint-ignore no-explicit-any
+    const drops = (a.drops ?? []).map((d: any) => `en ${mmss(d.sec)} del ${pct(d.from)} al ${pct(d.to)} con «${d.line ?? "?"}»`).join("; ");
+    return `- «${v.title}» (${v.format === "short" ? "Short" : "largo"}, ${v.duration_sec ?? "?"} s) | ${a.views} visitas (${Math.round(a.views / days)}/día) | vista media ${Math.round(a.avg_pct ?? 0)} % (${Math.round(a.avg_view_sec ?? 0)} s) | a los 3 s sigue ${pct(a.hold_3s)}, a mitad ${pct(a.hold_mid)}, al final ${pct(a.hold_end)}${a.relative != null ? ` | retención frente a vídeos parecidos: ${a.relative}` : ""} | +${a.subs ?? 0} suscriptores, ${a.shares ?? 0} compartidos, ${a.likes ?? 0} likes | tráfico: ${traffic || "?"}${drops ? ` | caídas: ${drops}` : ""} | gancho: «${String(first).slice(0, 140)}»`;
+  }).join("\n");
+  await enqueue("learn", { channel_id: chId, payload: { source: "metricas", material: `Analíticas reales de YouTube del canal, de más a menos visto. Compara los mejores con los peores y deduce reglas concretas: qué ganchos retienen los 3 primeros segundos, en qué tipo de frase se va la gente (las caídas indican la frase exacta), qué duración, temas y títulos funcionan, y qué atrae suscriptores y compartidos. "Retención frente a vídeos parecidos" por encima de 0,5 es mejor que la media de YouTube.\n${rows}` } });
 }

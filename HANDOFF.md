@@ -78,6 +78,16 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
 - OpenAI en calidad baja frente a media, con 3 escenas de «La guerra de un cubo de madera»: prácticamente igual (8 frente a 7,8 de media) y unas 3 veces más barata. Se activó la calidad baja para las escenas.
 - FLUX schnell, probado por Giol en Hugging Face: 6/10, más vistoso pero menos fiel a la época. No se ha abierto saldo en fal.ai; el código de FLUX queda listo pero desactivado (`image_provider = 'openai'`).
 
+## YouTube (28/10)
+- `youtube-auth` (código en `supabase/functions/youtube-auth/index.ts`, publicado igual que el motor: un archivo de una línea que importa de GitHub). Permisos: `youtube.upload`, `youtube.readonly` y `yt-analytics.readonly`. Al conectar, lanza las primeras analíticas.
+- Paso `analytics` por canal conectado. Lo encola `metrics` cada día a las 5:15 UTC.
+  - Enlaza por título los vídeos subidos a mano.
+  - Guarda en `videos.stats.analytics`: visitas, % visto, retención (`retention`), tráfico, suscriptores y las 2 mayores caídas con la frase del guion (`drops`).
+  - Cada 4 días encola `learn` con todo eso.
+- Publicar o programar: en «Vídeos por aprobar», con fecha → sube como privado con `publishAt`.
+  - **Proyecto de Google sin auditar → YouTube bloquea como privados los vídeos subidos por API.** Hay que pedir el «YouTube API Services Audit and Quota Extension».
+  - Cuota por defecto: 10.000 unidades al día, y cada subida gasta unas 1.600 (unas 6 subidas al día).
+
 ## Pendiente (por orden)
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.
    - **Voz:** probar **Fish Audio `s2-pro`** (15 $ por millón de bytes de texto) frente a ElevenLabs v3 con el mismo Short, y que Giol elija de oído.

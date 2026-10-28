@@ -1,7 +1,9 @@
 // Motor B — dibujo 2D de los retos con la API Canvas (igual en el navegador y en el servidor con node-canvas).
 // Estética de videojuego casual: fondos claros por tipo de juego, tarjetas blancas con sombra suave,
 // figuras grandes, temporizador limpio y revelaciones progresivas. Nada de imágenes generadas.
-import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr } from "./engine.js";
+import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr, solvedAt } from "./engine.js";
+import { drawWorldScene, isWorldMechanic } from "./world-draw.js";
+import { drawPix } from "./pix.js";
 
 const LETTERS = ["A", "B", "C", "D"];
 let FONT = "Montserrat, 'Arial Black', sans-serif";
@@ -117,8 +119,8 @@ function background(ctx, W, H, P, col, accent) {
 export function frameLayout(W, H) {
   const v = H > W;
   // Short: cabecera arriba (fuera de la barra de YouTube), pregunta grande, reto a pantalla casi completa y los últimos 330 px libres para la interfaz de Shorts
-  if (v) return { v, W, H, u: 1, hud: { x: 44, y: 182 }, timer: { cx: W - 122, cy: 188, r: 78 }, q: { x: W / 2, y: 352, size: 72, maxW: 980 }, box: { x: 36, y: 452, w: W - 72, h: H - 452 - 330 }, optsH: 340, optsFigH: 400, cols: 2, gap: 22 };
-  return { v, W, H, u: 1, hud: { x: 44, y: 46 }, timer: { cx: W - 104, cy: 92, r: 68 }, q: { x: W / 2 - 30, y: 122, size: 58, maxW: 1380 }, box: { x: 56, y: 172, w: W - 112, h: H - 172 - 50 }, optsH: 150, optsFigH: 200, cols: 4, gap: 22 };
+  if (v) return { v, W, H, u: 1, hud: { x: 44, y: 182 }, timer: { cx: W - 122, cy: 188, r: 78 }, q: { x: W / 2, y: 352, size: 72, maxW: 980 }, box: { x: 36, y: 452, w: W - 72, h: H - 452 - 330 }, wq: { x: W / 2, y: 330, size: 80, maxW: 1000 }, wbox: { x: 26, y: 410, w: W - 52, h: H - 410 - 300 }, optsH: 340, optsFigH: 400, cols: 2, gap: 22 };
+  return { v, W, H, u: 1, hud: { x: 44, y: 46 }, timer: { cx: W - 104, cy: 92, r: 68 }, q: { x: W / 2 - 30, y: 122, size: 58, maxW: 1380 }, box: { x: 56, y: 172, w: W - 112, h: H - 172 - 50 }, wq: { x: W / 2 - 30, y: 122, size: 64, maxW: 1380 }, wbox: { x: 48, y: 168, w: W - 96, h: H - 168 - 44 }, optsH: 150, optsFigH: 200, cols: 4, gap: 22 };
 }
 const revealN = (c) => (c.mechanic === "differences" ? c.answer.diffs.length : 1);
 const hasOptions = (c) => "option" in (c.answer || {});
@@ -385,6 +387,63 @@ function pointsPill(ctx, P, L, k, pts) {
   ctx.save(); ctx.translate(x, y - 10 * eOut(k)); zs(ctx, s, s); pill(ctx, P, -112, -36, 224, 72, P.timer); text(ctx, `+${pts} ${pts === 1 ? "PUNTO" : "PUNTOS"}`, 0, 2, 31, "#20242B"); ctx.restore();
 }
 
+
+// ---------- Playable World: portada y mapa de niveles ----------
+const MECH_NAME = { maze: "Laberinto", machine: "Máquina", room_error: "Encuentra el error" };
+function mechIcon(ctx, m, x, y, r, col) {
+  ctx.save(); ctx.translate(x, y); ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = r * 0.16; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  if (m === "maze") { ctx.beginPath(); ctx.moveTo(-r * 0.6, -r * 0.6); ctx.lineTo(r * 0.6, -r * 0.6); ctx.lineTo(r * 0.6, r * 0.6); ctx.lineTo(-r * 0.6, r * 0.6); ctx.lineTo(-r * 0.6, -r * 0.2); ctx.moveTo(-r * 0.2, -r * 0.6); ctx.lineTo(-r * 0.2, r * 0.2); ctx.lineTo(r * 0.25, r * 0.2); ctx.stroke(); ctx.beginPath(); ctx.arc(r * 0.25, -r * 0.2, r * 0.14, 0, 7); ctx.fill(); }
+  else if (m === "machine") { ctx.beginPath(); for (let i = 0; i < 16; i++) { const a = (i / 16) * Math.PI * 2, rr = i % 2 ? r * 0.48 : r * 0.68; ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); } ctx.closePath(); ctx.fill(); ctx.fillStyle = "#FFFFFF"; ctx.beginPath(); ctx.arc(0, 0, r * 0.22, 0, 7); ctx.fill(); }
+  else { ctx.beginPath(); ctx.arc(-r * 0.12, -r * 0.12, r * 0.42, 0, 7); ctx.stroke(); ctx.lineWidth = r * 0.22; ctx.beginPath(); ctx.moveTo(r * 0.2, r * 0.2); ctx.lineTo(r * 0.6, r * 0.6); ctx.stroke(); }
+  ctx.restore();
+}
+function mapNodes(L, n) {
+  return Array.from({ length: n }, (_, i) => {
+    const f = n === 1 ? 0.5 : i / (n - 1);
+    return L.v ? { x: L.W * (i % 2 ? 0.7 : 0.3), y: L.H * (0.3 + 0.45 * f) } : { x: L.W * (0.14 + 0.72 * f), y: L.H * (0.56 + (i % 2 ? -0.12 : 0.1)) };
+  });
+}
+function mapScreen(ctx, L, P, seg, t) {
+  const k = clamp((t - seg.start) / (seg.end - seg.start)), N = mapNodes(L, seg.total), r = L.v ? 74 : 66;
+  const inK = eOut(clamp(k * 5)), hop = eOut(clamp((k - 0.22) / 0.4));
+  ctx.save(); ctx.globalAlpha = inK * (1 - eIn(clamp((k - 0.88) / 0.12)));
+  fitText(ctx, seg.to === seg.total - 1 && seg.total > 2 ? "DESAFÍO FINAL" : `NIVEL ${seg.to + 1}`, L.W / 2, L.v ? 300 : 120, L.v ? 110 : 96, L.W - 120, P.ink);
+  text(ctx, (MECH_NAME[seg.mechanics[seg.to]] || "").toUpperCase(), L.W / 2, L.v ? 400 : 205, L.v ? 46 : 40, mix(P.teal, "#000000", 0.15));
+  // Camino
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.strokeStyle = alpha(P.dark ? "#FFFFFF" : "#20242B", 0.12); ctx.lineWidth = 26; ctx.setLineDash([2, 44]); ctx.beginPath(); N.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = P.ok; ctx.lineWidth = 16; ctx.beginPath(); ctx.moveTo(N[0].x, N[0].y); for (let i = 1; i <= seg.from; i++) ctx.lineTo(N[i].x, N[i].y); const a = N[seg.from], b = N[seg.to]; ctx.lineTo(lerp(a.x, b.x, hop), lerp(a.y, b.y, hop)); ctx.stroke();
+  // Nodos
+  N.forEach((p, i) => {
+    const done = i <= seg.from, cur = i === seg.to, s = cur ? 1 + 0.08 * Math.sin(t * 7) * (hop > 0.99 ? 1 : 0) + 0.15 * eBack(clamp((k - 0.55) / 0.25)) : 1;
+    ctx.save(); ctx.translate(p.x, p.y); zs(ctx, s);
+    card(ctx, P, -r, -r, r * 2, r * 2, r / P.R, done ? P.ok : P.card, cur ? { stroke: P.timer, lw: 8 } : {});
+    mechIcon(ctx, seg.mechanics[i], 0, 0, r * 0.75, done ? "#FFFFFF" : cur ? mix(P.timer, "#000000", 0.2) : "#B5BCC8");
+    ctx.restore();
+    if (done) { const sx = p.x + r * 0.7, sy = p.y - r * 0.7; ctx.fillStyle = P.timer; ctx.beginPath(); for (let j = 0; j < 10; j++) { const an = -Math.PI / 2 + (j * Math.PI) / 5, rr = j % 2 ? 11 : 25; ctx.lineTo(sx + Math.cos(an) * rr, sy + Math.sin(an) * rr); } ctx.closePath(); ctx.fill(); }
+    text(ctx, String(i + 1), p.x, p.y + r + 34, 34, P.muted);
+  });
+  // PIX salta al siguiente nivel
+  const px = lerp(a.x, b.x, hop), py = lerp(a.y, b.y, hop) - Math.sin(hop * Math.PI) * (L.v ? 220 : 180) - r * 0.9;
+  drawPix(ctx, px, py + r * 0.15, L.v ? 200 : 170, hop > 0 && hop < 1 ? "happy" : hop >= 1 ? "curious" : "normal", t * 0.5, b.x < a.x);
+  ctx.restore();
+}
+function introScreen(ctx, L, P, seg, t, project) {
+  const k = t - seg.start, d = seg.end - seg.start, out = eIn(clamp((k - (d - 0.35)) / 0.35));
+  ctx.save(); ctx.globalAlpha = 1 - out;
+  const s = eBack(clamp(k / 0.6));
+  ctx.save(); ctx.translate(L.W / 2, L.v ? L.H * 0.56 : L.H * 0.62); zs(ctx, s);
+  ctx.fillStyle = alpha(P.timer, 0.25); ctx.beginPath(); ctx.arc(0, -150, L.v ? 300 : 250, 0, 7); ctx.fill();
+  drawPix(ctx, 0, L.v ? 120 : 110, L.v ? 520 : 420, k < d * 0.45 ? "happy" : "victory", t * 0.5);
+  ctx.restore();
+  const tk = eOut(clamp((k - 0.15) / 0.5)), lines = wrap(ctx, String(project.title || "¿Puedes con todos?").toUpperCase(), L.v ? 960 : 1500, L.v ? 92 : 84).slice(0, 3);
+  ctx.save(); ctx.globalAlpha *= tk; ctx.translate(0, (1 - tk) * -30);
+  lines.forEach((ln, i) => fitText(ctx, ln, L.W / 2, (L.v ? 300 : 110) + i * (L.v ? 100 : 90), L.v ? 92 : 84, L.W - 100, P.ink));
+  const lk = eBack(clamp((k - 0.5) / 0.4)), ly = L.v ? 300 + lines.length * 100 + 30 : 110 + lines.length * 90 + 10;
+  ctx.translate(L.W / 2, ly); zs(ctx, lk); pill(ctx, P, -190, -38, 380, 76, P.timer); text(ctx, `${seg.total} NIVELES`, 0, 3, 40, "#20242B");
+  ctx.restore(); ctx.restore();
+}
+
 // ---------- Fotograma completo ----------
 // Se dibuja siempre en el tamaño de diseño (1920×1080 o 1080×1920) y se escala: la vista previa es idéntica al vídeo
 export function drawFrame(ctx, W, H, project, tl, t, theme) {
@@ -403,9 +462,11 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   let bg = c0 ? bgFor(P, c0) : seg.type === "round" && seg.difficulty === "extreme" ? P.bgs.extreme : P.bg;
   if (prev && c0 && t - seg.start < 0.45) bg = mix(bgFor(P, prev), bg, eOut((t - seg.start) / 0.45));
   background(ctx, W, H, P, bg, (c0 && c0.difficulty === "extreme") || (seg.type === "round" && seg.difficulty === "extreme") ? P.alert : null);
+  if (seg.type === "intro") return introScreen(ctx, L, P, seg, t, project);
+  if (seg.type === "map") return mapScreen(ctx, L, P, seg, t);
   if (seg.type === "round") return roundScreen(ctx, L, P, seg, t, project.config);
   if (seg.type === "results") return resultsScreen(ctx, L, P, seg, t);
-  if (seg.type === "outro") return outroScreen(ctx, L, P, seg, t);
+  if (seg.type === "outro") { outroScreen(ctx, L, P, seg, t); if (project.game_style === "world") drawPix(ctx, L.W / 2, L.v ? L.H * 0.8 : L.H * 0.97, L.v ? 260 : 200, "victory", t * 0.5); return; }
   const c = c0; if (!c) return;
   const cfg = mergeConfig(project.config);
   const inK = clamp((t - seg.intro[0]) / (seg.intro[1] - seg.intro[0])), outK = clamp((t - seg.out[0]) / (seg.out[1] - seg.out[0]));
@@ -421,19 +482,33 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   // Pregunta: grande y oscura; durante el «¡TIEMPO!» la sustituye el aviso (no tapa el reto)
   const tk = seg.timeout && t >= seg.timeout[0] && t < seg.reveal[0] + 0.35 ? (t - seg.timeout[0]) / (seg.reveal[0] + 0.35 - seg.timeout[0]) : -1;
   const qk = eOut(clamp(inK * 1.8));
-  ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(L.q.x, L.q.y - (1 - qk) * 24);
-  const lines = L.v ? wrap(ctx, c.question.toUpperCase(), L.q.maxW, L.q.size).slice(0, 2) : [c.question.toUpperCase()], qs = lines.length > 1 ? L.q.size * 0.9 : L.q.size;
-  lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, L.q.maxW, P.ink));
+  const world = isWorldMechanic(c.mechanic), Q = world ? L.wq : L.q;
+  ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(Q.x, Q.y - (1 - qk) * 24);
+  const lines = L.v ? wrap(ctx, c.question.toUpperCase(), Q.maxW, Q.size).slice(0, 2) : [c.question.toUpperCase()], qs = lines.length > 1 ? Q.size * 0.82 : Q.size;
+  // Playable World: al resolverse, la pregunta se convierte en la solución («ENTRADA C», «¡LA VELA…!»)
+  const solvedT = world && seg.reveal ? seg.reveal[0] + solvedAt(c) : Infinity, sk = clamp((t - solvedT) / 0.3);
+  if (sk > 0 && c.answer?.label) {
+    ctx.globalAlpha = 1; const ls = wrap(ctx, c.answer.label.toUpperCase(), Q.maxW, Q.size * 0.9).slice(0, 2), s2 = (ls.length > 1 ? Q.size * 0.72 : Q.size * 0.9) * eBack(sk);
+    ls.forEach((ln, i) => fitText(ctx, ln, 0, (i - (ls.length - 1) / 2) * s2 * 1.08, s2, Q.maxW, P.dark ? P.ok : mix(P.ok, "#000000", 0.25)));
+  } else lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, Q.maxW, P.ink));
   if (seg.memo && t < seg.memo[1]) text(ctx, (c.instructions || "¡Memoriza!").toUpperCase(), 0, qs * (lines.length * 0.55 + 0.45), qs * 0.48, P.dark ? P.teal : mix(P.teal, "#000000", 0.15));
   ctx.restore();
-  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(L.q.x, L.q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); text(ctx, "¡TIEMPO!", 0, 4, 66, "#FFFFFF"); ctx.restore(); }
+  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(Q.x, Q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); text(ctx, "¡TIEMPO!", 0, 4, 66, "#FFFFFF"); ctx.restore(); }
   // Reto
+  if (world) {
+    // Playable World: la escena ocupa casi todo el fotograma y se anima con la simulación del reto
+    const wb = L.wbox, ak = eOut(clamp((t - seg.intro[0]) / 0.7));
+    ctx.save(); ctx.globalAlpha *= ak; ctx.translate(0, (1 - ak) * 40);
+    drawWorldScene(ctx, c, wb, L, P, { t, rt: st.revealAt != null ? t - st.revealAt : null, play: clamp((t - seg.play[0]) / (seg.play[1] - seg.play[0])), timeout: t >= seg.play[1] });
+    ctx.restore();
+  } else {
   const b = contentBox(L, c);
   TPL[TPL_OF[c.mechanic]](ctx, c, b, L, P, st);
   if (hasOptions(c) && (!seg.memo || t >= seg.play[0])) options(ctx, c, L, P, { ...st, appear: seg.memo ? clamp((t - seg.play[0]) / 0.8) : st.appear });
+  }
   // Temporizador (o barra de memorizar)
   const T = seg.play[1] - seg.play[0];
-  const ptsK = st.revealAt != null ? clamp((t - (st.revealAt + REVEAL_FIRST + (revealN(c) - 1) * REVEAL_STEP + 0.6)) / 1.0) : 0;
+  const ptsK = st.revealAt != null ? clamp((t - (st.revealAt + solvedAt(c) + 0.6)) / 1.0) : 0;
   if (seg.memo && t < seg.memo[1]) {
     const mk = 1 - clamp((t - seg.memo[0]) / (seg.memo[1] - seg.memo[0] - 0.6)), bw = L.v ? 300 : 360, bx = L.timer.cx - bw + L.timer.r, by = L.timer.cy - 12;
     rrect(ctx, bx, by, bw, 24, 12); ctx.fillStyle = P.line; ctx.fill(); rrect(ctx, bx, by, Math.max(24, bw * mk), 24, 12); ctx.fillStyle = P.teal; ctx.fill();

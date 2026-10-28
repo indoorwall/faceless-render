@@ -78,7 +78,7 @@ function wav(pcm) {
 // Volumen: se mide la mezcla, se aplica ganancia + limitador suave y se vuelve a medir el resultado,
 // corrigiendo hasta quedar a -14 LUFS ±0,3 (el limitador se come parte de la ganancia en los vídeos con muchos efectos)
 const PRE = "treble=g=-2:f=9000";
-const chain = (gain) => `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=false`;
+const chain = (gain) => `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.74:attack=2:release=60:level=false`;
 // Mide la sonoridad integrada (EBU R128) de la mezcla tras la cadena de filtros, igual que la comprobación final
 function measureI(wavFile, af) {
   return new Promise((resolve) => {

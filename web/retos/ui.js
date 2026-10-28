@@ -10,11 +10,13 @@ for (const [fam, file] of [["Montserrat", "Montserrat-ExtraBold.ttf"], ["Nunito"
   try { const f = new FontFace(fam, `url(fonts/${file})`, { weight: "800" }); f.load().then((x) => { document.fonts.add(x); try { previewTheme(); RS.player?.draw(); } catch (_) { /* aún no hay nada que redibujar */ } }); } catch (_) { /* sin FontFace: se usa la fuente de reserva */ }
 }
 
-const RS = { lib: {}, edit: null, player: null, gen: { format: "long", category: "mixed", minutes: 8, seconds: 30, difficulty: "progressive", count: "", channel: "" }, polling: null };
+const RS = { lib: {}, edit: null, player: null, gen: { style: "classic", format: "long", category: "mixed", minutes: 8, seconds: 30, difficulty: "progressive", count: "", channel: "" }, polling: null };
 const isRetos = (c) => c && c.production_type === "challenges";
 const retosChannels = () => S.channels.filter(isRetos);
 const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-const CAT_OPTS = () => [["mixed", "🎲 Mixto"], ...E.CATEGORY_ORDER.map((k) => [k, `${E.CATEGORIES[k].emoji} ${E.CATEGORIES[k].label}`])];
+// Categorías según el estilo de juego (clásico o Playable World)
+const CAT_OPTS = (style = RS.gen?.style) => [["mixed", "🎲 Mixto"], ...(E.GAME_STYLES[style] || E.GAME_STYLES.classic).cats.map((k) => [k, `${E.CATEGORIES[k].emoji} ${E.CATEGORIES[k].label}`])];
+const ALL_CATS = () => [...E.CATEGORY_ORDER, ...E.WORLD_ORDER].map((k) => [k, `${E.CATEGORIES[k].emoji} ${E.CATEGORIES[k].label}`]);
 const DIFF_OPTS = [["progressive", "Progresiva"], ["easy", "Fácil"], ["medium", "Intermedia"], ["hard", "Difícil"], ["extreme", "Extrema"]];
 const sel = (id, opts, val, attrs = "") => `<select id="${id}" ${attrs}>${opts.map(([k, l]) => `<option value="${k}" ${String(val) === String(k) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
 
@@ -80,6 +82,7 @@ function producerSection() {
     <div class="fgrid">
       <label class="f">Canal${sel("rg-ch", chs.map((x) => [x.id, x.name]), g.channel, 'onchange="RetosUI.setGen(\'channel\',this.value)"')}</label>
       <label class="f">Tipo de contenido${sel("rg-fmt", [["long", "Vídeo largo (16:9)"], ["short", "Short (9:16)"], ["both", "Generar ambos"]], g.format, 'onchange="RetosUI.setGen(\'format\',this.value)"')}</label>
+      <label class="f">Estilo de juego${sel("rg-style", Object.entries(E.GAME_STYLES).map(([k, x]) => [k, x.label]), g.style, 'onchange="RetosUI.setGen(\'style\',this.value);RetosUI.setGen(\'category\',\'mixed\')"')}</label>
       <label class="f">Categoría${sel("rg-cat", CAT_OPTS(), g.category, 'onchange="RetosUI.setGen(\'category\',this.value)"')}</label>
       <label class="f">Dificultad${sel("rg-diff", DIFF_OPTS, g.difficulty, 'onchange="RetosUI.setGen(\'difficulty\',this.value)"')}</label>
       ${g.format !== "short" ? `<label class="f">Duración del largo (min)<input type="number" id="rg-min" min="2" max="20" step="0.5" value="${g.minutes || cfg.long_minutes}" onchange="RetosUI.setGen('minutes',+this.value)"></label>` : ""}
@@ -95,7 +98,7 @@ async function refreshSoundStatus() {
   const el = document.getElementById("rg-sound"); if (!el) return;
   const id = RS.gen.channel; const lib = await loadLib(id);
   const sfx = E.SOUNDS.filter((s) => libGet(id, "sfx", s.code)?.url).length, mus = E.MUSIC.filter((m) => libGet(id, "music", m.code)?.url).length;
-  el.innerHTML = `Perfil sonoro del canal: <b>${sfx}/12</b> efectos · <b>${mus}/3</b> músicas guardados${sfx < 12 || mus < 3 ? " · lo que falte se genera una sola vez al montar" : ""}. <a href="#" onclick="openChannel('${id}');return false">Editar</a>`;
+  el.innerHTML = `Perfil sonoro del canal: <b>${sfx}/${E.SOUNDS.length}</b> efectos · <b>${mus}/3</b> músicas guardados${sfx < E.SOUNDS.length || mus < 3 ? " · lo que falte se genera una sola vez al montar" : ""}. <a href="#" onclick="openChannel('${id}');return false">Editar</a>`;
 }
 // Se redibuja después del evento: si se hace dentro de un «change» que llega con el «blur», el navegador protesta
 function setGen(k, v) { RS.gen[k] = v; setTimeout(render, 0); }
@@ -110,7 +113,7 @@ async function generate() {
     const hist = await history(c.id);
     const formats = g.format === "both" ? ["long", "short"] : [g.format];
     const rows = formats.map((f) => {
-      const p = E.buildProject({ format: f, category: g.category, difficulty: g.difficulty, count: Number(g.count) || 0, minutes: Number(g.minutes) || 8, seconds: Number(g.seconds) || 30, history: hist, config: c.retos_config, seed: `${c.id}-${Date.now()}-${f}` });
+      const p = E.buildProject({ game_style: g.style, format: f, category: g.category, difficulty: g.difficulty, count: Number(g.count) || 0, minutes: Number(g.minutes) || 8, seconds: Number(g.seconds) || 30, history: hist, config: c.retos_config, seed: `${c.id}-${Date.now()}-${f}` });
       p.challenges.forEach((x) => hist.push(x.signature));
       return { channel_id: c.id, engine: "challenges", status: "script_review", format: f, title: p.title, idea_title: p.title, retos: p, usage: {}, target_minutes: f === "long" ? Number(g.minutes) || 8 : null };
     });
@@ -142,7 +145,7 @@ function renderEditor(first) {
     <div id="rt-sum"></div>
     <div id="rt-list" class="list"></div>
     <div class="card"><div class="row" style="flex-wrap:wrap;gap:8px;align-items:flex-end">
-      <label class="f" style="margin:0">Categoría${sel("rt-add-cat", CAT_OPTS().slice(1), "odd")}</label>
+      <label class="f" style="margin:0">Categoría${sel("rt-add-cat", ALL_CATS(), P.game_style === "world" ? "maze" : "odd")}</label>
       <label class="f" style="margin:0">Dificultad${sel("rt-add-diff", DIFF_OPTS.slice(1), "medium")}</label>
       <button class="btn sm" onclick="RetosUI.add()">＋ Añadir reto</button>
     </div></div>`;
@@ -152,7 +155,7 @@ function renderEditor(first) {
   RS.player?.destroy();
   RS.player = new Player(document.getElementById("rt-canvas"), withChannel(P, c, short), c.id, { onTick: (t, d) => { const s = document.getElementById("rt-seek"), tm = document.getElementById("rt-time"); if (s) s.value = d ? Math.round((t / d) * 1000) : 0; if (tm) tm.textContent = `${fmtT(t)} / ${fmtT(d)}`; const b = document.getElementById("rt-play"); if (b) b.textContent = RS.player?.playing ? "❚❚ Pausa" : "▶ Reproducir"; } });
   renderList();
-  loadLib(c.id, true).then(() => { const lib = RS.lib[c.id] || []; const sfx = E.SOUNDS.filter((s) => lib.some((x) => x.kind === "sfx" && x.code === s.code && x.url)).length; const n = document.getElementById("rt-audio-note"); if (n) n.innerHTML = sfx < 12 ? `La previsualización suena con los ${sfx} efectos que ya tiene el canal. Los que faltan se generan una vez al montar, o antes en <a href="#" onclick="openChannel('${c.id}');return false">Identidad sonora</a>.` : "Se oye con la identidad sonora guardada del canal."; });
+  loadLib(c.id, true).then(() => { const lib = RS.lib[c.id] || []; const sfx = E.SOUNDS.filter((s) => lib.some((x) => x.kind === "sfx" && x.code === s.code && x.url)).length; const n = document.getElementById("rt-audio-note"); if (n) n.innerHTML = sfx < E.SOUNDS.length ? `La previsualización suena con los ${sfx} efectos que ya tiene el canal. Los que faltan se generan una vez al montar, o antes en <a href="#" onclick="openChannel('${c.id}');return false">Identidad sonora</a>.` : "Se oye con la identidad sonora guardada del canal."; });
 }
 const withChannel = (p, c, short) => ({ ...p, format: short ? "short" : "long", config: E.mergeConfig(c.retos_config), theme: p.theme || c.theme || {} });
 function summary() {
@@ -204,12 +207,12 @@ async function save(showToast) {
 const cfgOf = () => E.mergeConfig(ch(S.open.v.channel_id).retos_config);
 const ops = {
   set(i, k, val) { const c = RS.edit.project.challenges[i]; c[k] = val; changed(); },
-  setDiff(i, d) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, mechanic: c.mechanic, difficulty: d, config: cfgOf() }), id: c.id }; changed(); },
-  regen(i) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, difficulty: c.difficulty, config: cfgOf() }), id: c.id }; changed(); toast("Reto regenerado: el resto no cambia"); },
+  setDiff(i, d) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, mechanic: c.mechanic, difficulty: d, config: cfgOf(), format: S.open?.v?.format }), id: c.id }; changed(); },
+  regen(i) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, difficulty: c.difficulty, config: cfgOf(), format: S.open?.v?.format }), id: c.id }; changed(); toast("Reto regenerado: el resto no cambia"); },
   reshuffle(i) { RS.edit.project.challenges[i] = E.reshuffle(RS.edit.project.challenges[i]); changed(); },
   move(i, d) { const a = RS.edit.project.challenges, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; changed(); },
   remove(i) { RS.edit.project.challenges.splice(i, 1); changed(); },
-  add() { const c = E.makeChallenge({ category: $("#rt-add-cat").value, difficulty: $("#rt-add-diff").value, config: cfgOf() }); const a = RS.edit.project.challenges; const k = E.DIFFS.indexOf(c.difficulty); // Detrás del último reto de su dificultad o de una menor
+  add() { const c = E.makeChallenge({ category: $("#rt-add-cat").value, difficulty: $("#rt-add-diff").value, config: cfgOf(), format: S.open?.v?.format }); const a = RS.edit.project.challenges; const k = E.DIFFS.indexOf(c.difficulty); // Detrás del último reto de su dificultad o de una menor
     let at = 0; a.forEach((x, j) => { if (E.DIFFS.indexOf(x.difficulty) <= k) at = j + 1; }); a.splice(at, 0, c); changed(); toast(`Añadido en la posición ${at + 1}`); },
 };
 function jump(i) { const tl = RS.player?.tl; const s = tl?.segments.find((x) => x.type === "challenge" && x.index === i); if (s) RS.player.seek(s.start + 0.01); document.getElementById("rt-canvas")?.scrollIntoView({ behavior: "smooth", block: "center" }); }

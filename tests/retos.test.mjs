@@ -11,7 +11,7 @@ for (const m of mechs) for (const d of E.DIFFS) {
     const v = E.validateChallenge(c); ok(v.ok, `${m}/${d}#${i}: ${v.errors.join(", ")}`); sigs.add(c.signature); n++;
     ok(c.question && c.question.length > 3, `${m} sin pregunta`);
   }
-  ok(sigs.size > n * (m.startsWith("odd_") ? 0.4 : 0.6) || ["flags"].includes(m), `${m}/${d}: poca variedad (${sigs.size}/${n})`);
+  ok(sigs.size > n * (m.startsWith("odd_") ? 0.4 : m === "machine" ? (d === "easy" ? 0.1 : 0.3) : 0.6) || ["flags"].includes(m), `${m}/${d}: poca variedad (${sigs.size}/${n})`);
 }
 // 2) La validación detecta respuestas incorrectas
 for (const m of mechs) {
@@ -21,6 +21,9 @@ for (const m of mechs) {
   if ("option" in bad.answer) bad.answer.option = (bad.answer.option + 1) % 4;
   else if ("at" in bad.answer) { bad.data.at = (bad.data.at + 1) % 5; }
   else if ("diffs" in bad.answer) bad.answer.diffs = bad.answer.diffs.slice(1);
+  else if ("entrance" in bad.answer) bad.answer.entrance = (bad.answer.entrance + 1) % 3;
+  else if ("bucket" in bad.answer) bad.answer.bucket = (bad.answer.bucket + 1) % (bad.data.levels + 1);
+  else if ("object" in bad.answer) { bad.data.items.find((i) => i.kind === "lamp").err = "x"; }
   ok(!E.validateChallenge(bad).ok, `${m}: la validación no detecta una respuesta manipulada`);
 }
 // 3) Proyecto largo de 25 retos progresivo y Short automático
@@ -63,6 +66,19 @@ if (canvasMod) {
     for (let t = 0; t < t2.duration; t += 0.5) { drawFrame(ctx, W, H, p, t2, t); const b = cv.toBuffer("raw"); if (prev && b.equals(prev)) same++; prev = b; n++; }
     ok(same < n * 0.2, `${style}/${format}: ${same} de ${n} fotogramas idénticos (¿lienzo bloqueado?)`);
   }
+}
+// 8) Playable World: la animación sale de la misma simulación que la respuesta
+const W = await import("../web/retos/world.js");
+for (let i = 0; i < 60; i++) {
+  const d = E.DIFFS[i % 4], f = i % 2 ? "long" : "short";
+  const m = E.makeChallenge({ category: "maze", mechanic: "maze", difficulty: d, seed: `wm${i}`, format: f }), ms = W.mazeScript(m), win = ms.s.runs[ms.s.winner];
+  ok(ms.s.winner === m.answer.entrance && win.path[0][0] === m.data.entrances[m.answer.entrance] && win.path[0][1] === 0 && win.path.at(-1)[0] === m.data.goal && win.path.at(-1)[1] === m.data.h - 1, "laberinto: la bola no recorre el camino de la respuesta");
+  const k = E.makeChallenge({ category: "machine", mechanic: "machine", difficulty: d, seed: `wk${i}` }), ks = W.machineScript(k);
+  ok(ks.s.runs.length === k.data.balls && ks.s.runs.every((r) => r.hits.length === k.data.levels) && ks.s.last === k.answer.bucket, "máquina: la simulación no coincide con la respuesta");
+  ok(ks.balls.every((b, j) => j === 0 || b.start >= ks.balls[j - 1].landAt), "máquina: las bolas se solapan");
+  const pr = { game_style: "world", format: f, challenges: [m, k, E.makeChallenge({ category: "error", mechanic: "room_error", difficulty: d, seed: `wr${i}` })], config: {} }, tw = E.timeline(pr);
+  ok(tw.events.every((e) => e.t >= 0 && e.t <= tw.duration), "Playable World: sonido fuera del vídeo");
+  ok(tw.segments.filter((x) => x.type === "map").length === 2 && tw.segments[0].type === "intro", "Playable World: faltan la portada o el mapa");
 }
 console.log(fail ? `\n${fail} FALLOS` : "\nTodo correcto");
 process.exit(fail ? 1 : 0);

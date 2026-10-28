@@ -24,10 +24,33 @@ export function run(cmd, args, { onStderr } = {}) {
   });
 }
 
+// Wikimedia limita las descargas seguidas (429): sus archivos se piden de uno en uno, con pausa y reintentos
+const UA = { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let wikiChain = Promise.resolve();
+const isWiki = (url) => /(^|\.)wiki(media|pedia)\.org\//.test(url);
+export async function fetchRetry(url) {
+  const go = async () => {
+    let last = "";
+    for (let i = 0; i < 6; i++) {
+      try {
+        const r = await fetch(url, { headers: UA });
+        if (r.ok && r.body) return r;
+        last = String(r.status);
+        if (![429, 500, 502, 503, 504].includes(r.status)) break;
+        const ra = Number(r.headers.get("retry-after"));
+        await sleep(Number.isFinite(ra) && ra > 0 ? Math.min(ra, 30) * 1000 : 1500 * 2 ** i);
+      } catch (e) { last = e.message; await sleep(1000 * 2 ** i); }
+    }
+    throw new Error(`No se pudo descargar ${url.slice(0, 120)} (${last})`);
+  };
+  if (!isWiki(url)) return go();
+  const p = wikiChain.then(async () => { const r = await go(); await sleep(350); return r; });
+  wikiChain = p.catch(() => {});
+  return p;
+}
 async function download(url, file) {
-  // Wikimedia y otros archivos exigen identificarse con un User-Agent propio
-  const r = await fetch(url, { headers: { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" } });
-  if (!r.ok || !r.body) throw new Error(`No se pudo descargar ${url.slice(0, 120)} (${r.status})`);
+  const r = await fetchRetry(url);
   await pipeline(Readable.fromWeb(r.body), createWriteStream(file));
   return file;
 }

@@ -2,14 +2,13 @@
 import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { run } from "./render.js";
+import { run, fetchRetry } from "./render.js";
 
 const UA = { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" };
 const FONT = ["/usr/share/fonts/truetype/montserrat/Montserrat-ExtraBold.ttf", path.resolve("fonts/Montserrat-ExtraBold.ttf")].find((f) => existsSync(f));
 
 async function fetchTo(url, file) {
-  const r = await fetch(url, { headers: UA });
-  if (!r.ok) throw new Error(`No se pudo descargar ${url.slice(0, 120)} (${r.status})`);
+  const r = await fetchRetry(url);
   await writeFile(file, Buffer.from(await r.arrayBuffer()));
   return file;
 }

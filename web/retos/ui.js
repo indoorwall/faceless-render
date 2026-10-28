@@ -204,12 +204,12 @@ async function save(showToast) {
 const cfgOf = () => E.mergeConfig(ch(S.open.v.channel_id).retos_config);
 const ops = {
   set(i, k, val) { const c = RS.edit.project.challenges[i]; c[k] = val; changed(); },
-  setDiff(i, d) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, mechanic: c.mechanic, difficulty: d, config: cfgOf() }), id: c.id }; changed(); },
-  regen(i) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, difficulty: c.difficulty, config: cfgOf() }), id: c.id }; changed(); toast("Reto regenerado: el resto no cambia"); },
+  setDiff(i, d) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, mechanic: c.mechanic, difficulty: d, config: cfgOf(), format: S.open?.v?.format }), id: c.id }; changed(); },
+  regen(i) { const c = RS.edit.project.challenges[i]; RS.edit.project.challenges[i] = { ...E.makeChallenge({ category: c.category, difficulty: c.difficulty, config: cfgOf(), format: S.open?.v?.format }), id: c.id }; changed(); toast("Reto regenerado: el resto no cambia"); },
   reshuffle(i) { RS.edit.project.challenges[i] = E.reshuffle(RS.edit.project.challenges[i]); changed(); },
   move(i, d) { const a = RS.edit.project.challenges, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; changed(); },
   remove(i) { RS.edit.project.challenges.splice(i, 1); changed(); },
-  add() { const c = E.makeChallenge({ category: $("#rt-add-cat").value, difficulty: $("#rt-add-diff").value, config: cfgOf() }); const a = RS.edit.project.challenges; const k = E.DIFFS.indexOf(c.difficulty); // Detrás del último reto de su dificultad o de una menor
+  add() { const c = E.makeChallenge({ category: $("#rt-add-cat").value, difficulty: $("#rt-add-diff").value, config: cfgOf(), format: S.open?.v?.format }); const a = RS.edit.project.challenges; const k = E.DIFFS.indexOf(c.difficulty); // Detrás del último reto de su dificultad o de una menor
     let at = 0; a.forEach((x, j) => { if (E.DIFFS.indexOf(x.difficulty) <= k) at = j + 1; }); a.splice(at, 0, c); changed(); toast(`Añadido en la posición ${at + 1}`); },
 };
 function jump(i) { const tl = RS.player?.tl; const s = tl?.segments.find((x) => x.type === "challenge" && x.index === i); if (s) RS.player.seek(s.start + 0.01); document.getElementById("rt-canvas")?.scrollIntoView({ behavior: "smooth", block: "center" }); }

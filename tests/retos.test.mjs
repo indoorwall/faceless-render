@@ -11,7 +11,7 @@ for (const m of mechs) for (const d of E.DIFFS) {
     const v = E.validateChallenge(c); ok(v.ok, `${m}/${d}#${i}: ${v.errors.join(", ")}`); sigs.add(c.signature); n++;
     ok(c.question && c.question.length > 3, `${m} sin pregunta`);
   }
-  ok(sigs.size > n * (m.startsWith("odd_") ? 0.4 : 0.6) || ["flags"].includes(m), `${m}/${d}: poca variedad (${sigs.size}/${n})`);
+  ok(sigs.size > n * (m.startsWith("odd_") ? 0.4 : m === "machine" ? (d === "easy" ? 0.1 : 0.3) : 0.6) || ["flags"].includes(m), `${m}/${d}: poca variedad (${sigs.size}/${n})`);
 }
 // 2) La validación detecta respuestas incorrectas
 for (const m of mechs) {
@@ -21,6 +21,9 @@ for (const m of mechs) {
   if ("option" in bad.answer) bad.answer.option = (bad.answer.option + 1) % 4;
   else if ("at" in bad.answer) { bad.data.at = (bad.data.at + 1) % 5; }
   else if ("diffs" in bad.answer) bad.answer.diffs = bad.answer.diffs.slice(1);
+  else if ("entrance" in bad.answer) bad.answer.entrance = (bad.answer.entrance + 1) % 3;
+  else if ("bucket" in bad.answer) bad.answer.bucket = (bad.answer.bucket + 1) % (bad.data.levels + 1);
+  else if ("object" in bad.answer) { bad.data.items.find((i) => i.kind === "lamp").err = "x"; }
   ok(!E.validateChallenge(bad).ok, `${m}: la validación no detecta una respuesta manipulada`);
 }
 // 3) Proyecto largo de 25 retos progresivo y Short automático

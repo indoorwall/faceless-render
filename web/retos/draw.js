@@ -1,7 +1,9 @@
 // Motor B — dibujo 2D de los retos con la API Canvas (igual en el navegador y en el servidor con node-canvas).
 // Estética de videojuego casual: fondos claros por tipo de juego, tarjetas blancas con sombra suave,
 // figuras grandes, temporizador limpio y revelaciones progresivas. Nada de imágenes generadas.
-import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr } from "./engine.js";
+import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr, solvedAt } from "./engine.js";
+import { drawWorldScene, isWorldMechanic } from "./world-draw.js";
+import { drawPix } from "./pix.js";
 
 const LETTERS = ["A", "B", "C", "D"];
 let FONT = "Montserrat, 'Arial Black', sans-serif";
@@ -117,8 +119,8 @@ function background(ctx, W, H, P, col, accent) {
 export function frameLayout(W, H) {
   const v = H > W;
   // Short: cabecera arriba (fuera de la barra de YouTube), pregunta grande, reto a pantalla casi completa y los últimos 330 px libres para la interfaz de Shorts
-  if (v) return { v, W, H, u: 1, hud: { x: 44, y: 182 }, timer: { cx: W - 122, cy: 188, r: 78 }, q: { x: W / 2, y: 352, size: 72, maxW: 980 }, box: { x: 36, y: 452, w: W - 72, h: H - 452 - 330 }, optsH: 340, optsFigH: 400, cols: 2, gap: 22 };
-  return { v, W, H, u: 1, hud: { x: 44, y: 46 }, timer: { cx: W - 104, cy: 92, r: 68 }, q: { x: W / 2 - 30, y: 122, size: 58, maxW: 1380 }, box: { x: 56, y: 172, w: W - 112, h: H - 172 - 50 }, optsH: 150, optsFigH: 200, cols: 4, gap: 22 };
+  if (v) return { v, W, H, u: 1, hud: { x: 44, y: 182 }, timer: { cx: W - 122, cy: 188, r: 78 }, q: { x: W / 2, y: 352, size: 72, maxW: 980 }, box: { x: 36, y: 452, w: W - 72, h: H - 452 - 330 }, wq: { x: W / 2, y: 330, size: 80, maxW: 1000 }, wbox: { x: 26, y: 410, w: W - 52, h: H - 410 - 300 }, optsH: 340, optsFigH: 400, cols: 2, gap: 22 };
+  return { v, W, H, u: 1, hud: { x: 44, y: 46 }, timer: { cx: W - 104, cy: 92, r: 68 }, q: { x: W / 2 - 30, y: 122, size: 58, maxW: 1380 }, box: { x: 56, y: 172, w: W - 112, h: H - 172 - 50 }, wq: { x: W / 2 - 30, y: 122, size: 64, maxW: 1380 }, wbox: { x: 48, y: 168, w: W - 96, h: H - 168 - 44 }, optsH: 150, optsFigH: 200, cols: 4, gap: 22 };
 }
 const revealN = (c) => (c.mechanic === "differences" ? c.answer.diffs.length : 1);
 const hasOptions = (c) => "option" in (c.answer || {});
@@ -421,19 +423,33 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   // Pregunta: grande y oscura; durante el «¡TIEMPO!» la sustituye el aviso (no tapa el reto)
   const tk = seg.timeout && t >= seg.timeout[0] && t < seg.reveal[0] + 0.35 ? (t - seg.timeout[0]) / (seg.reveal[0] + 0.35 - seg.timeout[0]) : -1;
   const qk = eOut(clamp(inK * 1.8));
-  ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(L.q.x, L.q.y - (1 - qk) * 24);
-  const lines = L.v ? wrap(ctx, c.question.toUpperCase(), L.q.maxW, L.q.size).slice(0, 2) : [c.question.toUpperCase()], qs = lines.length > 1 ? L.q.size * 0.9 : L.q.size;
-  lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, L.q.maxW, P.ink));
+  const world = isWorldMechanic(c.mechanic), Q = world ? L.wq : L.q;
+  ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(Q.x, Q.y - (1 - qk) * 24);
+  const lines = L.v ? wrap(ctx, c.question.toUpperCase(), Q.maxW, Q.size).slice(0, 2) : [c.question.toUpperCase()], qs = lines.length > 1 ? Q.size * 0.82 : Q.size;
+  // Playable World: al resolverse, la pregunta se convierte en la solución («ENTRADA C», «¡LA VELA…!»)
+  const solvedT = world && seg.reveal ? seg.reveal[0] + solvedAt(c) : Infinity, sk = clamp((t - solvedT) / 0.3);
+  if (sk > 0 && c.answer?.label) {
+    ctx.globalAlpha = 1; const ls = wrap(ctx, c.answer.label.toUpperCase(), Q.maxW, Q.size * 0.9).slice(0, 2), s2 = (ls.length > 1 ? Q.size * 0.72 : Q.size * 0.9) * eBack(sk);
+    ls.forEach((ln, i) => fitText(ctx, ln, 0, (i - (ls.length - 1) / 2) * s2 * 1.08, s2, Q.maxW, P.dark ? P.ok : mix(P.ok, "#000000", 0.25)));
+  } else lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, Q.maxW, P.ink));
   if (seg.memo && t < seg.memo[1]) text(ctx, (c.instructions || "¡Memoriza!").toUpperCase(), 0, qs * (lines.length * 0.55 + 0.45), qs * 0.48, P.dark ? P.teal : mix(P.teal, "#000000", 0.15));
   ctx.restore();
-  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(L.q.x, L.q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); text(ctx, "¡TIEMPO!", 0, 4, 66, "#FFFFFF"); ctx.restore(); }
+  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(Q.x, Q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); text(ctx, "¡TIEMPO!", 0, 4, 66, "#FFFFFF"); ctx.restore(); }
   // Reto
+  if (world) {
+    // Playable World: la escena ocupa casi todo el fotograma y se anima con la simulación del reto
+    const wb = L.wbox, ak = eOut(clamp((t - seg.intro[0]) / 0.7));
+    ctx.save(); ctx.globalAlpha *= ak; ctx.translate(0, (1 - ak) * 40);
+    drawWorldScene(ctx, c, wb, L, P, { t, rt: st.revealAt != null ? t - st.revealAt : null, play: clamp((t - seg.play[0]) / (seg.play[1] - seg.play[0])), timeout: t >= seg.play[1] });
+    ctx.restore();
+  } else {
   const b = contentBox(L, c);
   TPL[TPL_OF[c.mechanic]](ctx, c, b, L, P, st);
   if (hasOptions(c) && (!seg.memo || t >= seg.play[0])) options(ctx, c, L, P, { ...st, appear: seg.memo ? clamp((t - seg.play[0]) / 0.8) : st.appear });
+  }
   // Temporizador (o barra de memorizar)
   const T = seg.play[1] - seg.play[0];
-  const ptsK = st.revealAt != null ? clamp((t - (st.revealAt + REVEAL_FIRST + (revealN(c) - 1) * REVEAL_STEP + 0.6)) / 1.0) : 0;
+  const ptsK = st.revealAt != null ? clamp((t - (st.revealAt + solvedAt(c) + 0.6)) / 1.0) : 0;
   if (seg.memo && t < seg.memo[1]) {
     const mk = 1 - clamp((t - seg.memo[0]) / (seg.memo[1] - seg.memo[0] - 0.6)), bw = L.v ? 300 : 360, bx = L.timer.cx - bw + L.timer.r, by = L.timer.cy - 12;
     rrect(ctx, bx, by, bw, 24, 12); ctx.fillStyle = P.line; ctx.fill(); rrect(ctx, bx, by, Math.max(24, bw * mk), 24, 12); ctx.fillStyle = P.teal; ctx.fill();

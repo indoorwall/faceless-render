@@ -82,6 +82,8 @@ export const SOUNDS = [
   { code: "S10", name: "Victoria", emoji: "🏆", event: "Final del vídeo", group: "reward", seconds: 3, prompt: "victory fanfare, short triumphant synth and brass flourish, game show winner, joyful, clean ending" },
   { code: "S11", name: "Transición", emoji: "🔀", event: "Cambio de escena", group: "transition", seconds: 0.8, prompt: "fast smooth swoosh transition, airy, modern UI, subtle" },
   { code: "S12", name: "Error", emoji: "❌", event: "Solo si el formato identifica un fallo", group: "sfx", seconds: 0.8, prompt: "soft wrong answer sound, gentle low two-note descending synth, quiz game, not harsh" },
+  // Playable World: acciones de los juegos (rodar, palancas, puertas…)
+  ...WORLD_SOUNDS,
 ];
 export const MUSIC = [
   { code: "M1", mood: "normal", name: "Normal", emoji: "🎵", seconds: 45, prompt: "light minimal electronic background music for a quiz game, playful and modern, steady pleasant groove around 110 bpm, soft synths and plucks, no vocals, seamless loop, leaves room for sound effects" },
@@ -103,17 +105,15 @@ export const CATEGORIES = {
   observation: { label: "Observación", emoji: "👁️", mechanics: ["count_shapes"] },
 };
 export const CATEGORY_ORDER = ["odd", "differences", "memory", "logic", "sequence", "culture", "hidden", "silhouette", "observation"];
+// Playable World: pequeños videojuegos (laberintos, máquinas, escenas con un error…)
+Object.assign(CATEGORIES, WORLD_CATEGORIES);
+export { WORLD_ORDER };
+export const GAME_STYLES = { classic: { label: "Clásico (cuadrículas y opciones)", cats: CATEGORY_ORDER }, world: { label: "Playable World (minijuegos animados)", cats: WORLD_ORDER } };
 
 // ---------- Azar reproducible ----------
-export function hashStr(s) { let h = 1779033703 ^ s.length; for (let i = 0; i < s.length; i++) { h = Math.imul(h ^ s.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); } return (h >>> 0); }
-export function rng(seed) {
-  let a = typeof seed === "number" ? seed >>> 0 : hashStr(String(seed));
-  const r = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-  r.int = (a2, b) => a2 + Math.floor(r() * (b - a2 + 1));
-  r.pick = (arr) => arr[Math.floor(r() * arr.length)];
-  r.shuffle = (arr) => { const x = [...arr]; for (let i = x.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [x[i], x[j]] = [x[j], x[i]]; } return x; };
-  return r;
-}
+import { hashStr, rng } from "./util.js";
+import { WORLD, WORLD_CATEGORIES, WORLD_ORDER, WORLD_SOUNDS } from "./world.js";
+export { hashStr, rng };
 const di = (d) => Math.max(0, DIFFS.indexOf(d));
 
 // ---------- Iconos programáticos (los dibuja draw.js) ----------
@@ -437,6 +437,7 @@ const VAL = {
   },
   count_shapes(c) { const { items, icon, color, options } = c.data; const n = items.filter((x) => x.icon === icon && x.color === color).length; return [options[c.answer.option] === n || "La opción marcada no es el número real", options.filter((x) => x === n).length === 1 || "Varias opciones correctas", noOverlap(items, 0.06) || "Hay figuras que se tocan"]; },
 };
+for (const [m, w] of Object.entries(WORLD)) { GEN[m] = w.gen; VAL[m] = w.val; }
 function noOverlap(items, minD) { for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) if (Math.hypot(items[i].x - items[j].x, items[i].y - items[j].y) < minD * 0.98) return false; return true; }
 
 export function validateChallenge(c) {
@@ -451,7 +452,7 @@ export function validateChallenge(c) {
 
 // ---------- Crear retos ----------
 let _n = 0;
-export function makeChallenge({ category, mechanic, difficulty, seed, config }) {
+export function makeChallenge({ category, mechanic, difficulty, seed, config, format }) {
   const cfg = mergeConfig(config);
   const r = rng(seed ?? `${Date.now()}-${_n++}-${Math.random()}`);
   const cat = category && CATEGORIES[category] ? category : r.pick(CATEGORY_ORDER);
@@ -459,8 +460,8 @@ export function makeChallenge({ category, mechanic, difficulty, seed, config }) 
   const d = DIFFS.includes(difficulty) ? difficulty : "medium";
   for (let attempt = 0; attempt < 25; attempt++) {
     const s = `${seed ?? Math.random()}#${attempt}`;
-    const g = GEN[mech](rng(s), d);
-    const c = { id: `c${hashStr(s + mech).toString(36)}`, category: cat, mechanic: mech, difficulty: d, seed: s, time: cfg.times[d] + (mech === "differences" ? 6 : mech === "hidden_object" || mech === "logic_equations" ? 3 : 0), points: cfg.points[d], layout_seed: 0, ...g };
+    let g; try { g = GEN[mech](rng(s), d, { format }); } catch (_) { continue; } // generador sin solución con esta semilla: se prueba otra
+    const c = { ...(WORLD[mech] && format ? { format } : {}), id: `c${hashStr(s + mech).toString(36)}`, category: cat, mechanic: mech, difficulty: d, seed: s, time: WORLD[mech] ? WORLD[mech].time[DIFFS.indexOf(d)] : cfg.times[d] + (mech === "differences" ? 6 : mech === "hidden_object" || mech === "logic_equations" ? 3 : 0), points: cfg.points[d], layout_seed: 0, ...g };
     c.signature = signature(c);
     const v = validateChallenge(c);
     if (v.ok) return { ...c, validation: { ok: true, errors: [], engine: ENGINE_VERSION } };
@@ -475,7 +476,7 @@ export function buildProject(opts) {
   const cfg = mergeConfig(opts.config);
   const format = opts.format === "short" ? "short" : "long";
   const r = rng(opts.seed ?? `${Date.now()}-${Math.random()}`);
-  const cats = opts.category && opts.category !== "mixed" ? [opts.category] : (opts.categories?.length ? opts.categories : CATEGORY_ORDER);
+  const cats = opts.category && opts.category !== "mixed" ? [opts.category] : (opts.categories?.length ? opts.categories : (GAME_STYLES[opts.game_style] || GAME_STYLES.classic).cats);
   const recent = new Set(opts.history || []);
   const diffMode = opts.difficulty || "progressive";
   let n = Number(opts.count) || 0;
@@ -486,10 +487,10 @@ export function buildProject(opts) {
   const make = (diff, i) => {
     for (let t = 0; t < 8; t++) {
       const cat = order[(i + t) % order.length];
-      const c = makeChallenge({ category: cat, difficulty: diff, seed: `${opts.seed ?? "p"}-${i}-${t}-${r()}`, config: cfg });
+      const c = makeChallenge({ category: cat, difficulty: diff, seed: `${opts.seed ?? "p"}-${i}-${t}-${r()}`, config: cfg, format });
       if (!recent.has(c.signature)) { recent.add(c.signature); return c; }
     }
-    return makeChallenge({ category: r.pick(cats), difficulty: diff, seed: `${r()}`, config: cfg });
+    return makeChallenge({ category: r.pick(cats), difficulty: diff, seed: `${r()}`, config: cfg, format });
   };
   let challenges = [];
   if (n > 0) challenges = plan(n).map(make);
@@ -521,9 +522,13 @@ const fr = (t) => Math.round(t * FPS) / FPS;
 // Revelación: la primera solución aparece a REVEAL_FIRST s y las siguientes cada REVEAL_STEP s (cada una con su sonido)
 export const REVEAL_FIRST = 0.35, REVEAL_STEP = 0.45;
 export function revealCount(c) { return c.mechanic === "differences" ? (c.answer?.diffs || []).length : 1; }
+// Playable World: la revelación es la acción simulada (la bola recorre el camino, la máquina se activa…)
+export function worldReveal(c) { return WORLD[c.mechanic] ? WORLD[c.mechanic].reveal(c) : null; }
+// Momento (desde el inicio de la revelación) en que la solución queda a la vista: aquí suenan el acierto y los puntos
+export function solvedAt(c) { const w = worldReveal(c); return w ? w.solved : REVEAL_FIRST + (revealCount(c) - 1) * REVEAL_STEP; }
 export function timingOf(c, short) {
-  const n = revealCount(c);
-  const intro = short ? 1.0 : 1.4, memo = c.mechanic === "memory_missing" ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = REVEAL_FIRST + (n - 1) * REVEAL_STEP + 2.0;
+  const n = revealCount(c), w = worldReveal(c);
+  const intro = short ? 1.0 : 1.4, memo = c.mechanic === "memory_missing" ? c.memo + 0.8 : 0, play = c.time, timeout = 0.6, reveal = w ? w.dur : REVEAL_FIRST + (n - 1) * REVEAL_STEP + 2.0;
   const explain = c.explanation && c.show_explanation !== false ? Math.min(4, 1.6 + c.explanation.length / 40) : 0, out = 0.5;
   return { intro, memo, play, timeout, reveal, explain, out, total: intro + memo + play + timeout + reveal + explain + out };
 }
@@ -585,9 +590,10 @@ export function timeline(project, opts = {}) {
     ev(s.timeout[0], "S06");
     s.reveal = [fr(x), fr(x += tm.reveal)];
     // Cada solución con su sonido: la primera con «respuesta correcta», las siguientes con uno breve
-    const nr = revealCount(c);
-    for (let k = 0; k < nr; k++) ev(s.reveal[0] + REVEAL_FIRST + k * REVEAL_STEP, k === 0 ? "S05" : "S09", k === 0 ? 1 : 0.65);
-    ev(s.reveal[0] + REVEAL_FIRST + (nr - 1) * REVEAL_STEP + 0.6, "S09", 0.8); // +N puntos
+    const nr = revealCount(c), w = worldReveal(c);
+    if (w) { for (const e of w.events) ev(s.reveal[0] + e.t, e.code, e.gain ?? 1); ev(s.reveal[0] + w.solved, "S05"); }
+    else for (let k = 0; k < nr; k++) ev(s.reveal[0] + REVEAL_FIRST + k * REVEAL_STEP, k === 0 ? "S05" : "S09", k === 0 ? 1 : 0.65);
+    ev(s.reveal[0] + solvedAt(c) + 0.6, "S09", 0.8); // +N puntos
     if (tm.explain) { s.explain = [fr(x), fr(x += tm.explain)]; if (narr === "moderate" || narr === "full") say(s.explain[0] + 0.1, c.explanation); }
     s.out = [fr(x), fr(x += tm.out)];
     if (i < total - 1) ev(s.out[0], "S11");
@@ -639,7 +645,7 @@ export function reshuffle(c, seed) {
     x.answer.option = idx.indexOf(c.answer.option);
     if (x.mechanic === "memory_missing") x.data.after = r.shuffle(x.data.after);
   } else {
-    const n = makeChallenge({ category: x.category, mechanic: x.mechanic, difficulty: x.difficulty, seed: `${seed ?? Math.random()}-pos` });
+    const n = makeChallenge({ category: x.category, mechanic: x.mechanic, difficulty: x.difficulty, seed: `${seed ?? Math.random()}-pos`, format: x.format });
     return { ...n, id: x.id, time: x.time, points: x.points };
   }
   x.signature = signature(x);

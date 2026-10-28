@@ -584,8 +584,11 @@ function renderSheet(first){
   const v=o.v, c=ch(v.channel_id);
   const usage=v.usage||{};
   const k=n=>n>=1000?Math.round(n/1000)+"k":String(n||0);
-  const byModel=["opus","sonnet","haiku"].filter(t=>usage[t+"_in"]).map(t=>`${t[0].toUpperCase()+t.slice(1)} ${k(usage[t+"_in"]+(usage[t+"_out"]||0))}`).join(" · ");
-  const usageTxt=`${byModel?`Claude: ${byModel} tokens${usage.web_searches?` · ${usage.web_searches} búsquedas`:""} · `:""}${fmtN((usage.claude_in||0)+(usage.claude_out||0))} tokens · ${fmtN(usage.tts_chars||0)} caracteres de voz · ${usage.music_sec||0} s de música · ${usage.sfx||0} efectos · ${usage.ai_images||0} imágenes IA`;
+  // Precios oficiales por millón de tokens (entrada, salida); por lotes, la mitad
+  const PR={opus:[4,20],sonnet:[2,10],haiku:[0.1,0.5]};
+  const byModel=["opus","sonnet","haiku"].filter(t=>usage[t+"_in"]||usage[t+"_batch_in"]).map(t=>`${t[0].toUpperCase()+t.slice(1)} ${k((usage[t+"_in"]||0)+(usage[t+"_out"]||0)+(usage[t+"_batch_in"]||0)+(usage[t+"_batch_out"]||0))}${usage[t+"_batch_in"]?" (lotes)":""}`).join(" · ");
+  const claudeUsd=["opus","sonnet","haiku"].reduce((a,t)=>a+((usage[t+"_in"]||0)*PR[t][0]+(usage[t+"_out"]||0)*PR[t][1]+((usage[t+"_batch_in"]||0)*PR[t][0]+(usage[t+"_batch_out"]||0)*PR[t][1])/2)/1e6,0)+(usage.web_searches||0)*0.01;
+  const usageTxt=`${byModel?`Claude ≈ ${claudeUsd.toFixed(2)} $ (${byModel} tokens${usage.web_searches?` · ${usage.web_searches} búsquedas`:""}) · `:""}${fmtN((usage.claude_in||0)+(usage.claude_out||0))} tokens · ${fmtN(usage.tts_chars||0)} caracteres de voz · ${usage.music_sec||0} s de música · ${usage.sfx||0} efectos · ${usage.ai_images||0} imágenes IA`;
   let body="", foot="";
   if(v.status==="idea_review"){
     body=ideaCard(v); foot="";
@@ -637,7 +640,7 @@ function renderSheet(first){
     foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
   } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
     body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
-      <p class="why" style="margin:0">${{scripting:"Investigando y escribiendo el guion con fuentes verificadas, y revisándolo para que sea viral. Suele tardar 2–4 minutos.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
+      <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
       ${(()=>{ const urls=[...new Set(o.scenes.flatMap(sc=>(sc.shots||[]).filter(sh=>sh.media_url&&sh.media_kind==="image").map(sh=>sh.media_url).concat(sc.media_url&&sc.media_kind==="image"?[sc.media_url]:[])))]; return urls.length?`<div class="thumbs">${urls.map(u=>`<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div>`:""; })()}`;
   } else if(v.status==="failed"){
     body=`<div class="card" style="border-color:var(--bad)"><div class="label" style="color:var(--bad)">Qué ha fallado</div><div class="mono" style="word-break:break-word">${esc(v.error)}</div></div>`;

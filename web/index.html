@@ -441,7 +441,7 @@ async function run(fn, ok){
 async function load(){
   const [c,v,p,a,k,pr,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
-    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage,engine").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("channel_proposals").select("*").eq("status","pending").order("created_at",{ascending:false}),
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
@@ -470,6 +470,7 @@ function render(){
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
+  if(window.RetosUI && S.view==="hoy") RetosUI.refreshSoundStatus();
 }
 
 function authView(){
@@ -518,6 +519,7 @@ function viewHoy(){
       <div class="you"><span class="label">3 · Vídeos</span><b>${finals.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
       <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
     </div>
+    ${window.RetosUI?RetosUI.producerSection():""}
     ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>`
       <div class="card"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
       <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`).join("")}</div></section>`:""}
@@ -528,7 +530,7 @@ function viewHoy(){
         <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
     </section>
     <section><div class="sec-h"><h2>Guiones por revisar</h2><span class="mono">${scripts.length}</span></div>
-      ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">Revisar guion</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
+      ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
     </section>
     <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasRunning||S.jobs.some(j=>j.step==="refill_ideas")?`<span class="chip st-warn">Generando ideas…</span>`:""}</div>
       ${ideaGenerator()}
@@ -699,6 +701,7 @@ function renderSheet(first){
   const o=S.open; if(!o) return;
   if(o.kind==="channel") return renderChannelSheet(first);
   if(o.kind==="guide") return renderGuideSheet(first);
+  if(o.v?.engine==="challenges" && o.v.status==="script_review" && window.RetosUI) return RetosUI.renderEditor(first);
   // refrescar estado si cambió por realtime
   const live=S.videos.find(v=>v.id===o.v.id);
   if(!first && live && live.status!==o.v.status){ return openVideo(o.v.id); }
@@ -776,6 +779,7 @@ function renderSheet(first){
   const cost=costOf(usage);
   if(cost&&cost.total>=0.005) body += `<div style="font-size:13.5px"><b>Coste real: ${eur(cost.total)}</b> <span class="muted">(${cost.parts.map(([l,x])=>`${l} ${eur(x)}`).join(" · ")})</span></div>`;
   body += `<div class="muted mono" style="font-size:11.5px">Consumo: ${usageTxt}</div>`;
+  if(v.engine==="challenges" && window.RetosUI) body += RetosUI.reportLine(v);
   sheetShell(v.title||v.idea_title, `${chTag(v.channel_id)}${chip(v.status)}<span class="chip">${fmtLabel(v.format||c.format,c)}</span>`, body, foot);
   // edición en vivo del borrador de guion
   $("#sheet").querySelectorAll("[data-i]").forEach(el=>{
@@ -794,7 +798,7 @@ function renderSheet(first){
   });
   $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); $("#sheet").setAttribute("aria-hidden","false");
 }
-function closeSheet(){ S.open=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); $("#sheet").setAttribute("aria-hidden","true"); }
+function closeSheet(){ if(window.RetosUI) RetosUI.closeEditor(); S.open=null; $("#scrim").classList.remove("on"); $("#sheet").classList.remove("on"); $("#sheet").setAttribute("aria-hidden","true"); }
 $("#scrim").onclick=closeSheet;
 document.addEventListener("keydown",e=>{ if(e.key==="Escape" && S.open) closeSheet(); });
 
@@ -960,6 +964,7 @@ function renderChannelSheet(first){
   if(!first) return;
   const c=S.open.c;
   const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div><div class="card" id="learn-box" style="margin-top:10px">${learnHtml(c,S.open.learn)}</div>`:""}<div class="fgrid">
+    <label class="f full">Tipo de producción <small>Cada canal usa siempre su motor</small><select id="c-ptype"><option value="documentary" ${c.production_type!=="challenges"?"selected":""}>Documental / Narrativo</option><option value="challenges" ${c.production_type==="challenges"?"selected":""}>Retos / Juegos visuales</option></select></label>
     <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
     <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
     <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
@@ -975,7 +980,7 @@ function renderChannelSheet(first){
     <label class="f">Ideas por tanda<input type="number" id="c-ipr" min="1" max="10" value="${esc(c.ideas_per_run)}"></label>
     <label class="f" style="display:none">Exigencia del director <small>Interviene si el borrador saca menos</small><select id="c-dir">${[[7,"7/10 · interviene poco"],[8,"8/10 · equilibrado"],[9,"9/10 · casi siempre"],[11,"Siempre"]].map(([k,l])=>`<option value="${k}" ${Number(c.director_threshold??8)===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f full">Canales de referencia <small>IDs de canal (empiezan por UC), separados por comas</small><input type="text" id="c-refs" value="${esc((c.reference_channels||[]).join(", "))}" class="mono"></label>
-    <div class="full label" style="margin-top:6px">Sonido · ElevenLabs</div>
+    <div class="full label doc-only" style="margin-top:6px">Sonido · ElevenLabs</div>
     <label class="f">Música de fondo<select id="c-mmode">${[["video","Compuesta a medida para cada vídeo"],["channel","Tema propio del canal (se compone una vez)"],["url","Mi propio MP3"],["off","Sin música"]].map(([k,l])=>`<option value="${k}" ${(c.music_mode||"video")===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f">Volumen música (%)<input type="number" id="c-mvol" min="0" max="50" value="${esc(c.music_volume)}"></label>
     <label class="f full">Sello sonoro del canal <small>Género, instrumentos, mood. En inglés funciona mejor</small><textarea id="c-mstyle" rows="2" placeholder="dark cinematic documentary score, low strings, soft pulses, 80 BPM">${esc(c.music_style)}</textarea></label>
@@ -986,10 +991,17 @@ function renderChannelSheet(first){
     <label class="f">Privacidad al publicar<select id="c-priv">${[["private","Privado"],["unlisted","Oculto"],["public","Público"]].map(([k,l])=>`<option value="${k}" ${c.publish_privacy===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f">Estado<select id="c-status"><option value="active" ${c.status!=="paused"?"selected":""}>Activo</option><option value="paused" ${c.status==="paused"?"selected":""}>En pausa</option></select></label>
     <label class="check full"><input type="checkbox" id="c-auto" ${c.auto_ideas?"checked":""}> Ideas nuevas cada mañana desde el banco del canal (sin coste)</label>
+    ${c.production_type==="challenges"&&window.RetosUI?RetosUI.channelPanel(c):""}
   </div>`;
   const foot=`${c.id?`<button class="btn ghost danger" onclick="archiveChannel()">Archivar</button>`:""}${c.id?`<button class="btn" onclick="connectYT('${c.id}')">${c.youtube_connected?"Reconectar YouTube":"Conectar YouTube"}</button>`:""}<button class="btn pri" onclick="saveChannel()">${c.id?"Guardar":"Crear canal y pedir ideas"}</button>`;
   sheetShell(c.id?c.name:"Nuevo canal", c.id?`<span class="chip">${c.youtube_connected?"YouTube conectado":"Sin YouTube"}</span>`:"", body, foot);
   $("#c-mmode").onchange = (e) => { $("#c-music-w").hidden = e.target.value !== "url"; };
+  // Canal de retos: se ocultan los ajustes del motor documental y aparecen su identidad visual y sonora
+  const retosCh = c.production_type==="challenges";
+  ["c-topics","c-img","c-tone","c-style","c-refs","c-mmode","c-mvol","c-mstyle","c-music-w","c-sfx","c-sfxvol","c-ipr","c-auto","c-aud"].forEach(id=>{ const el=document.getElementById(id); const l=el&&(el.tagName==="LABEL"?el:el.closest("label")); if(l) l.hidden=retosCh; });
+  document.querySelectorAll(".doc-only,.guide-cta").forEach(e=>{ e.hidden=retosCh; });
+  $("#c-ptype").onchange = () => { Object.assign(S.open.c, { production_type:$("#c-ptype").value, name:$("#c-name").value, niche:$("#c-niche").value, color:$("#c-color").value, voice_id:$("#c-voice").value }); renderChannelSheet(true); };
+  if(retosCh && window.RetosUI) RetosUI.mountChannel(c);
   $("#scrim").classList.add("on"); $("#sheet").classList.add("on"); $("#sheet").setAttribute("aria-hidden","false");
 }
 async function saveChannel(){
@@ -1000,11 +1012,13 @@ async function saveChannel(){
     music_url:$("#c-music").value.trim()||null, music_volume:+$("#c-mvol").value||0, music_mode:$("#c-mmode").value, music_style:$("#c-mstyle").value.trim()||null,
     sfx_enabled:$("#c-sfx").checked, sfx_volume:+$("#c-sfxvol").value||0, publish_privacy:$("#c-priv").value, status:$("#c-status").value, auto_ideas:$("#c-auto").checked,
     topics:$("#c-topics").value.trim()||null, director_threshold:+$("#c-dir").value||8, ...($("#c-playbook")?{playbook:$("#c-playbook").value.trim()||null}:{}) };
+  row.production_type = $("#c-ptype").value;
+  if(row.production_type==="challenges"){ if(!row.niche) row.niche="Retos visuales y acertijos"; Object.assign(row, { auto_ideas:false, music_mode:"off", sfx_enabled:false }); const x=window.RetosUI&&RetosUI.collect(); if(x) Object.assign(row, x); }
   if(!row.name||!row.niche) return toast("El canal necesita nombre y nicho");
   await run(async()=>{
     if(c.id){ const {error}=await sb.from("channels").update(row).eq("id",c.id); if(error) throw error; }
     else { const {data,error}=await sb.from("channels").insert(row).select().single(); if(error) throw error;
-      await sb.rpc("draw_ideas",{p_channel:data.id,p_n:row.ideas_per_run}); await kick(); }
+      if(row.production_type!=="challenges"){ await sb.rpc("draw_ideas",{p_channel:data.id,p_n:row.ideas_per_run}); await kick(); } }
     closeSheet(); await load();
   }, c.id?"Canal guardado":"Canal creado. Preparando su banco de ideas…");
 }
@@ -1140,5 +1154,6 @@ sb.auth.onAuthStateChange((_e, session)=>{
   } else if(!session){ if(channel) sb.removeChannel(channel); render(); }
 });
 </script>
+<script type="module" src="retos/ui.js"></script>
 </body>
 </html>

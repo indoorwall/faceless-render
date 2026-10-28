@@ -2,6 +2,8 @@
 // Autenticación propia: cabecera x-cron-secret (pg_cron) o JWT de un miembro (web).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
+// Motor B (retos): el mismo código que usan la web y el servidor de montaje
+import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -130,7 +132,7 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "failed", error: msg }).eq("id", job.id);
         // El análisis y las miniaturas son opcionales: si fallan, el vídeo sigue su curso
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
-        else if (job.video_id && !["thumbs", "learn", "compare"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
       } else {
         await sb.from("jobs").update({ status: "queued", error: msg, payload: { ...(job.payload ?? {}), batches: null }, run_after: new Date(Date.now() + 90_000 * job.attempts).toISOString() }).eq("id", job.id);
@@ -167,6 +169,8 @@ async function runStep(job: Job) {
     case "metrics": return stepMetrics(job);
     case "compare": return stepCompare(job);
     case "analytics": return stepAnalytics(job);
+    case "retos_assets": return stepRetosAssets(job);
+    case "audio_asset": return stepAudioAsset(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
 }
@@ -842,12 +846,12 @@ async function elevenMusic(prompt: string, seconds: number) {
   if (!r.ok) { await unreserve("music_sec", seconds); await elevenFail(r, "música"); }
   return new Uint8Array(await r.arrayBuffer());
 }
-async function elevenSfx(text: string) {
+async function elevenSfx(text: string, seconds = 2.5) {
   await reserve("sfx", 1);
   const r = await fetch(`https://api.elevenlabs.io/v1/sound-generation?output_format=mp3_44100_128`, {
     method: "POST",
     headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" },
-    body: JSON.stringify({ text, model_id: SFX_MODEL, duration_seconds: 2.5, prompt_influence: 0.5 }),
+    body: JSON.stringify({ text, model_id: SFX_MODEL, duration_seconds: Math.max(0.5, Math.min(22, seconds)), prompt_influence: 0.5 }),
   });
   if (!r.ok) { await unreserve("sfx", 1); await elevenFail(r, "efecto"); }
   return new Uint8Array(await r.arrayBuffer());
@@ -1142,6 +1146,7 @@ function buildSource(v: any, scenes: any[]) {
 }
 async function stepRender(job: Job) {
   const v = await getVideo(job.video_id);
+  if (v.engine === "challenges") return stepRenderRetos(job, v);
   const short = v.channel.format === "short";
   await sb.from("videos").update({ stage: "Montando vídeo", progress: 82 }).eq("id", v.id);
   // Las miniaturas se generan en paralelo, sin retrasar el montaje
@@ -1198,6 +1203,7 @@ async function stepRenderCheck(job: Job) {
     if (r.status === 404) { await enqueue("render", { video_id: v.id }); return; } // el servidor se reinició: volver a encargarlo
     if (!r.ok) throw new Error(`Servidor de render ${r.status}`);
     const d = await r.json();
+    if (d.status === "succeeded" && v.engine === "challenges") return finishRetos(job, v, d);
     if (d.status === "succeeded") {
       const url = sb.storage.from("media").getPublicUrl(`${v.id}/final.mp4`).data.publicUrl + `?v=${Date.now()}`;
       await sb.from("videos").update({ video_url: url, status: "final_review", stage: null, progress: 100, duration_sec: Math.round((d.duration ?? 0) * 10) / 10 }).eq("id", v.id);
@@ -2023,4 +2029,131 @@ async function stepAnalytics(job: Job) {
     return `- «${v.title}» (${v.format === "short" ? "Short" : "largo"}, ${v.duration_sec ?? "?"} s) | ${a.views} visitas (${Math.round(a.views / days)}/día) | vista media ${Math.round(a.avg_pct ?? 0)} % (${Math.round(a.avg_view_sec ?? 0)} s) | a los 3 s sigue ${pct(a.hold_3s)}, a mitad ${pct(a.hold_mid)}, al final ${pct(a.hold_end)}${a.relative != null ? ` | retención frente a vídeos parecidos: ${a.relative}` : ""} | +${a.subs ?? 0} suscriptores, ${a.shares ?? 0} compartidos, ${a.likes ?? 0} likes | tráfico: ${traffic || "?"}${drops ? ` | caídas: ${drops}` : ""} | gancho: «${String(first).slice(0, 140)}»`;
   }).join("\n");
   await enqueue("learn", { channel_id: chId, payload: { source: "metricas", material: `Analíticas reales de YouTube del canal, de más a menos visto. Compara los mejores con los peores y deduce reglas concretas: qué ganchos retienen los 3 primeros segundos, en qué tipo de frase se va la gente (las caídas indican la frase exacta), qué duración, temas y títulos funcionan, y qué atrae suscriptores y compartidos. "Retención frente a vídeos parecidos" por encima de 0,5 es mejor que la media de YouTube.\n${rows}` } });
+}
+
+// ================= Motor B: retos interactivos =================
+// Los acertijos, el dibujo y el montaje son código (web/retos). Aquí solo se valida, se aseguran los
+// sonidos, músicas y frases reutilizables del canal y se encarga el montaje.
+const voiceKey = (voiceId: string, text: string) => `v_${hashStr(`${voiceId}|${text}`).toString(36)}`;
+// deno-lint-ignore no-explicit-any
+function retosProject(v: any) {
+  const ch = v.channel;
+  return { ...(v.retos ?? {}), format: v.format === "short" ? "short" : "long", config: retosConfig({ ...(ch.retos_config ?? {}), ...(v.retos?.overrides ?? {}) }), theme: ch.theme ?? {} };
+}
+async function audioPath(chId: string, kind: string, code: string, version: number) { return `channels/${chId}/audio/${kind}/${code}_v${version}_${Date.now() % 100000}.mp3`; }
+// Genera (o regenera) un recurso de audio del canal y guarda la versión anterior en el historial
+// deno-lint-ignore no-explicit-any
+async function generateAudio(chId: string, kind: "sfx" | "music" | "voice", code: string, opts: { prompt?: string; seconds?: number; text?: string; voiceId?: string; language?: string; name?: string }): Promise<any> {
+  const { data: cur } = await sb.from("channel_audio").select("*").eq("channel_id", chId).eq("kind", kind).eq("code", code).maybeSingle();
+  let bytes: Uint8Array; let seconds = opts.seconds ?? null;
+  if (kind === "sfx") bytes = await elevenSfx(opts.prompt!, opts.seconds ?? 1.5);
+  else if (kind === "music") bytes = await elevenMusic(`${opts.prompt}`, opts.seconds ?? 60);
+  else {
+    await reserve("tts_chars", opts.text!.length);
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${opts.voiceId}?output_format=mp3_44100_128`, { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ text: opts.text, model_id: "eleven_v3", language_code: opts.language ?? "es" }) });
+    if (!r.ok) { await unreserve("tts_chars", opts.text!.length); await elevenFail(r, "voz"); }
+    bytes = new Uint8Array(await r.arrayBuffer()); seconds = bytes.length / 16000;
+  }
+  const version = (cur?.version ?? 0) + (cur?.url ? 1 : 0) || 1;
+  const path = await audioPath(chId, kind, code, version);
+  const url = await upload(path, bytes, "audio/mpeg");
+  const history = cur?.url ? [{ url: cur.url, path: cur.path, version: cur.version, source: cur.source, prompt: cur.prompt, volume: cur.volume, at: cur.updated_at }, ...(cur.history ?? [])].slice(0, 10) : (cur?.history ?? []);
+  const row = { channel_id: chId, kind, code, name: opts.name ?? cur?.name ?? code, url, path, version, source: "elevenlabs", prompt: opts.prompt ?? opts.text ?? null, license: "ElevenLabs (uso comercial según tu plan)", duration_sec: seconds, status: "ready", error: null, history, volume: cur?.volume ?? 100, meta: { ...(cur?.meta ?? {}), ...(opts.text ? { text: opts.text, voice_id: opts.voiceId } : {}) } };
+  const { data, error } = await sb.from("channel_audio").upsert(row, { onConflict: "channel_id,kind,code" }).select().single();
+  if (error) throw new Error(`Biblioteca de audio: ${error.message}`);
+  return data;
+}
+
+// ---------- Paso: validar y asegurar los recursos reutilizables (solo se genera lo que falta) ----------
+async function stepRetosAssets(job: Job) {
+  const v = await getVideo(job.video_id);
+  if (v.engine !== "challenges") throw new UserError("Este vídeo no es de retos");
+  const ch = v.channel;
+  const project = retosProject(v);
+  // Nunca se monta un reto cuya respuesta no esté comprobada
+  const val = validateProject(project);
+  if (!val.ok) throw new UserError(`Retos sin validar, no se monta: ${val.errors.slice(0, 3).join(" · ")}`);
+  const tl = retosTimeline(project);
+  await sb.from("videos").update({ stage: "Preparando sonidos del canal", progress: 10, error: null }).eq("id", v.id);
+  const { data: lib } = await sb.from("channel_audio").select("kind,code,url,status").eq("channel_id", ch.id);
+  const have = new Set((lib ?? []).filter((x) => x.url && x.status === "ready").map((x) => `${x.kind}|${x.code}`));
+  const voiceId = ch.voice_id || "JBFqnCBsd6RMkjVDRZzb";
+  const needSfx = RETOS_SOUNDS.filter((s) => tl.events.some((e: { code: string }) => e.code === s.code) && !have.has(`sfx|${s.code}`));
+  const moods = new Set(tl.music.map((m: { mood: string }) => m.mood));
+  // Música: biblioteca del canal (M1-M3, se reutiliza) o una propia para este vídeo (más cara)
+  const mcode = (code: string) => (project.config.music_mode === "video" ? `${code}_${String(v.id).slice(0, 8)}` : code);
+  const needMusic = project.config.music_mode === "none" ? [] : RETOS_MUSIC.filter((m) => moods.has(m.mood) && !have.has(`music|${mcode(m.code)}`));
+  const texts = [...new Set(tl.voice.map((x: { text: string }) => x.text))] as string[];
+  const needVoice = texts.filter((t) => !have.has(`voice|${voiceKey(voiceId, t)}`));
+  // Por ejecución: hasta 4 efectos, 1 música o 6 frases (la función tiene tiempo limitado)
+  let made = 0;
+  for (const s of needSfx.slice(0, 4)) { await generateAudio(ch.id, "sfx", s.code, { prompt: s.prompt, seconds: s.seconds, name: s.name }); made++; }
+  if (!made) for (const m of needMusic.slice(0, 1)) { await generateAudio(ch.id, "music", mcode(m.code), { prompt: m.prompt, seconds: m.seconds, name: project.config.music_mode === "video" ? `${m.name} · ${v.title ?? "vídeo"}` : m.name }); made++; }
+  if (!made) for (const t of needVoice.slice(0, 6)) { await generateAudio(ch.id, "voice", voiceKey(voiceId, t), { text: t, voiceId, language: ch.language, name: t.slice(0, 40) }); made++; }
+  const left = needSfx.length + needMusic.length + needVoice.length - made;
+  if (made) await log(job, `Biblioteca sonora del canal: ${made} recursos nuevos (se reutilizarán en todos los vídeos)`);
+  if (left > 0) { await enqueue("retos_assets", { video_id: v.id }); return; }
+  await enqueue("render", { video_id: v.id });
+}
+
+// ---------- Paso: montaje de retos en el servidor propio ----------
+// deno-lint-ignore no-explicit-any
+async function stepRenderRetos(job: Job, v: any) {
+  if (!KEYS["RENDER_URL"] || !KEYS["RENDER_SECRET"]) throw new UserError("Los retos necesitan el servidor de montaje propio (RENDER_URL en Ajustes)");
+  const ch = v.channel; const short = v.format === "short";
+  const project = retosProject(v);
+  const tl = retosTimeline(project);
+  const { data: lib } = await sb.from("channel_audio").select("kind,code,url,volume,status").eq("channel_id", ch.id).eq("status", "ready");
+  const get = (kind: string, code: string) => (lib ?? []).find((x) => x.kind === kind && x.code === code && x.url);
+  const sounds = Object.fromEntries(RETOS_SOUNDS.map((s) => [s.code, get("sfx", s.code)]).filter(([, x]) => x).map(([c, x]) => [c, { url: (x as { url: string }).url, volume: (x as { volume: number }).volume }]));
+  const mcode = (code: string) => (project.config.music_mode === "video" ? `${code}_${String(v.id).slice(0, 8)}` : code);
+  const music = project.config.music_mode === "none" ? {} : Object.fromEntries(RETOS_MUSIC.map((m) => [m.mood, get("music", mcode(m.code))]).filter(([, x]) => x).map(([mood, x]) => [mood, { url: (x as { url: string }).url, volume: (x as { volume: number }).volume }]));
+  const voiceId = ch.voice_id || "JBFqnCBsd6RMkjVDRZzb";
+  const voice = [...new Set(tl.voice.map((x: { text: string }) => x.text))].map((t) => ({ text: t, url: get("voice", voiceKey(voiceId, t as string))?.url })).filter((x) => x.url);
+  const sign = async (path: string) => { const { data, error } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true }); if (error || !data) throw new Error(`No se pudo preparar la subida: ${error?.message}`); return data.signedUrl; };
+  const spec = {
+    kind: "retos", id: v.id, width: short ? 1080 : 1920, height: short ? 1920 : 1080, fps: 30,
+    upload_url: await sign(`${v.id}/final.mp4`), ...(short ? {} : { thumb_upload_url: await sign(`${v.id}/thumb_retos.jpg`) }),
+    project: { ...project, title: v.title ?? project.title }, sounds, music, voice,
+  };
+  const base = KEYS["RENDER_URL"].replace(/\/+$/, "");
+  const r = await fetch(`${base}/jobs`, { method: "POST", headers: { Authorization: `Bearer ${KEYS["RENDER_SECRET"]}`, "Content-Type": "application/json" }, body: JSON.stringify(spec) });
+  if (!r.ok && r.status !== 409) throw new Error(`Servidor de render ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  await sb.from("videos").update({ render_id: `own:${v.id}`, stage: "Dibujando y montando", progress: 30 }).eq("id", v.id);
+  await enqueue("render_check", { video_id: v.id, delaySec: 20 });
+}
+// deno-lint-ignore no-explicit-any
+async function finishRetos(job: Job, v: any, d: any) {
+  const url = sb.storage.from("media").getPublicUrl(`${v.id}/final.mp4`).data.publicUrl + `?v=${Date.now()}`;
+  const rep = d.report ?? {};
+  // deno-lint-ignore no-explicit-any
+  const patch: any = { video_url: url, status: "final_review", stage: null, progress: 100, duration_sec: Math.round((d.duration ?? 0) * 10) / 10, retos: { ...(v.retos ?? {}), report: { ...rep, at: new Date().toISOString() } } };
+  if (v.format !== "short" && rep.thumbnail) {
+    const th = sb.storage.from("media").getPublicUrl(`${v.id}/thumb_retos.jpg`).data.publicUrl + `?v=${Date.now()}`;
+    Object.assign(patch, { thumbnail_url: th, thumbnails: [{ id: "retos", batch: 0, concept: "Miniatura programática", bg_url: th, url: th, text: "", selected: true }] });
+  }
+  await sb.from("videos").update(patch).eq("id", v.id);
+  await bumpUsage(v.id, { ai_images: 0, retos_sfx_reused: rep.sfx_files ?? 0, retos_music_reused: rep.music_files ?? 0, retos_voice_lines: rep.voice_files ?? 0, render_sec: rep.render_seconds ?? 0 });
+  // Historial de retos usados (para no repetirlos en el canal)
+  // deno-lint-ignore no-explicit-any
+  const rows = (v.retos?.challenges ?? []).map((c: any) => ({ channel_id: v.channel_id, video_id: v.id, signature: c.signature, mechanic: c.mechanic, category: c.category, reused: !!c.reused }));
+  if (rows.length) { await sb.from("challenge_history").delete().eq("video_id", v.id); await sb.from("challenge_history").insert(rows); }
+  await log(job, `Vídeo de retos listo para revisión: ${v.title} (0 imágenes IA, ${rep.sfx_files ?? 0} efectos y ${rep.music_files ?? 0} músicas reutilizados, sonido ${rep.audio?.lufs ?? "?"} LUFS)`);
+}
+
+// ---------- Paso: generar o regenerar un sonido, música o frase de la biblioteca del canal ----------
+// payload: { kind: "sfx"|"music", code, prompt? }
+async function stepAudioAsset(job: Job) {
+  const { kind, code } = job.payload ?? {};
+  const def = kind === "music" ? RETOS_MUSIC.find((m) => m.code === code) : RETOS_SOUNDS.find((s) => s.code === code);
+  if (!def || !["sfx", "music"].includes(kind)) throw new UserError("Sonido desconocido");
+  const prompt = String(job.payload?.prompt || def.prompt).slice(0, 450);
+  await sb.from("channel_audio").upsert({ channel_id: job.channel_id, kind, code, name: def.name, status: "generating", error: null }, { onConflict: "channel_id,kind,code", ignoreDuplicates: false });
+  try {
+    await generateAudio(job.channel_id, kind, code, { prompt, seconds: def.seconds, name: def.name });
+    await log(job, `${kind === "music" ? "Música" : "Sonido"} ${code} (${def.name}) generado`);
+  } catch (e) {
+    await sb.from("channel_audio").update({ status: "failed", error: (e as Error).message.slice(0, 300) }).eq("channel_id", job.channel_id).eq("kind", kind).eq("code", code);
+    throw e;
+  }
 }

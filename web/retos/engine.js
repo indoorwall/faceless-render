@@ -585,3 +585,26 @@ export function resourcesOf(project, tl) {
   const sounds = new Set(tl.events.map((e) => e.code));
   return { ai_images: 0, sound_events: tl.events.length, sounds_used: [...sounds].sort(), music_moods: [...new Set(tl.music.map((m) => m.mood))], voice_lines: tl.voice.length, voice_chars: tl.voice.reduce((a, v) => a + v.text.length, 0), challenges: project.challenges.length, duration: tl.duration };
 }
+
+// Cambiar posiciones sin rehacer el reto: mueve la casilla diferente u ordena de otra forma las opciones.
+// En los retos de figuras repartidas se generan posiciones nuevas con la misma mecánica y dificultad.
+export function reshuffle(c, seed) {
+  const r = rng(seed ?? `${Date.now()}-${Math.random()}`);
+  const x = JSON.parse(JSON.stringify(c));
+  if (["odd_symbol", "odd_color", "odd_rotation"].includes(x.mechanic)) {
+    const n = x.data.cols * x.data.rows; let at = x.data.at;
+    while (n > 1 && at === x.data.at) at = r.int(0, n - 1);
+    x.data.at = at; x.answer.at = at;
+  } else if ("option" in (x.answer || {}) && Array.isArray(x.data.options)) {
+    const idx = r.shuffle([0, 1, 2, 3]);
+    x.data.options = idx.map((i) => c.data.options[i]);
+    x.answer.option = idx.indexOf(c.answer.option);
+    if (x.mechanic === "memory_missing") x.data.after = r.shuffle(x.data.after);
+  } else {
+    const n = makeChallenge({ category: x.category, mechanic: x.mechanic, difficulty: x.difficulty, seed: `${seed ?? Math.random()}-pos` });
+    return { ...n, id: x.id, time: x.time, points: x.points };
+  }
+  x.signature = signature(x);
+  x.validation = { ...validateChallenge(x), engine: ENGINE_VERSION };
+  return x;
+}

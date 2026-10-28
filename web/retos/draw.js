@@ -21,7 +21,7 @@ function palette(theme) { const T = mergeTheme(theme); return { ...T, panel: mix
 const ROUND_COLOR = (P, d) => ({ easy: P.teal, medium: P.timer, hard: P.alert, extreme: P.alert }[d] || P.teal);
 
 // ---------- Formas ----------
-function rrect(ctx, x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function rrect(ctx, x, y, w, h, r) { w = Math.max(0, w); h = Math.max(0, h); r = Math.max(0, Math.min(r, w / 2, h / 2)); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
 function poly(ctx, n, cx, cy, r, rot = -Math.PI / 2) { ctx.beginPath(); for (let i = 0; i < n; i++) { const a = rot + (i * 2 * Math.PI) / n; ctx[i ? "lineTo" : "moveTo"](cx + r * Math.cos(a), cy + r * Math.sin(a)); } ctx.closePath(); }
 function star(ctx, n, cx, cy, r, ri) { ctx.beginPath(); for (let i = 0; i < n * 2; i++) { const a = -Math.PI / 2 + (i * Math.PI) / n, rr = i % 2 ? ri : r; ctx[i ? "lineTo" : "moveTo"](cx + rr * Math.cos(a), cy + rr * Math.sin(a)); } ctx.closePath(); }
 // Icono centrado en (cx,cy) con radio r; rot en grados
@@ -355,7 +355,13 @@ function outroScreen(ctx, L, P, seg, t) {
 
 // ---------- Fotograma completo ----------
 // project: { format, challenges, config, theme }, tl: timeline(project), t en segundos
+// Se dibuja siempre en el tamaño de diseño (1920×1080 o 1080×1920) y se escala: la vista previa es idéntica al vídeo
 export function drawFrame(ctx, W, H, project, tl, t, theme) {
+  const DW = H > W ? 1080 : 1920, DH = H > W ? 1920 : 1080;
+  if (W === DW && H === DH) return drawDesign(ctx, W, H, project, tl, t, theme);
+  ctx.save(); ctx.scale(W / DW, H / DH); drawDesign(ctx, DW, DH, project, tl, t, theme); ctx.restore();
+}
+function drawDesign(ctx, W, H, project, tl, t, theme) {
   const P = palette(theme || project.theme), L = frameLayout(W, H);
   const seg = tl.segments.find((s) => t >= s.start && t < (s.end ?? s.start)) || tl.segments[tl.segments.length - 1];
   const accent = seg.type === "challenge" ? ROUND_COLOR(P, (project.challenges.find((c) => c.id === seg.challenge) || {}).difficulty) : seg.type === "round" ? ROUND_COLOR(P, seg.difficulty) : P.timer;

@@ -40,5 +40,7 @@ console.log("Short:", s.challenges.length, "retos,", ts.duration, "s");
 ok(tl.events.every((e) => Math.abs(e.t * E.FPS - Math.round(e.t * E.FPS)) < 1e-6 && e.t >= 0 && e.t <= tl.duration), "eventos fuera de fotograma");
 // Los tics terminan justo cuando acaba el temporizador
 for (const sg of tl.segments.filter((x) => x.type === "challenge").slice(0, 5)) { const ticks = tl.events.filter((e) => (e.code === "S03" || e.code === "S04") && e.t >= sg.play[0] - 1e-6 && e.t < sg.play[1]); const last = ticks[ticks.length - 1]; ok(Math.abs(last.t - (sg.play[1] - 1)) < 1e-6, "el último tic no cae a 1 s del final"); ok(tl.events.some((e) => e.code === "S06" && Math.abs(e.t - sg.play[1]) < 1e-6), "falta el tiempo agotado justo al final"); }
+// 5) Cambiar posiciones mantiene la solución correcta
+for (const m of mechs) { const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)); for (let i = 0; i < 40; i++) { const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: E.DIFFS[i % 4], seed: `rs-${m}-${i}` }); const x = E.reshuffle(c, `s${i}`); ok(E.validateChallenge(x).ok, `${m}: tras cambiar posiciones la solución no es válida`); } }
 console.log(fail ? `\n${fail} FALLOS` : "\nTodo correcto");
 process.exit(fail ? 1 : 0);

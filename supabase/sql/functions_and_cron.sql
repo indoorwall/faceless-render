@@ -208,3 +208,12 @@ create or replace function public.budget_left()
        - coalesce((select n from spend_daily where k = 'eur' and day = (now() at time zone 'Europe/Madrid')::date), 0);
 $f$;
 -- spend_cost, reserve_spend y record_spend: solo service_role. budget_left: authenticated y service_role.
+
+-- ===== Motor B: retos interactivos (28/10) =====
+-- channels: production_type ('documentary' | 'challenges'), retos_config jsonb (temporizador, puntos, volúmenes, narración…), theme jsonb (colores)
+-- videos: engine ('documentary' | 'challenges'), retos jsonb (proyecto: retos, ajustes, informe del montaje)
+-- channel_audio: biblioteca reutilizable del canal (kind sfx S01-S12 · music M1-M3 · voice frases cacheadas), con volumen, versión, origen, licencia e historial de versiones
+-- challenge_history: firmas de los retos usados por canal (para no repetir)
+-- storage: los miembros pueden subir a media/channels/<id>/audio/ (sonidos propios)
+-- on_video_status_change: producing → 'retos_assets' si engine = 'challenges' (si no, 'voice'); scripting solo para documental
+-- rerender_video: para retos encola 'retos_assets' (no hay escenas)

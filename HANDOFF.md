@@ -88,6 +88,36 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
   - **Proyecto de Google sin auditar → YouTube bloquea como privados los vídeos subidos por API.** Hay que pedir el «YouTube API Services Audit and Quota Extension».
   - Cuota por defecto: 10.000 unidades al día, y cada subida gasta unas 1.600 (unas 6 subidas al día).
 
+## Motor B — retos interactivos (28/10)
+Canal «Reto Imposible» (`production_type = 'challenges'`). Cada canal usa siempre su motor; el documental no cambia.
+
+**Arquitectura.** Un único motor en JavaScript puro, sin dependencias, que usan las tres partes:
+- `web/retos/engine.js`: 13 mecánicas en 9 categorías, validación por código, rondas, puntos, rangos y línea de tiempo con los sonidos alineados a fotogramas. Para añadir una mecánica: un generador en `GEN`, su validador en `VAL` y su plantilla en `TPL` de draw.js.
+- `web/retos/draw.js`: plantillas 2D con Canvas. Dibuja en el tamaño de diseño (1920×1080 o 1080×1920) y escala, así la vista previa es idéntica al vídeo final.
+- `render-retos.js` (Cloud Run): fotogramas con node-canvas que se pasan a FFmpeg.
+  - Mezcla de audio en código, con sincronía exacta: unos 4 ms medidos en el MP4 final.
+  - Música por niveles con fundidos y bajada bajo la voz.
+  - Volumen a -14 LUFS en dos pasadas, con comprobación ebur128.
+  - Miniatura programática.
+- `web/retos/ui.js`: la interfaz.
+  - En el canal: tipo de producción, identidad visual, identidad sonora (12 efectos y 3 músicas, con versiones), volúmenes, narración y temporizador.
+  - En «Revisar»: el generador.
+  - En la ficha del vídeo: editor con previsualización (WebAudio).
+
+**Flujo.**
+1. Generar (web o paso `retos_generate`): el vídeo queda en `script_review` con `engine = 'challenges'` y el proyecto en `videos.retos`.
+2. Aprobar: pasa a `producing` y el trigger encola `retos_assets`. Este paso valida y genera solo lo que falta de la biblioteca (`channel_audio`); luego van `render` y `render_check`.
+3. Al terminar se guardan el informe de recursos en `videos.retos.report` y el historial en `challenge_history`.
+
+**Datos.**
+- `channels`: `production_type`, `retos_config` y `theme`.
+- `videos`: `engine` y `retos`.
+- `channel_audio`: sfx, música y voz, con `history` de versiones.
+- `challenge_history`.
+- Política de storage para subir archivos a `channels/*/audio/`.
+
+**Pruebas.** `npm test` ejecuta tests/retos.test.mjs: 15.600 retos validados, validación de respuestas manipuladas, sincronía y cambio de posiciones.
+
 ## Pendiente (por orden)
 0. **YouTube (en cola, lo pidió Giol el 28/10):** redactar el texto del formulario «YouTube API Services Audit and Quota Extension» y dejar lista la programación desde la plataforma (subir como privado con `publishAt`, cuota diaria). Está detrás del motor de retos.
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.

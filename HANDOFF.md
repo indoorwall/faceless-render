@@ -30,7 +30,7 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
     - Música: biblioteca de como mucho 4 pistas por canal (`MUSIC_LIBRARY`). Después se rotan sin coste.
     - Efectos: catálogo fijo `SFX_LIB` de 10, que se genera una vez por canal en `channels/{id}/sfx/`.
   - `visuals`:
-    - IA: `gpt-image-2` en calidad media y JPEG, con tope de 4 por Short y 12 por largo. Genera 2 por ejecución para no agotar la CPU de la función.
+    - IA: `gpt-image-2` en **calidad baja** (desde el 28/10; las miniaturas siguen en media) y JPEG, con tope de 4 por Short y 12 por largo. Genera 2 por ejecución para no agotar la CPU de la función.
     - Archivo: Wikimedia Commons, con filtro de coincidencia `matchScore`.
     - También usa Pexels (solo para stock) y reencuadres.
   - `render` y `render_check`: el servidor propio en Cloud Run.
@@ -73,6 +73,10 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
 - Cada llamada de pago reserva antes con `reserve_spend()`. Claude comprueba antes con `budget_left()` y apunta lo gastado al recibir la respuesta con `record_spend()`.
 - Si no hay margen, el trabajo pasa a la cola para mañana a las 00:05, con la etapa «Esperando al presupuesto de mañana». Lo gastado está en `spend_daily`.
 - Canal: `voice_provider` ('elevenlabs' | 'fish') con `fish_voice_id`, e `image_provider` ('openai' | 'flux'). Por defecto: ElevenLabs y OpenAI.
+
+## Prueba de imágenes (28/10)
+- OpenAI en calidad baja frente a media, con 3 escenas de «La guerra de un cubo de madera»: prácticamente igual (8 frente a 7,8 de media) y unas 3 veces más barata. Se activó la calidad baja para las escenas.
+- FLUX schnell, probado por Giol en Hugging Face: 6/10, más vistoso pero menos fiel a la época. No se ha abierto saldo en fal.ai; el código de FLUX queda listo pero desactivado (`image_provider = 'openai'`).
 
 ## Pendiente (por orden)
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.

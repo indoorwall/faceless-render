@@ -590,7 +590,7 @@ function renderSheet(first){
   const PR={opus:[4,20],sonnet:[2,10],haiku:[0.1,0.5]};
   const byModel=["opus","sonnet","haiku"].filter(t=>usage[t+"_in"]||usage[t+"_batch_in"]).map(t=>`${t[0].toUpperCase()+t.slice(1)} ${k((usage[t+"_in"]||0)+(usage[t+"_out"]||0)+(usage[t+"_batch_in"]||0)+(usage[t+"_batch_out"]||0))}${usage[t+"_batch_in"]?" (lotes)":""}`).join(" · ");
   const claudeUsd=["opus","sonnet","haiku"].reduce((a,t)=>a+((usage[t+"_in"]||0)*PR[t][0]+(usage[t+"_out"]||0)*PR[t][1]+((usage[t+"_batch_in"]||0)*PR[t][0]+(usage[t+"_batch_out"]||0)*PR[t][1])/2)/1e6,0)+(usage.web_searches||0)*0.01;
-  const usageTxt=`${byModel?`Claude ≈ ${claudeUsd.toFixed(2)} $ (${byModel} tokens${usage.web_searches?` · ${usage.web_searches} búsquedas`:""}) · `:""}${fmtN((usage.claude_in||0)+(usage.claude_out||0))} tokens · ${fmtN(usage.tts_chars||0)} caracteres de voz · ${usage.music_sec||0} s de música · ${usage.sfx||0} efectos · ${usage.ai_images||0} imágenes IA`;
+  const usageTxt=`${byModel?`Claude ≈ ${claudeUsd.toFixed(2)} $ (${byModel} tokens${usage.web_searches?` · ${usage.web_searches} búsquedas`:""}) · `:""}${fmtN((usage.claude_in||0)+(usage.claude_out||0))} tokens · ${fmtN(usage.tts_chars||0)} caracteres de voz · ${usage.music_sec||0} s de música · ${usage.sfx||0} efectos · ${(usage.ai_images||0)+(usage.ai_images_low||0)} imágenes IA${usage.ai_images_low?` (${usage.ai_images_low} en calidad baja)`:""}${usage.flux_images?` · ${usage.flux_images} FLUX`:""}`;
   let body="", foot="";
   if(v.status==="idea_review"){
     body=ideaCard(v); foot="";

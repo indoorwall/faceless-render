@@ -921,12 +921,14 @@ async function aiImage(prompt: string, short: boolean, quality = "medium") {
 }
 // Si el filtro de OpenAI rechaza el prompt, se reintenta una vez con una versión suavizada
 const SOFTEN = /\b(half-starved|starv\w*|gaunt|emaciated|wounded|injur\w*|blood\w*|corpse\w*|dead|dying|kill\w*|gun\w*|rifle\w*|weapon\w*|ammunition|ammo|artillery|shell\w*|bomb\w*|explosi\w*|battle\w*|combat|smoking ridge|war-torn|warfare|trooper\w*|military)\b/gi;
-async function safeImage(prompt: string, short: boolean): Promise<Uint8Array | null> {
-  try { return await aiImage(prompt, short); } catch (e) {
+// Escenas en calidad baja (casi igual en el móvil, unas 3 veces más barata); las miniaturas siguen en media
+const SCENE_QUALITY = "low";
+async function safeImage(prompt: string, short: boolean, quality = "medium"): Promise<Uint8Array | null> {
+  try { return await aiImage(prompt, short, quality); } catch (e) {
     if (!/safety|rejected|content_policy|moderation/i.test(String((e as Error).message))) throw e;
   }
   const soft = prompt.replace(SOFTEN, "").replace(/\s{2,}/g, " ") + " Family-friendly, peaceful, non-violent scene: no weapons, no injuries, no suffering.";
-  try { return await aiImage(soft, short); } catch (e) {
+  try { return await aiImage(soft, short, quality); } catch (e) {
     if (!/safety|rejected|content_policy|moderation/i.test(String((e as Error).message))) throw e;
     return null;
   }
@@ -1058,9 +1060,9 @@ async function stepVisuals(job: Job) {
         if (aiBudget <= 0) break;
         const viaFlux = fluxOn && !(sc.n === 1 && shots.indexOf(sh) === 0 && KEYS["OPENAI_API_KEY"]);
         let bytes: Uint8Array | null;
-        try { bytes = viaFlux ? await fluxImage(ctxPrompt(sh, v, ch), short) : await safeImage(ctxPrompt(sh, v, ch), short); } catch (e) {
+        try { bytes = viaFlux ? await fluxImage(ctxPrompt(sh, v, ch), short) : await safeImage(ctxPrompt(sh, v, ch), short, SCENE_QUALITY); } catch (e) {
           // Sin presupuesto a mitad de escena: se guarda lo ya generado para no pagarlo otra vez
-          if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images: images, flux_images: fluxN }); }
+          if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN }); }
           throw e;
         }
         if (bytes) {
@@ -1084,7 +1086,7 @@ async function stepVisuals(job: Job) {
   }
   const { count: total } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id);
   const { count: left } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id).is("media_url", null);
-  await bumpUsage(v.id, { ai_images: images, ...(fluxN ? { flux_images: fluxN } : {}) }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
+  await bumpUsage(v.id, { ai_images_low: images, ...(fluxN ? { flux_images: fluxN } : {}) }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
   if ((left ?? 0) > 0) await enqueue("visuals", { video_id: v.id });
   else {
     // Créditos a partir de las fotos de archivo realmente usadas (también las reaprovechadas)

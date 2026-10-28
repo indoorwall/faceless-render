@@ -7,7 +7,7 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
 | Pieza | Dónde | Cómo se despliega |
 |---|---|---|
 | Web (una sola página, `web/index.html`) | Vercel, desde este repo | Push a `main` |
-| Motor (`supabase/functions/worker/index.ts`, Deno) | Supabase Edge Function `worker`, proyecto `embjkwggqooawqnzkoam` (org "Heartbeat", plan Pro) | `supabase functions deploy worker --project-ref embjkwggqooawqnzkoam --no-verify-jwt` |
+| Motor (`supabase/functions/worker/index.ts`, Deno) | Supabase Edge Function `worker`, proyecto `embjkwggqooawqnzkoam` (org "Heartbeat", plan Pro) | Desde la v31, la función publicada es un archivo de una línea que importa `index.ts` de GitHub (el repo es público), fijado a un commit. Para publicar: subir el cambio y volver a desplegar ese archivo con el hash nuevo (herramienta de Supabase, `verify_jwt` desactivado). También vale `supabase functions deploy worker --project-ref embjkwggqooawqnzkoam --no-verify-jwt` desde un equipo con la CLI. |
 | Servidor de montaje (`server.js`, `render.js`, `tools.js`, FFmpeg) | Google Cloud Run (`europe-southwest1`), Cloud Build trigger sobre `main` | Push a `main` (Cloud Build) |
 | Base de datos, cola, cron | Supabase Postgres | SQL de referencia en `supabase/sql/functions_and_cron.sql` |
 
@@ -67,6 +67,12 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
    - Biblioteca de música por canal y catálogo de efectos.
    - Tope de imágenes IA más bajo y 2 miniaturas.
    - Fallo sin reintentos cuando no hay crédito.
+
+## Presupuesto diario (desde 28/10)
+- Tope total: **3 € al día** (`app_config.daily_cap_eur`), hora de Madrid. Precios por unidad en `app_config.prices_eur` (aproximados).
+- Cada llamada de pago reserva antes con `reserve_spend()`. Claude comprueba antes con `budget_left()` y apunta lo gastado al recibir la respuesta con `record_spend()`.
+- Si no hay margen, el trabajo pasa a la cola para mañana a las 00:05, con la etapa «Esperando al presupuesto de mañana». Lo gastado está en `spend_daily`.
+- Canal: `voice_provider` ('elevenlabs' | 'fish') con `fish_voice_id`, e `image_provider` ('openai' | 'flux'). Por defecto: ElevenLabs y OpenAI.
 
 ## Pendiente (por orden)
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.

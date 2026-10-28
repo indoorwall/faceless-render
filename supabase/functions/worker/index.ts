@@ -3,7 +3,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
-import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
+import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -171,6 +171,7 @@ async function runStep(job: Job) {
     case "analytics": return stepAnalytics(job);
     case "retos_assets": return stepRetosAssets(job);
     case "audio_asset": return stepAudioAsset(job);
+    case "retos_generate": return stepRetosGenerate(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
 }
@@ -2156,4 +2157,19 @@ async function stepAudioAsset(job: Job) {
     await sb.from("channel_audio").update({ status: "failed", error: (e as Error).message.slice(0, 300) }).eq("channel_id", job.channel_id).eq("kind", kind).eq("code", code);
     throw e;
   }
+}
+
+// ---------- Paso: generar un vídeo de retos sin pasar por la web (automatización y pruebas) ----------
+// payload: { format: "long"|"short", category?, difficulty?, count?, minutes?, seconds?, title? } → vídeo en «Retos por revisar»
+async function stepRetosGenerate(job: Job) {
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch || ch.production_type !== "challenges") throw new UserError("El canal no es de retos");
+  const p = job.payload ?? {};
+  const { data: hist } = await sb.from("challenge_history").select("signature").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(1500);
+  const project = buildProject({ format: p.format === "short" ? "short" : "long", category: p.category ?? "mixed", difficulty: p.difficulty ?? "progressive", count: Number(p.count) || 0, minutes: Number(p.minutes) || undefined, seconds: Number(p.seconds) || undefined, history: (hist ?? []).map((x) => x.signature), config: ch.retos_config, seed: `${ch.id}-${Date.now()}`, title: p.title });
+  const val = validateProject(project);
+  if (!val.ok) throw new Error(`Generación inválida: ${val.errors[0]}`);
+  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: project.format, title: project.title, idea_title: project.title, retos: project, usage: {}, target_minutes: project.format === "long" ? Number(p.minutes) || 8 : null }).select("id").single();
+  if (error) throw new Error(error.message);
+  await log({ ...job, video_id: v.id }, `Retos generados (${project.challenges.length}): «${project.title}». Revísalos antes de montar.`);
 }

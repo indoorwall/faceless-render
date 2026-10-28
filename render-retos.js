@@ -2,7 +2,7 @@
 // Usa el mismo motor que la web (web/retos/*.js), así la previsualización y el vídeo final son idénticos.
 import { spawn } from "node:child_process";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, writeFile, stat, open } from "node:fs/promises";
+import { mkdir, writeFile, stat, open, rename } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
@@ -78,7 +78,7 @@ function wav(pcm) {
 // Volumen: se mide la mezcla, se aplica ganancia + limitador suave y se vuelve a medir el resultado,
 // corrigiendo hasta quedar a -14 LUFS ±0,3 (el limitador se come parte de la ganancia en los vídeos con muchos efectos)
 const PRE = "treble=g=-2:f=9000";
-const chain = (gain) => `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.74:attack=2:release=60:level=false`;
+const chain = (gain, ceil = 0.74) => `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=${ceil.toFixed(3)}:attack=2:release=60:level=false`;
 // Mide la sonoridad integrada (EBU R128) de la mezcla tras la cadena de filtros, igual que la comprobación final
 function measureI(wavFile, af) {
   return new Promise((resolve) => {
@@ -151,7 +151,18 @@ export async function renderRetos(spec, workdir, onProgress = () => {}) {
   await done;
   const renderSec = (Date.now() - tr) / 1000;
   onProgress(92, "Comprobando el sonido");
-  const check = await audioCheck(out);
+  let check = await audioCheck(out);
+  // Pico real: el codificador AAC puede pasarse por encima del limitador (depende de la versión de FFmpeg).
+  // Si supera -1 dB, se recodifica solo el audio con un techo más bajo (el vídeo se copia tal cual).
+  let ceil = 0.74, tpFix = 0; const TP_MAX = Number(process.env.RETOS_TP_MAX ?? -1);
+  while (loud.gain != null && check.true_peak != null && check.true_peak > TP_MAX && tpFix < 3) {
+    tpFix++; ceil *= Math.pow(10, (TP_MAX - 0.3 - check.true_peak) / 20);
+    const fixed = path.join(workdir, "final_tp.mp4");
+    await run("ffmpeg", ["-y", "-v", "error", "-i", out, "-i", wavFile, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", chain(loud.gain ?? 0, ceil), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-shortest", fixed]);
+    await rename(fixed, out);
+    check = await audioCheck(out);
+  }
+  if (tpFix) check = { ...check, true_peak_fixes: tpFix };
   // Miniatura programática (vídeos largos)
   let thumb = null;
   if (spec.thumb_upload_url) {

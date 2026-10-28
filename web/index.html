@@ -98,9 +98,22 @@ section{display:flex;flex-direction:column;gap:12px}
 .ev a .mono{color:var(--accent);margin-left:4px}
 .bar{height:6px;background:var(--sunk);border-radius:6px;overflow:hidden}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:6px;transition:width .6s}
+/* Colores de gráficos (paleta validada para daltonismo, con su versión oscura) */
+:root{--v-claude:#eb6834;--v-eleven:#2a78d6;--v-openai:#1baf7a;--v-fish:#eda100;--v-fal:#6250d6;--v-other:#8a8f9c;--v-line:#2a78d6}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){--v-claude:#d95926;--v-eleven:#3987e5;--v-openai:#199e70;--v-fish:#c98500;--v-fal:#9085e9;--v-other:#7d8392;--v-line:#3987e5}}
+:root[data-theme="dark"]{--v-claude:#d95926;--v-eleven:#3987e5;--v-openai:#199e70;--v-fish:#c98500;--v-fal:#9085e9;--v-other:#7d8392;--v-line:#3987e5}
 .budget{display:flex;flex-direction:column;gap:8px;min-width:0}
-.bbar{display:flex;height:12px;background:var(--sunk);border-radius:6px;overflow:hidden}
+.bbar{display:flex;gap:2px;height:12px;background:var(--sunk);border-radius:6px;overflow:hidden}
 .bbar i{display:block;height:100%;transition:width .6s}
+.bbar i:last-child{border-radius:0 4px 4px 0}
+.perf{display:flex;flex-direction:column;gap:12px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px}
+.tile{background:var(--sunk);border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.tile b{font:600 19px var(--display);color:var(--ink)}
+.tile span{font-size:12px;color:var(--muted)}
+.ret{position:relative}
+.ret svg{display:block;width:100%;height:auto;overflow:visible}
+.ret .tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.12);white-space:nowrap;transform:translate(-50%,-110%)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
 .empty{border:1px dashed var(--line);border-radius:var(--r);padding:22px;color:var(--muted);text-align:center}
@@ -318,17 +331,17 @@ function costOf(u){
 const eur = (x) => x.toLocaleString("es-ES",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
 // Gasto de hoy por plataforma (spend_daily × tarifa) frente al tope diario
 const PLATFORMS = [
-  ["Claude", ["opus_in","opus_out","sonnet_in","sonnet_out","haiku_in","haiku_out","web_searches"], "#D97757"],
-  ["ElevenLabs", ["tts_chars","music_sec","sfx"], "#5B6CF0"],
-  ["OpenAI", ["ai_images","ai_images_low","stt_sec"], "#2E9E6B"],
-  ["Fish Audio", ["fish_bytes"], "#D4A017"],
-  ["fal.ai", ["flux_images"], "#A15CD6"],
+  ["Claude", ["opus_in","opus_out","sonnet_in","sonnet_out","haiku_in","haiku_out","web_searches"], "var(--v-claude)"],
+  ["ElevenLabs", ["tts_chars","music_sec","sfx"], "var(--v-eleven)"],
+  ["OpenAI", ["ai_images","ai_images_low","stt_sec"], "var(--v-openai)"],
+  ["Fish Audio", ["fish_bytes"], "var(--v-fish)"],
+  ["fal.ai", ["flux_images"], "var(--v-fal)"],
 ];
 function budgetBar(full){
   if(!S.prices) return "";
   const P=S.prices.prices||{}, t=S.prices.today||{}, cap=Number(S.prices.cap||0), spent=Number(S.prices.spent_today||0);
   const parts=PLATFORMS.map(([name,keys,color])=>({name,color,eur:keys.reduce((a,k)=>a+Number(t[k]||0)*Number(P[k]||0),0)})).filter(x=>x.eur>=0.005);
-  const rest=spent-parts.reduce((a,x)=>a+x.eur,0); if(rest>=0.005) parts.push({name:"Otros",color:"#9299A8",eur:rest});
+  const rest=spent-parts.reduce((a,x)=>a+x.eur,0); if(rest>=0.005) parts.push({name:"Otros",color:"var(--v-other)",eur:rest});
   const pct=(x)=>cap>0?Math.min(100,x/cap*100):0;
   return `<div class="budget">
     <div class="spread"><b style="white-space:nowrap">Gasto de hoy</b><span class="mono" style="font-size:12.5px">${eur(spent)} de ${eur(cap)} · ${spent>=cap-0.005?`<span style="color:var(--bad)">tope alcanzado: lo demás sigue mañana</span>`:`quedan ${eur(cap-spent)}`}</span></div>
@@ -340,6 +353,61 @@ function budgetBar(full){
 async function saveCap(){
   const v=Number($("#cap-eur").value);
   await run(async()=>{ const {error}=await sb.rpc("set_daily_cap",{p_eur:v}); if(error) throw error; await load(); }, "Tope guardado");
+}
+// ---------- Rendimiento en YouTube (analíticas del canal conectado) ----------
+const TRAFFIC_ES = { SHORTS:"Feed de Shorts", YT_SEARCH:"Búsqueda", SUGGESTED_VIDEO:"Sugeridos", BROWSE:"Inicio y suscripciones", EXT_URL:"Webs externas", PLAYLIST:"Listas", YT_CHANNEL:"Página del canal", NOTIFICATION:"Notificaciones", NO_LINK_OTHER:"Directo u otros", RELATED_VIDEO:"Relacionados", END_SCREEN:"Pantalla final", HASHTAGS:"Hashtags", SOUND_PAGE:"Página de sonido", YT_OTHER_PAGE:"Otras de YouTube" };
+const pctTxt = (x) => x==null ? "—" : Math.round(Number(x)*100)+" %";
+const mmss = (sec) => `${Math.floor(sec/60)}:${String(Math.round(sec%60)).padStart(2,"0")}`;
+function perfBlock(v){
+  const a=v.stats?.analytics;
+  if(!a){
+    if(!["published","scheduled"].includes(v.status)) return "";
+    const ch0=ch(v.channel_id);
+    return `<div class="muted" style="font-size:13px">${ch0?.youtube_connected?"Las analíticas llegan cada mañana, 1-2 días después de publicar.":"Conecta el canal de YouTube para ver aquí la retención, el tráfico y qué frase hace que la gente se vaya."}</div>`;
+  }
+  const tiles=[["Visitas",fmtN(a.views||0)],["Vista media",`${Math.round(a.avg_pct||0)} %`,`${Math.round(a.avg_view_sec||0)} s de media`],["A los 3 s",pctTxt(a.hold_3s),"siguen viendo"],["Al final",pctTxt(a.hold_end),"llegan al final"],["Suscriptores",`+${a.subs||0}`],["Compartidos",String(a.shares||0)]];
+  const traffic=(a.traffic||[]).map(([t,p])=>`${TRAFFIC_ES[t]||t} ${p} %`).join(" · ");
+  const drops=(a.drops||[]).map(d=>`<li>En <b>${mmss(d.sec)}</b> pasa del ${pctTxt(d.from)} al ${pctTxt(d.to)}${d.line?`, con «${esc(d.line)}»`:""}</li>`).join("");
+  return `<div class="perf"><h3>Rendimiento en YouTube</h3>
+    <div class="tiles">${tiles.map(([l,b,s2])=>`<div class="tile"><span>${l}</span><b>${b}</b>${s2?`<span>${s2}</span>`:""}</div>`).join("")}</div>
+    ${a.retention?.length>2&&v.duration_sec?retentionChart(a.retention,Number(v.duration_sec),a.drops||[]):""}
+    ${drops?`<div style="font-size:13.5px"><b>Dónde se va la gente</b><ul style="margin:4px 0 0;padding-left:18px">${drops}</ul></div>`:""}
+    ${traffic?`<div style="font-size:13px"><span class="muted">De dónde vienen:</span> ${traffic}</div>`:""}
+    <div class="muted mono" style="font-size:11.5px">Actualizado ${new Date(a.at).toLocaleString("es-ES")}${a.relative!=null?` · retención frente a vídeos parecidos: ${String(a.relative).replace(".",",")} (0,5 = media)`:""}</div></div>`;
+}
+// Curva de retención: una serie, eje Y en % de audiencia, cruceta con tooltip y las caídas marcadas
+function retentionChart(pts,dur,drops){
+  // En móvil se dibuja más estrecha para que los textos no queden diminutos
+  const W=window.innerWidth<560?360:600,H=190,L=38,R=10,T=14,B=24, maxY=Math.max(1,...pts.map(p=>p[1]));
+  const x=(r)=>L+r*(W-L-R), y=(w)=>T+(1-w/maxY)*(H-T-B);
+  const line=pts.map((p,i)=>`${i?"L":"M"}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join("");
+  const area=`${line}L${x(pts[pts.length-1][0]).toFixed(1)},${y(0)}L${x(pts[0][0]).toFixed(1)},${y(0)}Z`;
+  const ticksY=[0,0.5,1].filter(t=>t<=maxY);
+  const at=(sec)=>{const r=sec/dur;let b=pts[0];for(const p of pts) if(Math.abs(p[0]-r)<Math.abs(b[0]-r)) b=p;return b;};
+  window.__ret={pts,dur,maxY,L,R,W};
+  return `<div class="ret" onmousemove="retHover(event)" onmouseleave="retHover(null)" ontouchmove="retHover(event.touches[0])">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Retención: a los 3 segundos sigue el ${pctTxt(at(3)[1])}, a mitad el ${pctTxt(at(dur/2)[1])} y al final el ${pctTxt(pts[pts.length-1][1])}">
+      ${ticksY.map(t=>`<line x1="${L}" x2="${W-R}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)" stroke-width="1"/><text x="${L-6}" y="${y(t)+4}" text-anchor="end" font-size="11" fill="var(--muted)">${Math.round(t*100)} %</text>`).join("")}
+      <path d="${area}" fill="var(--v-line)" opacity=".1"/>
+      <path d="${line}" fill="none" stroke="var(--v-line)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      ${drops.map(d=>{const p=at(d.sec);return `<circle cx="${x(p[0])}" cy="${y(p[1])}" r="4.5" fill="var(--v-line)" stroke="var(--surface)" stroke-width="2"/><text x="${x(p[0])}" y="${y(p[1])-10}" text-anchor="middle" font-size="11" fill="var(--ink)">${mmss(d.sec)}</text>`;}).join("")}
+      ${[0,0.5,1].map(r=>`<text x="${x(r)}" y="${H-6}" text-anchor="${r===0?"start":r===1?"end":"middle"}" font-size="11" fill="var(--muted)">${mmss(r*dur)}</text>`).join("")}
+      <line id="ret-x" y1="${T}" y2="${H-B}" stroke="var(--muted)" stroke-width="1" opacity="0"/><circle id="ret-dot" r="4.5" fill="var(--v-line)" stroke="var(--surface)" stroke-width="2" opacity="0"/>
+    </svg><div class="tip" id="ret-tip" hidden></div></div>
+    <div class="muted" style="font-size:12px">Porcentaje de la audiencia que sigue viendo en cada momento del vídeo. Puede pasar del 100 % si la gente lo vuelve a ver.</div>`;
+}
+function retHover(e){
+  const R0=window.__ret, box=document.querySelector(".ret"), tip=$("#ret-tip"), lx=$("#ret-x"), dot=$("#ret-dot");
+  if(!R0||!box||!tip) return;
+  if(!e){ tip.hidden=true; lx.setAttribute("opacity",0); dot.setAttribute("opacity",0); return; }
+  const rc=box.getBoundingClientRect(), sx=(e.clientX-rc.left)/rc.width*R0.W;
+  const r=Math.min(1,Math.max(0,(sx-R0.L)/(R0.W-R0.L-R0.R)));
+  let b=R0.pts[0]; for(const p of R0.pts) if(Math.abs(p[0]-r)<Math.abs(b[0]-r)) b=p;
+  const svg=box.querySelector("svg"), vb=svg.viewBox.baseVal, k=rc.width/vb.width;
+  const px=R0.L+b[0]*(R0.W-R0.L-R0.R), py=14+(1-b[1]/R0.maxY)*(190-14-24);
+  lx.setAttribute("x1",px); lx.setAttribute("x2",px); lx.setAttribute("opacity",.5); dot.setAttribute("cx",px); dot.setAttribute("cy",py); dot.setAttribute("opacity",1);
+  tip.hidden=false; tip.style.left=Math.min(rc.width-70,Math.max(70,px*k))+"px"; tip.style.top=(py*k)+"px";
+  tip.innerHTML=`<b>${mmss(b[0]*R0.dur)}</b> · siguen viendo el ${pctTxt(b[1])}`;
 }
 const costTag = (v) => { const c=costOf(v.usage); return c&&c.total>=0.005?`<span class="mono muted" title="Coste real: consumo del vídeo × tarifa de cada servicio">${eur(c.total)}</span>`:""; };
 const fmtN = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n ?? 0);
@@ -695,7 +763,7 @@ function renderSheet(first){
     foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button>${/^(render|render_check)/.test(v.error||"")?`<button class="btn" onclick="rerender('${v.id}')">Volver a montar</button>`:""}<button class="btn pri" onclick="retry('${v.id}')">Reintentar desde ese paso</button>`;
   } else {
     body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>${dlBlock(v)}`:""}
-      <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>`;
+      <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>${perfBlock(v)}`;
   }
   const cost=costOf(usage);
   if(cost&&cost.total>=0.005) body += `<div style="font-size:13.5px"><b>Coste real: ${eur(cost.total)}</b> <span class="muted">(${cost.parts.map(([l,x])=>`${l} ${eur(x)}`).join(" · ")})</span></div>`;

@@ -446,7 +446,7 @@ async function load(){
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
     sb.rpc("get_prices"),
-    sb.from("jobs").select("id,step,status,channel_id,video_id").in("status",["queued","running"]),
+    sb.from("jobs").select("id,step,status,channel_id,video_id,run_after").in("status",["queued","running"]),
   ]);
   S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[];
   render();
@@ -532,7 +532,7 @@ function viewHoy(){
     <section><div class="sec-h"><h2>Guiones por revisar</h2><span class="mono">${scripts.length}</span></div>
       ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
     </section>
-    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasRunning||S.jobs.some(j=>j.step==="refill_ideas")?`<span class="chip st-warn">Generando ideas…</span>`:""}</div>
+    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasChip()}</div>
       ${ideaGenerator()}
       ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pide ideas nuevas desde un canal; además, cada mañana a las 8:30 llegan solas.</div>`}
     </section>
@@ -557,9 +557,26 @@ function ideaGenerator(){
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">Sin tema, «Pedir ideas» en el canal saca ideas del banco gratis. Esto crea ideas nuevas siguiendo la guía del canal (unos céntimos).</div></div>`;
 }
+// Ideas: si el encargo está aplazado (tope diario de gasto alcanzado), se dice cuándo llegarán en vez de «generando»
+const IDEA_STEPS=["ideas","refill_ideas"];
+function ideaJobs(chId){ return S.jobs.filter(j=>IDEA_STEPS.includes(j.step)&&(!chId||j.channel_id===chId)); }
+function ideasWaitUntil(chId){ const t=ideaJobs(chId).filter(j=>j.status==="queued"&&j.run_after&&new Date(j.run_after)-Date.now()>90000).map(j=>new Date(j.run_after)); return t.length?new Date(Math.min(...t)):null; }
+const hhmm=(d)=>d.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"});
+function ideasChip(){
+  const jobs=ideaJobs(); if(!jobs.length) return "";
+  const w=ideasWaitUntil(), now=jobs.some(j=>!(j.status==="queued"&&j.run_after&&new Date(j.run_after)-Date.now()>90000));
+  if(now) return `<span class="chip st-warn">Generando ideas…</span>`;
+  return `<span class="chip st-bad" title="Hoy se ha alcanzado el tope de gasto diario">Sin presupuesto hoy · llegarán a las ${hhmm(w)}</span>`;
+}
+async function budgetMsg(){
+  try{ const {data}=await sb.rpc("budget_left"); const left=Number(data); if(isFinite(left)&&left<0.05) return `Hoy ya se ha gastado el tope diario, así que las ideas se generarán mañana a las 00:05. Si las quieres ya, sube el tope en Ajustes → Presupuesto diario.`; }catch(_){ /* sin dato: se sigue */ }
+  return null;
+}
 async function genIdeas(){
   const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value, format=$("#g-fmt").value||null;
-  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5}}); if(error) throw error; await kick(); await load(); }, "Generando ideas a medida. Llegarán aquí en un minuto.");
+  if(ideaJobs(id).length){ const w=ideasWaitUntil(id); return toast(w?`Ya hay ideas pedidas para este canal: llegarán a las ${hhmm(w)} (tope de gasto de hoy alcanzado).`:"Ya se están generando ideas para este canal."); }
+  const warn=await budgetMsg();
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5}}); if(error) throw error; await kick(); await load(); }, warn||"Generando ideas a medida. Llegarán aquí en un minuto.");
 }
 function ideaCard(v){
   const ev = Array.isArray(v.idea_evidence) ? v.idea_evidence.filter(e=>e&&e.url).slice(0,4) : [];
@@ -588,13 +605,13 @@ function viewCanales(){
   ${S.channels.length?`<div class="grid">${S.channels.map(c=>{
     const vs=S.videos.filter(v=>v.channel_id===c.id);
     const n=(st)=>vs.filter(v=>st.includes(v.status)).length;
-    const gen=S.jobs.some(j=>j.step==="ideas"&&j.channel_id===c.id);
+    const gen=ideaJobs(c.id).length>0, genWait=ideasWaitUntil(c.id);
     return `<div class="card">
       <div class="spread"><div style="min-width:0"><div class="row"><span class="chip"><span class="dot" style="background:${esc(c.color)}"></span>${chFormats(c).map(f=>fmtLabel(f,c)).join(" + ")}</span>${c.status==="paused"?`<span class="chip st-warn">En pausa</span>`:""}</div>
       <h2 style="margin-top:8px">${esc(c.name)}</h2><div class="why">${esc(c.niche)}</div></div></div>
       <dl class="kv"><dt>Idioma</dt><dd>${esc(c.language)}</dd><dt>Imágenes</dt><dd>${{ai:"IA",stock:"Stock real",mix:"Mezcla"}[c.image_source]}</dd><dt>YouTube</dt><dd>${c.youtube_connected?`<span style="color:var(--ok)">Conectado</span>`:`<span class="muted">Sin conectar</span>`}</dd>
       <dt>Pipeline</dt><dd class="mono">${n(["idea_review"])} ideas · ${n(["scripting","script_review","producing","final_review"])} en curso · ${n(["published","scheduled"])} publicados</dd></dl>
-      <div class="row" style="margin-top:auto"><button class="btn sm pri" ${gen?"disabled":""} onclick="askIdeas('${c.id}')">${gen?"Buscando ideas…":"Pedir ideas"}</button><button class="btn sm" onclick="openGuide('${c.id}')">${c.style_guide?"Guía ✓":"Crear guía"}</button><button class="btn sm" onclick="openChannel('${c.id}')">Editar</button>
+      <div class="row" style="margin-top:auto"><button class="btn sm pri" ${gen?"disabled":""} onclick="askIdeas('${c.id}')">${genWait?`Ideas a las ${hhmm(genWait)}`:gen?"Buscando ideas…":"Pedir ideas"}</button><button class="btn sm" onclick="openGuide('${c.id}')">${c.style_guide?"Guía ✓":"Crear guía"}</button><button class="btn sm" onclick="openChannel('${c.id}')">Editar</button>
       ${c.youtube_connected?"":`<button class="btn sm ghost" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}</div>
     </div>`;}).join("")}</div>`:`<div class="empty">Aún no hay canales. Crea uno o ve a Descubrir para que el estudio te proponga nichos.</div>`}`;
 }
@@ -1026,8 +1043,10 @@ async function resetTheme(){ await run(async()=>{ const {error}=await sb.from("c
 async function archiveChannel(){ await run(async()=>{ const {error}=await sb.from("channels").update({status:"archived"}).eq("id",S.open.c.id); if(error) throw error; closeSheet(); await load(); }, "Canal archivado"); }
 async function askIdeas(id){
   const c=ch(id);
+  if(ideaJobs(id).length){ const w=ideasWaitUntil(id); return toast(w?`Ya hay ideas pedidas para este canal: llegarán a las ${hhmm(w)} (tope de gasto de hoy alcanzado).`:"Ya se están buscando ideas para este canal."); }
   try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:c?.ideas_per_run||5}); if(error) throw error; await kick(); await load();
-    toast(data>0?`${data} ideas nuevas en Revisar`:"Preparando el banco de ideas del canal. Llegarán en un minuto."); }
+    // Con ideas en el banco salen al momento y gratis; si el banco está vacío hay que crearlas con IA (y eso depende del presupuesto)
+    toast(data>0?`${data} ideas nuevas en Revisar`:(await budgetMsg())||"El banco de ideas del canal estaba vacío: creando ideas nuevas. Llegarán en un minuto."); }
   catch(e){ toast(e.message||String(e)); }
 }
 async function connectYT(id){

@@ -154,11 +154,15 @@ export async function renderRetos(spec, workdir, onProgress = () => {}) {
   let check = await audioCheck(out);
   // Pico real: el codificador AAC puede pasarse por encima del limitador (depende de la versión de FFmpeg).
   // Si supera -1 dB, se recodifica solo el audio con un techo más bajo (el vídeo se copia tal cual).
-  let ceil = 0.74, tpFix = 0; const TP_MAX = Number(process.env.RETOS_TP_MAX ?? -1);
-  while (loud.gain != null && check.true_peak != null && check.true_peak > TP_MAX && tpFix < 3) {
-    tpFix++; ceil *= Math.pow(10, (TP_MAX - 0.3 - check.true_peak) / 20);
+  let ceil = 0.74, tpFix = 0, g = loud.gain; const TP_MAX = Number(process.env.RETOS_TP_MAX ?? -1);
+  const needFix = () => check.true_peak != null && check.lufs != null && (check.true_peak > TP_MAX || (tpFix > 0 && check.lufs < -14.4));
+  while (g != null && needFix() && tpFix < 4) {
+    // Se baja el techo lo que sobra de pico y se sube la ganancia lo que falta de sonoridad (el limitador contiene los picos)
+    tpFix++;
+    if (check.true_peak > TP_MAX - 0.2) ceil *= Math.pow(10, (TP_MAX - 0.4 - check.true_peak) / 20);
+    if (check.lufs < -14.2) g = Math.min(30, g + (-14 - check.lufs));
     const fixed = path.join(workdir, "final_tp.mp4");
-    await run("ffmpeg", ["-y", "-v", "error", "-i", out, "-i", wavFile, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", chain(loud.gain ?? 0, ceil), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-shortest", fixed]);
+    await run("ffmpeg", ["-y", "-v", "error", "-i", out, "-i", wavFile, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", chain(g, ceil), "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-shortest", fixed]);
     await rename(fixed, out);
     check = await audioCheck(out);
   }

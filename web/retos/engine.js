@@ -508,7 +508,7 @@ export function buildProject(opts) {
   }
   // Variedad: dos retos seguidos no repiten mecánica si se puede evitar
   for (let i = 1; i < challenges.length; i++) if (challenges[i].mechanic === challenges[i - 1].mechanic) { const j = challenges.findIndex((c, k) => k > i && c.difficulty === challenges[i].difficulty && c.mechanic !== challenges[i - 1].mechanic); if (j > 0) [challenges[i], challenges[j]] = [challenges[j], challenges[i]]; }
-  return { engine: ENGINE_VERSION, format, title: opts.title || (format === "short" ? "¿Lo resuelves a tiempo?" : `¿Puedes superar estos ${challenges.length} retos?`), difficulty: diffMode, category: opts.category || "mixed", target_seconds: target, challenges };
+  return { engine: ENGINE_VERSION, ...(opts.game_style === "world" ? { game_style: "world" } : {}), format, title: opts.title || (opts.game_style === "world" ? (challenges.length === 1 ? "¿Puedes superar este nivel?" : `¿Puedes superar los ${challenges.length} niveles?`) : format === "short" ? "¿Lo resuelves a tiempo?" : `¿Puedes superar estos ${challenges.length} retos?`), difficulty: diffMode, category: opts.category || "mixed", target_seconds: target, challenges };
 }
 export function validateProject(p) {
   const res = (p.challenges || []).map((c, i) => ({ i, id: c.id, ...validateChallenge(c) }));
@@ -551,9 +551,19 @@ export function timeline(project, opts = {}) {
   let maxPts = 0;
   // Rondas: tramos consecutivos de la misma dificultad
   let round = 0, prevD = null;
-  if (!short) { ev(0, "S01", 0.9); say(0.3, VOICE.start[0]); }
+  // Playable World: el vídeo es una partida (portada con PIX y mapa de niveles entre retos)
+  const world = project.game_style === "world";
+  if (world) { const d0 = short ? 1.8 : 2.6; segs.push({ type: "intro", start: 0, end: fr(d0), total }); ev(0, "S01", 0.9); ev(d0 * 0.45, "S19", 0.8); if (!short) say(0.3, VOICE.start[0]); t = d0; }
+  else if (!short) { ev(0, "S01", 0.9); say(0.3, VOICE.start[0]); }
   chs.forEach((c, i) => {
-    if (!short && c.difficulty !== prevD) {
+    if (world && i > 0) {
+      const dur = short ? 1.7 : 2.4;
+      segs.push({ type: "map", start: fr(t), end: fr(t + dur), from: i - 1, to: i, total, difficulty: c.difficulty, mechanics: chs.map((x) => x.mechanic) });
+      ev(t, "S11", 0.8); ev(t + dur * 0.32, "S19", 0.9); ev(t + dur * 0.62, "S17", 0.7);
+      t += dur;
+    }
+    if (world && c.difficulty !== prevD) { music.push({ t: i > 0 ? fr(Math.max(0, t - 2.4)) : 0, mood: ROUND_MOOD[c.difficulty] }); prevD = c.difficulty; round++; }
+    if (!world && !short && c.difficulty !== prevD) {
       round++;
       if (i > 0) {
         // Pantalla de ronda (la primera ronda no lleva: el vídeo empieza jugando)
@@ -566,7 +576,7 @@ export function timeline(project, opts = {}) {
       music.push({ t: fr(Math.max(0, t - (i > 0 ? 2.6 : 0))), mood: ROUND_MOOD[c.difficulty] });
       prevD = c.difficulty;
     }
-    if (short && i === 0) music.push({ t: 0, mood: ROUND_MOOD[c.difficulty] === "extreme" ? "extreme" : "normal" });
+    if (short && i === 0 && !world) music.push({ t: 0, mood: ROUND_MOOD[c.difficulty] === "extreme" ? "extreme" : "normal" });
     const tm = timingOf(c, short);
     const s = { type: "challenge", index: i, total, round, start: fr(t), challenge: c.id };
     let x = t;

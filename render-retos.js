@@ -79,8 +79,11 @@ async function loudnessFilter(wavFile) {
     const p = spawn("ffmpeg", ["-v", "info", "-nostats", "-i", wavFile, "-af", `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json`, "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
     let err = ""; p.stderr.on("data", (d) => (err += d)); p.on("close", () => { try { resolve(JSON.parse(err.slice(err.lastIndexOf("{"), err.lastIndexOf("}") + 1))); } catch { resolve(null); } });
   });
-  if (!m || !isFinite(Number(m.input_i))) return `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.89:level=false`;
-  return `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true,alimiter=limit=0.89:level=false`;
+  if (!m || !isFinite(Number(m.input_i))) return `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=false`;
+  // Ganancia exacta hasta -14 LUFS y un limitador suave para los picos de los efectos
+  // (el loudnorm lineal no sube más si los picos lo impiden y dejaba los largos en -15)
+  const gain = Math.max(-20, Math.min(20, -14 - Number(m.input_i)));
+  return `${PRE},volume=${gain.toFixed(2)}dB,alimiter=limit=0.84:attack=3:release=60:level=false`;
 }
 // Comprobación final del sonido del vídeo exportado
 async function audioCheck(file) {

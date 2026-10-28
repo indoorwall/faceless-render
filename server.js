@@ -13,7 +13,7 @@ import { render, cleanup } from "./render.js";
 import { frames, thumbnail } from "./tools.js";
 
 const PORT = Number(process.env.PORT || 8080);
-const VERSION = "2026-10-28-retos-1";
+const VERSION = "2026-10-28-retos-2";
 const SECRET = process.env.RENDER_SECRET || "";
 const jobs = new Map(); // id -> {status, progress, stage, error, duration, size, created}
 const queue = [];
@@ -81,7 +81,7 @@ http.createServer(async (req, res) => {
     if (!authed(req)) return send(res, 401, { error: "unauthorized" });
     if (req.method === "POST" && url.pathname === "/jobs") {
       const spec = await readJson(req);
-      if (!spec.id || !spec.upload_url || !Array.isArray(spec.scenes)) return send(res, 400, { error: "spec incompleta" });
+      if (!spec.id || !spec.upload_url || (spec.kind === "retos" ? !spec.project?.challenges?.length : !Array.isArray(spec.scenes))) return send(res, 400, { error: "spec incompleta" });
       if (jobs.get(spec.id)?.status === "running") return send(res, 409, { error: "ya en curso" });
       jobs.set(spec.id, { status: "queued", progress: 0, stage: "En cola de render", created: Date.now() });
       queue.push({ id: spec.id, spec });

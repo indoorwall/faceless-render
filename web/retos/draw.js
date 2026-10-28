@@ -420,7 +420,9 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   // Explicación
   const ex = seg.explain && t >= seg.explain[0] ? clamp((t - seg.explain[0]) / 0.4) : seg.explain && seg.out && t >= seg.out[0] ? 1 : 0;
   if (ex > 0 && c.explanation) {
-    const bw = W - (L.v ? 120 : 400) * u, size = (L.v ? 40 : 38) * u, ls = wrap(ctx, c.explanation, bw - 60 * u, size), bh = ls.length * size * 1.25 + 40 * u, by = L.v ? H - 400 * u - bh : H - 70 * u - bh;
+    // Encima de las opciones si las hay (nunca las tapa); si no, abajo
+    const bw = W - (L.v ? 120 : 400) * u, size = (L.v ? 40 : 38) * u, ls = wrap(ctx, c.explanation, bw - 60 * u, size), bh = ls.length * size * 1.25 + 40 * u;
+    const by = hasOptions(c) ? optsBox(L, c).y - bh - 18 * u : L.v ? H - 400 * u - bh : H - 70 * u - bh;
     ctx.save(); ctx.globalAlpha = eOut(ex); rrect(ctx, (W - bw) / 2, by + (1 - eOut(ex)) * 30, bw, bh, 22 * u); ctx.fillStyle = alpha(P.teal, 0.95); ctx.fill();
     ls.forEach((l, i) => text(ctx, l, W / 2, by + 20 * u + size * 0.62 + i * size * 1.25, size, P.bg)); ctx.restore();
   }

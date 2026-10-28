@@ -89,6 +89,7 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
   - Cuota por defecto: 10.000 unidades al día, y cada subida gasta unas 1.600 (unas 6 subidas al día).
 
 ## Pendiente (por orden)
+0. **YouTube (en cola, lo pidió Giol el 28/10):** redactar el texto del formulario «YouTube API Services Audit and Quota Extension» y dejar lista la programación desde la plataforma (subir como privado con `publishAt`, cuota diaria). Está detrás del motor de retos.
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.
    - **Voz:** probar **Fish Audio `s2-pro`** (15 $ por millón de bytes de texto) frente a ElevenLabs v3 con el mismo Short, y que Giol elija de oído.
      - Si se cambia, los tiempos por palabra para los subtítulos saldrían de la transcripción de OpenAI (Whisper, 0,006 $/min) o del alineado forzado.

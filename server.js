@@ -3,7 +3,8 @@
 // GET  /jobs/:id    (Bearer RENDER_SECRET) → estado y progreso
 // POST /frames      (Bearer) → fotogramas del vídeo en base64 para analizarlo
 // POST /thumbnail   (Bearer) → compone una miniatura JPG y la sube
-// GET  /health      → ok
+// GET  /health      → ok (con la versión, para comprobar que el despliegue está al día)
+// spec.kind = "retos" → Motor B (retos con gráficos 2D); si no, montaje documental
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,7 @@ import { render, cleanup } from "./render.js";
 import { frames, thumbnail } from "./tools.js";
 
 const PORT = Number(process.env.PORT || 8080);
+const VERSION = "2026-10-28-retos-1";
 const SECRET = process.env.RENDER_SECRET || "";
 const jobs = new Map(); // id -> {status, progress, stage, error, duration, size, created}
 const queue = [];
@@ -50,10 +52,12 @@ async function work() {
   const dir = path.join(os.tmpdir(), `render-${id}`);
   try {
     j.status = "running";
-    const out = await render(spec, dir, (p, stage) => { j.progress = p; j.stage = stage; });
+    const cb = (p, stage) => { j.progress = p; j.stage = stage; };
+    // El motor de retos se carga solo cuando hace falta: si fallara, el documental sigue funcionando
+    const out = spec.kind === "retos" ? await (await import("./render-retos.js")).renderRetos(spec, dir, cb) : await render(spec, dir, cb);
     j.stage = "Subiendo vídeo"; j.progress = 97;
     await upload(out.file, out.size, spec.upload_url);
-    Object.assign(j, { status: "succeeded", progress: 100, stage: null, duration: out.duration, size: out.size });
+    Object.assign(j, { status: "succeeded", progress: 100, stage: null, duration: out.duration, size: out.size, ...(out.report ? { report: out.report } : {}) });
   } catch (e) {
     console.error(id, e);
     Object.assign(j, { status: "failed", error: String(e.message || e).slice(0, 1500) });
@@ -73,7 +77,7 @@ setInterval(() => {
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://x");
-    if (url.pathname === "/health") return send(res, 200, { ok: true, busy, queued: queue.length });
+    if (url.pathname === "/health") return send(res, 200, { ok: true, busy, queued: queue.length, version: VERSION });
     if (!authed(req)) return send(res, 401, { error: "unauthorized" });
     if (req.method === "POST" && url.pathname === "/jobs") {
       const spec = await readJson(req);

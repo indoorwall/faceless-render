@@ -121,9 +121,9 @@ CREATE OR REPLACE FUNCTION public.set_api_key(p_name text, p_value text)
 declare v_id uuid;
 begin
   if not public.is_member() then raise exception 'not allowed'; end if;
-  -- PENDIENTE: añadir FISH_AUDIO_API_KEY y FAL_KEY a esta lista y a api_key_status()
   if p_name not in ('ANTHROPIC_API_KEY','ELEVENLABS_API_KEY','OPENAI_API_KEY','CREATOMATE_API_KEY',
-                    'YOUTUBE_API_KEY','PEXELS_API_KEY','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','RENDER_URL') then
+                    'YOUTUBE_API_KEY','PEXELS_API_KEY','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','RENDER_URL',
+                    'FISH_AUDIO_API_KEY','FAL_KEY') then
     raise exception 'unknown key';
   end if;
   select id into v_id from vault.secrets where name = 'fs_' || p_name;
@@ -140,7 +140,8 @@ CREATE OR REPLACE FUNCTION public.api_key_status()
  RETURNS TABLE(name text, is_set boolean) LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'vault' AS $function$
   select k, exists(select 1 from vault.secrets s where s.name = 'fs_' || k)
   from unnest(array['ANTHROPIC_API_KEY','ELEVENLABS_API_KEY','CREATOMATE_API_KEY','OPENAI_API_KEY','PEXELS_API_KEY',
-                    'YOUTUBE_API_KEY','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','RENDER_URL']) k
+                    'YOUTUBE_API_KEY','GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','RENDER_URL',
+                    'FISH_AUDIO_API_KEY','FAL_KEY']) k
   where public.is_member();
 $function$;
 

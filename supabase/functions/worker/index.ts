@@ -91,7 +91,7 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "failed", error: msg }).eq("id", job.id);
         // El análisis y las miniaturas son opcionales: si fallan, el vídeo sigue su curso
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
-        else if (job.video_id && !["thumbs", "learn"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
+        else if (job.video_id && !["thumbs", "learn", "compare"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
       } else {
         await sb.from("jobs").update({ status: "queued", error: msg, payload: { ...(job.payload ?? {}), batches: null }, run_after: new Date(Date.now() + 90_000 * job.attempts).toISOString() }).eq("id", job.id);
@@ -126,6 +126,7 @@ async function runStep(job: Job) {
     case "refill_ideas": return stepRefillIdeas(job);
     case "learn": return stepLearn(job);
     case "metrics": return stepMetrics(job);
+    case "compare": return stepCompare(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
 }
@@ -1594,4 +1595,75 @@ async function stepFixVisuals(job: Job) {
   if (job.payload?.dry) return;
   await sb.from("videos").update({ status: "producing", stage: "Volviendo a montar", progress: 45, error: null, analysis: null }).eq("id", v.id);
   await enqueue("visuals", { video_id: v.id });
+}
+
+// ---------- Paso: prueba de proveedores (Fish Audio frente a ElevenLabs, FLUX frente a GPT Image) ----------
+// No toca el vídeo: genera la voz y las imágenes de un Short ya hecho con los proveedores nuevos
+// y deja todo en media/tests/{video}/compare.json para compararlo con lo que ya tiene.
+// payload: { fish_voice?: id de voz de Fish, fish_model?: "s2-pro", flux_model?: "fal-ai/flux/schnell", images?: 4, skip_voice?, skip_images? }
+const plain = (t: unknown) => String(t ?? "").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g, " ").trim();
+async function fishTts(text: string, voiceId: string | undefined, model: string) {
+  const r = await fetch("https://api.fish.audio/v1/tts", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key("FISH_AUDIO_API_KEY")}`, "Content-Type": "application/json", model },
+    body: JSON.stringify({ text, ...(voiceId ? { reference_id: voiceId } : {}), format: "mp3", mp3_bitrate: 128, normalize: true, latency: "normal" }),
+  });
+  if (!r.ok) {
+    const t = (await r.text()).slice(0, 200);
+    if (r.status === 401 || r.status === 402 || /balance|credit|payment/i.test(t)) throw new UserError(`Fish Audio: sin crédito o clave no válida (${r.status}): ${t}`);
+    throw new Error(`Fish Audio ${r.status}: ${t}`);
+  }
+  return new Uint8Array(await r.arrayBuffer());
+}
+async function fluxImage(prompt: string, short: boolean, model: string) {
+  const r = await fetch(`https://fal.run/${model}`, {
+    method: "POST",
+    headers: { Authorization: `Key ${key("FAL_KEY")}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, image_size: short ? "portrait_16_9" : "landscape_16_9", num_images: 1, output_format: "jpeg", enable_safety_checker: true }),
+  });
+  if (!r.ok) {
+    const t = (await r.text()).slice(0, 200);
+    if (r.status === 401 || r.status === 403 || /balance|credit|locked/i.test(t)) throw new UserError(`fal.ai: sin crédito o clave no válida (${r.status}): ${t}`);
+    throw new Error(`fal.ai ${r.status}: ${t}`);
+  }
+  const d = await r.json();
+  const url = d.images?.[0]?.url;
+  if (!url) throw new Error("fal.ai no devolvió imagen");
+  const img = await fetch(url);
+  if (!img.ok) throw new Error(`fal.ai descarga ${img.status}`);
+  return new Uint8Array(await img.arrayBuffer());
+}
+async function stepCompare(job: Job) {
+  const v = await getVideo(job.video_id);
+  const ch = v.channel; const short = ch.format === "short";
+  const p = job.payload ?? {};
+  const dir = `tests/${v.id}`;
+  const { data: scenes } = await sb.from("scenes").select("n,narration,audio_url,audio_duration,shots").eq("video_id", v.id).order("n");
+  if (!scenes?.length) throw new UserError("El vídeo no tiene escenas");
+  // deno-lint-ignore no-explicit-any
+  const out: any = { video_id: v.id, title: v.title, format: ch.format, created: new Date().toISOString() };
+  if (!p.skip_voice) {
+    const text = scenes.map((s) => plain(s.narration)).join(" ");
+    const model = p.fish_model || "s2-pro";
+    const t0 = Date.now();
+    const bytes = await fishTts(text, p.fish_voice || ch.fish_voice_id || undefined, model);
+    out.voice = {
+      text, chars: text.length, bytes_text: new TextEncoder().encode(text).length,
+      eleven: scenes.map((s) => ({ n: s.n, url: s.audio_url, duration: s.audio_duration })),
+      fish: { model, voice: p.fish_voice || ch.fish_voice_id || null, url: await upload(`${dir}/fish_${Date.now()}.mp3`, bytes, "audio/mpeg"), seconds_to_generate: Math.round((Date.now() - t0) / 100) / 10 },
+    };
+  }
+  if (!p.skip_images) {
+    const model = p.flux_model || "fal-ai/flux/schnell";
+    // deno-lint-ignore no-explicit-any
+    const shots = scenes.flatMap((s) => (s.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url)).slice(0, Number(p.images ?? 4));
+    out.images = { model, items: [] };
+    for (const sh of shots) {
+      const prompt = ctxPrompt(sh, v, ch);
+      const bytes = await fluxImage(prompt, short, model);
+      out.images.items.push({ line: sh.line, prompt, gpt: sh.media_url, flux: await upload(`${dir}/flux_${out.images.items.length}_${Date.now()}.jpg`, bytes, "image/jpeg") });
+    }
+  }
+  await upload(`${dir}/compare.json`, new TextEncoder().encode(JSON.stringify(out, null, 2)), "application/json");
+  await log(job, `Prueba de proveedores lista: ${out.voice ? "voz de Fish" : ""}${out.voice && out.images ? " y " : ""}${out.images ? `${out.images.items.length} imágenes FLUX` : ""} en media/${dir}/compare.json`);
 }

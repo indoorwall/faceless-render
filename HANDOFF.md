@@ -74,7 +74,8 @@ Sistema automático de canales de YouTube faceless: ideas → guion → voz → 
      - Si se cambia, los tiempos por palabra para los subtítulos saldrían de la transcripción de OpenAI (Whisper, 0,006 $/min) o del alineado forzado.
      - El proveedor de voz debería ser configurable por canal.
    - **Imágenes:** OpenAI solo para el gancho y las miniaturas; el resto con **FLUX schnell en fal.ai** (unos 0,003 $ por imagen). También configurable por canal.
-   - **Claves:** hace falta que Giol cree las cuentas de Fish Audio y fal.ai. Añadir `FISH_AUDIO_API_KEY` y `FAL_KEY` a `set_api_key()`, a `api_key_status()` y a la pantalla de Ajustes de la web.
+   - **Claves:** hace falta que Giol cree las cuentas de Fish Audio y fal.ai. `FISH_AUDIO_API_KEY` y `FAL_KEY` ya están en `set_api_key()` y `api_key_status()` (aplicado en la base de datos) y en Ajustes.
+   - **Paso de prueba `compare`** (no toca el vídeo): genera con Fish la narración entera de un Short ya hecho y con FLUX sus primeras 4 imágenes IA. Lo deja en `media/tests/{video}/compare.json`, junto a las URLs de ElevenLabs y GPT Image que ya tenía. Para lanzarlo: `insert into jobs(step, video_id, payload) values ('compare', '97ab9b84-27ac-462c-a42d-919be6dd6622', '{"fish_voice":"<id de voz de Fish>"}');`. Opciones del payload: `fish_model`, `flux_model`, `images`, `skip_voice` y `skip_images`.
 2. **«4 tormentas que decidieron guerras»** (largo) ha fallado en `voice` por falta de créditos de ElevenLabs. Hay que relanzarlo con `retry_video` cuando haya crédito o voz nueva.
 3. **Comprobar el coste real** del próximo guion por lotes (`videos.usage`, claves `opus_batch_in/out`).
 4. **Antes de fusionar** esta rama `handoff-worker` en `main`: el filtro de Cloud Build (ver arriba).

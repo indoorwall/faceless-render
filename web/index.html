@@ -319,7 +319,7 @@ async function run(fn, ok){
 async function load(){
   const [c,v,p,a,k,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
-    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("channel_proposals").select("*").eq("status","pending").order("created_at",{ascending:false}),
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
@@ -417,26 +417,31 @@ function viewHoy(){
     ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>`
       <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`).join("")}</div></section>`:""}`;
 }
+const chFormats = (c) => (c?.formats?.length ? c.formats : [c?.format||"long"]);
+const longMin = (c) => c?.format==="long" ? c.target_minutes : (c?.long_minutes ?? 8);
+const fmtLabel = (f,c) => f==="short" ? "Short" : `Largo · ${longMin(c)} min`;
 function ideaGenerator(){
   const chs=S.channels.filter(c=>c.status!=="archived"); if(!chs.length) return "";
   return `<div class="card" style="margin-bottom:12px"><div class="label" style="margin-bottom:8px">Pedir ideas a medida</div>
     <div class="gen-row">
       ${chs.length>1?`<select id="g-ch">${chs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`:`<input type="hidden" id="g-ch" value="${chs[0].id}">`}
       <input type="text" id="g-focus" placeholder="Tema concreto (opcional): espías de la Guerra Fría, animales en la Primera Guerra Mundial…">
+      <select id="g-fmt" title="Formato"><option value="">Short y largo</option><option value="short">Solo Shorts</option><option value="long">Solo vídeos largos</option></select>
       <select id="g-kind"><option value="mix">Mezcla</option><option value="single">Una historia</option><option value="compilation">Recopilatorio</option></select>
       <button class="btn pri" onclick="genIdeas()">Generar 5 ideas</button>
     </div>
     <div class="muted" style="font-size:12px;margin-top:6px">Sin tema, «Pedir ideas» en el canal saca ideas del banco gratis. Esto crea ideas nuevas siguiendo la guía del canal (unos céntimos).</div></div>`;
 }
 async function genIdeas(){
-  const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value;
-  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,then_draw:5}}); if(error) throw error; await kick(); await load(); }, "Generando ideas a medida. Llegarán aquí en un minuto.");
+  const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value, format=$("#g-fmt").value||null;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5}}); if(error) throw error; await kick(); await load(); }, "Generando ideas a medida. Llegarán aquí en un minuto.");
 }
 function ideaCard(v){
   const ev = Array.isArray(v.idea_evidence) ? v.idea_evidence.filter(e=>e&&e.url).slice(0,4) : [];
   return `<div class="card" id="idea-${v.id}">
     <div class="row">${chTag(v.channel_id)}<span class="muted" style="font-size:12px">${ago(v.created_at)}</span></div>
     <div class="idea-t">${esc(v.idea_title)}</div>
+    ${(()=>{ const c=ch(v.channel_id), fs=chFormats(c), f=v.format||c?.format||"long"; return fs.length>1?`<div class="row"><label class="muted" style="font-size:12.5px">Formato</label><select id="fmt-${v.id}" style="width:auto">${fs.map(x=>`<option value="${x}" ${x===f?"selected":""}>${fmtLabel(x,c)}</option>`).join("")}</select></div>`:`<div class="row"><span class="chip">${fmtLabel(f,c)}</span></div>`; })()}
     ${v.idea_kind==="compilation"?`<div class="row"><span class="chip st-acc">Recopilatorio · ${(v.idea_stories||[]).length} historias</span></div><ol style="margin:0;padding-left:20px;font-size:13.5px;display:flex;flex-direction:column;gap:4px">${(v.idea_stories||[]).map(x=>`<li><b>${esc(x.title)}</b> <span class="muted">— ${esc(x.hook)}</span></li>`).join("")}</ol>`:""}
     ${v.idea_hook?`<div class="why"><b>Arranque:</b> «${esc(v.idea_hook)}»</div>`:""}
     ${v.idea_angle?`<div class="why"><b>Ángulo:</b> ${esc(v.idea_angle)}</div>`:""}
@@ -460,7 +465,7 @@ function viewCanales(){
     const n=(st)=>vs.filter(v=>st.includes(v.status)).length;
     const gen=S.jobs.some(j=>j.step==="ideas"&&j.channel_id===c.id);
     return `<div class="card">
-      <div class="spread"><div style="min-width:0"><div class="row"><span class="chip"><span class="dot" style="background:${esc(c.color)}"></span>${c.format==="short"?"Shorts":"Largo · "+c.target_minutes+" min"}</span>${c.status==="paused"?`<span class="chip st-warn">En pausa</span>`:""}</div>
+      <div class="spread"><div style="min-width:0"><div class="row"><span class="chip"><span class="dot" style="background:${esc(c.color)}"></span>${chFormats(c).map(f=>fmtLabel(f,c)).join(" + ")}</span>${c.status==="paused"?`<span class="chip st-warn">En pausa</span>`:""}</div>
       <h2 style="margin-top:8px">${esc(c.name)}</h2><div class="why">${esc(c.niche)}</div></div></div>
       <dl class="kv"><dt>Idioma</dt><dd>${esc(c.language)}</dd><dt>Imágenes</dt><dd>${{ai:"IA",stock:"Stock real",mix:"Mezcla"}[c.image_source]}</dd><dt>YouTube</dt><dd>${c.youtube_connected?`<span style="color:var(--ok)">Conectado</span>`:`<span class="muted">Sin conectar</span>`}</dd>
       <dt>Pipeline</dt><dd class="mono">${n(["idea_review"])} ideas · ${n(["scripting","script_review","producing","final_review"])} en curso · ${n(["published","scheduled"])} publicados</dd></dl>
@@ -642,7 +647,7 @@ function renderSheet(first){
       <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>`;
   }
   body += `<div class="muted mono" style="font-size:11.5px">Consumo: ${usageTxt}</div>`;
-  sheetShell(v.title||v.idea_title, `${chTag(v.channel_id)}${chip(v.status)}`, body, foot);
+  sheetShell(v.title||v.idea_title, `${chTag(v.channel_id)}${chip(v.status)}<span class="chip">${fmtLabel(v.format||c.format,c)}</span>`, body, foot);
   // edición en vivo del borrador de guion
   $("#sheet").querySelectorAll("[data-i]").forEach(el=>{
     el.addEventListener(el.tagName==="SELECT"?"change":"input",()=>{
@@ -667,7 +672,9 @@ document.addEventListener("keydown",e=>{ if(e.key==="Escape" && S.open) closeShe
 // ---------- acciones de vídeo ----------
 async function approveIdea(id){
   const note = $(`#note-${id}`)?.value?.trim() || null;
-  await run(async()=>{ const {error}=await sb.from("videos").update({status:"scripting",script_notes:note}).eq("id",id); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Idea aprobada. Escribiendo el guion…");
+  const v = S.videos?.find?.(x=>x.id===id); const fsel=$(`#fmt-${id}`)?.value;
+  const format = fsel || v?.format || ch(v?.channel_id)?.format || null;
+  await run(async()=>{ const {error}=await sb.from("videos").update({status:"scripting",script_notes:note,...(format?{format}:{})}).eq("id",id); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Idea aprobada. Escribiendo el guion…");
 }
 async function rejectIdea(id){ await run(async()=>{ const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",id); if(error) throw error; if(S.open) closeSheet(); }, "Idea descartada"); }
 const VT_OPTS=[["ai","Imagen IA"],["archive","Foto de archivo"],["stock_photo","Foto stock"],["stock_video","Vídeo stock"],["reframe","Reencuadre"]];
@@ -766,7 +773,7 @@ async function analysisToGuide(){
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"guide",channel_id:v.channel_id,payload:{feedback:fb}}); if(error) throw error; await kick(); }, "Actualizando la guía del canal…");
 }
 function thumbBlock(v,c){
-  if(c.format==="short") return "";
+  if((v.format||c.format)==="short") return "";
   const th=v.thumbnails||[];
   const busy=S.jobs.some(j=>j.video_id===v.id&&j.step==="thumbs");
   const txt=v.script?.thumbnail_text||"";
@@ -828,8 +835,8 @@ function renderChannelSheet(first){
     <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
     <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
     <label class="f full">Temas del canal <small>De aquí salen las ideas automáticas. Uno por línea o separados por comas</small><textarea id="c-topics" rows="3" placeholder="Sé concreto: épocas, tipos de historia y lo que NO quieres. Ej.: anécdotas reales de guerras de la Antigüedad a la Guerra Fría, espías, animales soldado… Nada de ciencia ni naturaleza.">${esc(c.topics)}</textarea></label>
-    <label class="f">Formato<select id="c-format"><option value="long" ${c.format==="long"?"selected":""}>Vídeo largo (16:9)</option><option value="short" ${c.format==="short"?"selected":""}>Shorts (9:16)</option></select></label>
-    <label class="f">Duración objetivo (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(c.target_minutes)}"></label>
+    <label class="f">Formatos <small>Qué tipo de vídeos hace el canal</small><select id="c-format"><option value="short" ${chFormats(c).join()==="short"?"selected":""}>Solo Shorts (9:16)</option><option value="long" ${chFormats(c).join()==="long"?"selected":""}>Solo vídeos largos (16:9)</option><option value="both" ${chFormats(c).length>1?"selected":""}>Shorts y vídeos largos</option></select></label>
+    <label class="f">Duración de los vídeos largos (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(longMin(c))}"></label>
     <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["ca","Catalán"],["pt","Portugués"],["fr","Francés"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f">Imágenes<select id="c-img"><option value="mix" ${c.image_source==="mix"?"selected":""}>Mezcla (recomendado)</option><option value="ai" ${c.image_source==="ai"?"selected":""}>Solo IA</option><option value="stock" ${c.image_source==="stock"?"selected":""}>Solo stock real</option></select></label>
     <label class="f full">Audiencia<input type="text" id="c-aud" value="${esc(c.audience)}" placeholder="Ej.: adultos de 25-45 interesados en actualidad internacional"></label>
@@ -858,7 +865,7 @@ function renderChannelSheet(first){
 }
 async function saveChannel(){
   const c=S.open.c;
-  const row={ name:$("#c-name").value.trim(), color:$("#c-color").value.trim()||"#2F45E8", niche:$("#c-niche").value.trim(), format:$("#c-format").value, target_minutes:+$("#c-min").value||8,
+  const row={ name:$("#c-name").value.trim(), color:$("#c-color").value.trim()||"#2F45E8", niche:$("#c-niche").value.trim(), ...(()=>{ const f=$("#c-format").value, m=+$("#c-min").value||8, main=f==="both"?(c?.format||"short"):f; return { format:main, formats:f==="both"?["short","long"]:[f], long_minutes:m, target_minutes:main==="long"?m:1 }; })(),
     language:$("#c-lang").value, image_source:$("#c-img").value, audience:$("#c-aud").value.trim()||null, tone:$("#c-tone").value.trim()||null, style_prompt:$("#c-style").value.trim()||null,
     voice_id:$("#c-voice").value.trim()||null, ideas_per_run:+$("#c-ipr").value||5, reference_channels:$("#c-refs").value.split(",").map(s=>s.trim()).filter(Boolean),
     music_url:$("#c-music").value.trim()||null, music_volume:+$("#c-mvol").value||0, music_mode:$("#c-mmode").value, music_style:$("#c-mstyle").value.trim()||null,

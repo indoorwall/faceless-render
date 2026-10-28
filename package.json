@@ -5,6 +5,14 @@
   "type": "module",
   "description": "Servidor de montaje con FFmpeg para Faceless Studio",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=20" }
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/retos.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "canvas": "3.2.3"
+  }
 }

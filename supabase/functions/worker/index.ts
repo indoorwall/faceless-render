@@ -4,6 +4,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
 import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
+import { WORLD } from "../../../web/retos/world.js";
+const WORLD_MECH = new Set(Object.keys(WORLD));
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -43,19 +45,23 @@ class UserError extends Error {}
 class Pending extends Error {}
 // Presupuesto diario (app_config.daily_cap_eur) agotado: el trabajo espera a mañana
 class OverBudget extends Error {}
+// Cuota diaria de la API de YouTube agotada: la subida espera al día siguiente (medianoche del Pacífico)
+class QuotaWait extends Error {}
+// Canal del trabajo en curso: cada gasto se apunta también a su canal (tope propio en channels.daily_budget_eur)
+let CUR_CH: string | null = null;
 async function reserve(k: string, n: number) {
   if (!n) return;
-  const { data, error } = await sb.rpc("reserve_spend", { p_key: k, p_n: n });
+  const { data, error } = await sb.rpc("reserve_spend", { p_key: k, p_n: n, p_channel: CUR_CH });
   if (error) throw new Error(`Presupuesto: ${error.message}`);
   if (data !== true) throw new OverBudget(k);
 }
 // Si la llamada falla, se devuelve lo reservado (no se ha gastado)
 async function unreserve(k: string, n: number) {
-  if (n) await sb.rpc("record_spend", { p_key: k, p_n: -n });
+  if (n) await sb.rpc("record_spend", { p_key: k, p_n: -n, p_channel: CUR_CH });
 }
 // Claude: antes de llamar se comprueba que queda margen; al recibir la respuesta se apunta lo gastado
 async function claudeGuard(model: string) {
-  const { data, error } = await sb.rpc("budget_left");
+  const { data, error } = await sb.rpc("budget_left", { p_channel: CUR_CH });
   if (error) throw new Error(`Presupuesto: ${error.message}`);
   if (Number(data ?? 0) < (model.includes("opus") ? 0.3 : 0.05)) throw new OverBudget("claude");
 }
@@ -63,10 +69,10 @@ async function claudeGuard(model: string) {
 async function claudeSpent(model: string, d: any, batch = false) {
   const tier = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
   const f = batch ? 0.5 : 1;
-  await sb.rpc("record_spend", { p_key: `${tier}_in`, p_n: (d?.usage?.input_tokens ?? 0) * f });
-  await sb.rpc("record_spend", { p_key: `${tier}_out`, p_n: (d?.usage?.output_tokens ?? 0) * f });
+  await sb.rpc("record_spend", { p_key: `${tier}_in`, p_n: (d?.usage?.input_tokens ?? 0) * f, p_channel: CUR_CH });
+  await sb.rpc("record_spend", { p_key: `${tier}_out`, p_n: (d?.usage?.output_tokens ?? 0) * f, p_channel: CUR_CH });
   const ws = d?.usage?.server_tool_use?.web_search_requests ?? 0;
-  if (ws) await sb.rpc("record_spend", { p_key: "web_searches", p_n: ws });
+  if (ws) await sb.rpc("record_spend", { p_key: "web_searches", p_n: ws, p_channel: CUR_CH });
 }
 // Mañana a las 00:05, hora de Madrid
 function nextMadridDay() {
@@ -112,6 +118,8 @@ async function runLoop() {
     if (!job || !job.id) break;
     processed++;
     try {
+      CUR_CH = job.channel_id ?? null;
+      if (!CUR_CH && job.video_id) { const { data: vv } = await sb.from("videos").select("channel_id").eq("id", job.video_id).maybeSingle(); CUR_CH = vv?.channel_id ?? null; }
       await runStep(job);
       await sb.from("jobs").update({ status: "done", error: null }).eq("id", job.id);
     } catch (e) {
@@ -119,6 +127,13 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: nextMadridDay() }).eq("id", job.id);
         if (job.video_id) await sb.from("videos").update({ stage: "Esperando al presupuesto de mañana" }).eq("id", job.video_id);
         if (!budgetLogged) { budgetLogged = true; await log(job, `Presupuesto diario agotado (${e.message}): ${job.step} y lo que venga detrás siguen mañana`, "warn"); }
+        continue;
+      }
+      if (e instanceof QuotaWait) {
+        const pt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })); const ms = ((24 - pt.getHours()) * 60 - pt.getMinutes() + 10) * 60000;
+        await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), run_after: new Date(Date.now() + ms).toISOString() }).eq("id", job.id);
+        if (job.video_id) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (mañana)" }).eq("id", job.video_id);
+        await log(job, "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
         continue;
       }
       if (e instanceof Pending) {
@@ -172,6 +187,8 @@ async function runStep(job: Job) {
     case "retos_assets": return stepRetosAssets(job);
     case "audio_asset": return stepAudioAsset(job);
     case "retos_generate": return stepRetosGenerate(job);
+    case "planner": return stepPlanner(job);
+    case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
 }
@@ -1209,6 +1226,7 @@ async function stepRenderCheck(job: Job) {
       const url = sb.storage.from("media").getPublicUrl(`${v.id}/final.mp4`).data.publicUrl + `?v=${Date.now()}`;
       await sb.from("videos").update({ video_url: url, status: "final_review", stage: null, progress: 100, duration_sec: Math.round((d.duration ?? 0) * 10) / 10 }).eq("id", v.id);
       await log(job, `Vídeo listo para revisión: ${v.title}`);
+      if (v.channel?.autopilot === "auto") await kickPlanner(v.channel_id, 5);
     } else if (d.status === "failed") {
       throw new UserError(`Render fallido: ${d.error ?? "sin detalle"}`);
     } else {
@@ -1237,6 +1255,11 @@ async function stepPublish(job: Job) {
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
+  // Sin fecha elegida: el siguiente hueco libre del calendario del canal (si tiene ritmo para ese formato)
+  if (!v.publish_at && v.auto?.publish_now !== true) { const slot = await nextSlot(v.channel, v.format ?? v.channel.format ?? "long"); if (slot) { v.publish_at = slot.toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); } }
+  // Cuota: subir un vídeo gasta 1.600 unidades y la miniatura 50 (10.000 al día por proyecto)
+  const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
+  if (qok !== true) throw new QuotaWait("youtube");
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
     snippet: { title: (v.title ?? v.idea_title).slice(0, 100), description: v.description ?? "", tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
@@ -1262,7 +1285,8 @@ async function stepPublish(job: Job) {
     } catch (_) { /* la miniatura personalizada requiere canal verificado */ }
   }
   await sb.from("videos").update({ youtube_video_id: res.id, status: future ? "scheduled" : "published", stage: null, published_at: future ? new Date(v.publish_at).toISOString() : new Date().toISOString() }).eq("id", v.id);
-  await log(job, `Publicado en YouTube: https://youtu.be/${res.id}`);
+  await log(job, `${future ? "Programado" : "Publicado"} en YouTube: https://youtu.be/${res.id}`);
+  if (v.channel.clips_per_long > 0 || v.channel.autopilot !== "manual") await kickPlanner(v.channel_id);
 }
 
 // ================= Viralidad: director, análisis del vídeo y miniaturas =================
@@ -1311,6 +1335,7 @@ async function stepDirect(job: Job) {
     // deno-lint-ignore no-explicit-any
     const sc = script as any;
     await sb.from("videos").update({ script: sc, title: sc.title, description: sc.description, tags: sc.tags ?? [], sources: sc.sources ?? [], status: "script_review", stage: null, progress: 0, ...extra }).eq("id", v.id);
+    if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
   };
   if (!original?.scenes?.length) throw new UserError("No hay guion que revisar");
   if (job.attempts >= 2) { await finish(original); await log(job, "El director tardó demasiado. Queda el borrador del guionista.", "warn"); return; }
@@ -1445,6 +1470,7 @@ async function stepAnalyze(job: Job) {
 async function finishAnalysis(job: Job, v: any, ch: any, r: any, meta: { frames?: number; duration?: number }) {
   await bumpUsage(v.id, { ...usageOf(r), analyses: 1 }, { analysis: { ...r.input, status: "done", video_url: v.video_url, frames: meta.frames ?? null, duration: meta.duration ?? null, analyzed_at: new Date().toISOString() } });
   await log(job, `Análisis de «${v.title}»: ${r.input.score}/10, potencial ${r.input.viral_potential}`);
+  if (ch.autopilot === "auto") await kickPlanner(ch.id, 5);
   // deno-lint-ignore no-explicit-any
   await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "analysis", material: `Análisis del vídeo montado «${v.title}» (${r.input.score}/10): ${r.input.verdict}\nProblemas:\n${(r.input.issues ?? []).map((i: any) => `- ${i.area}: ${i.problem} → ${i.fix}`).join("\n")}\nFunciona: ${(r.input.strengths ?? []).join("; ")}` } });
 }
@@ -1566,7 +1592,8 @@ Varía épocas, países y tipos de historia. Llama a guardar_ideas.`;
   if (!ideas.length) throw new Error(`El generador no devolvió ideas (${r.stop}; claves: ${Object.keys(r.input ?? {}).join(",")})`);
   const seen = new Set(used.map((t) => String(t).toLowerCase()));
   const rows = ideas
-    .filter((i) => i?.title && Number(i.fit ?? 0) >= 7.5 && !seen.has(String(i.title).toLowerCase()))
+    // deno-lint-ignore no-explicit-any
+    .filter((i: any) => i?.title && Number(i.fit ?? 0) >= 7.5 && !seen.has(String(i.title).toLowerCase()))
     // deno-lint-ignore no-explicit-any
     .map((i: any) => ({ ...i, format: wantF === "mix" ? (allowedF.includes(i.format) ? i.format : allowedF[0]) : wantF }))
     // deno-lint-ignore no-explicit-any
@@ -2145,6 +2172,7 @@ async function finishRetos(job: Job, v: any, d: any) {
   // deno-lint-ignore no-explicit-any
   const rows = (v.retos?.challenges ?? []).map((c: any) => ({ channel_id: v.channel_id, video_id: v.id, signature: c.signature, mechanic: c.mechanic, category: c.category, reused: !!c.reused }));
   if (rows.length) { await sb.from("challenge_history").delete().eq("video_id", v.id); await sb.from("challenge_history").insert(rows); }
+  if (v.channel?.autopilot === "auto") await kickPlanner(v.channel_id, 5);
   await log(job, `Vídeo de retos listo para revisión: ${v.title} (0 imágenes IA, ${rep.sfx_files ?? 0} efectos y ${rep.music_files ?? 0} músicas reutilizados, sonido ${rep.audio?.lufs ?? "?"} LUFS)`);
 }
 
@@ -2172,10 +2200,272 @@ async function stepRetosGenerate(job: Job) {
   if (!ch || ch.production_type !== "challenges") throw new UserError("El canal no es de retos");
   const p = job.payload ?? {};
   const { data: hist } = await sb.from("challenge_history").select("signature").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(1500);
-  const project = buildProject({ format: p.format === "short" ? "short" : "long", category: p.category ?? "mixed", difficulty: p.difficulty ?? "progressive", count: Number(p.count) || 0, minutes: Number(p.minutes) || undefined, seconds: Number(p.seconds) || undefined, history: (hist ?? []).map((x) => x.signature), config: ch.retos_config, seed: `${ch.id}-${Date.now()}`, title: p.title });
+  const project = buildProject({ game_style: p.game_style ?? ch.retos_config?.game_style, format: p.format === "short" ? "short" : "long", category: p.category ?? "mixed", difficulty: p.difficulty ?? "progressive", count: Number(p.count) || 0, minutes: Number(p.minutes) || undefined, seconds: Number(p.seconds) || undefined, history: (hist ?? []).map((x) => x.signature), config: ch.retos_config, seed: `${ch.id}-${Date.now()}`, title: p.title });
   const val = validateProject(project);
   if (!val.ok) throw new Error(`Generación inválida: ${val.errors[0]}`);
   const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: project.format, title: project.title, idea_title: project.title, retos: project, usage: {}, target_minutes: project.format === "long" ? Number(p.minutes) || 8 : null }).select("id").single();
   if (error) throw new Error(error.message);
+  if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
   await log({ ...job, video_id: v.id }, `Retos generados (${project.challenges.length}): «${project.title}». Revísalos antes de montar.`);
+}
+
+// ======================================================================================================
+// Piloto automático por canal (manual · semi · auto), calendario de publicación y control de políticas
+// - semi: aprueba solo las ideas y los guiones que pasan los controles; tú solo ves el vídeo final.
+// - auto: además aprueba el vídeo final (nota del análisis ≥ quality_min y controles de políticas) y lo programa.
+// Lo que no pasa un control se queda esperándote con el motivo (nunca se publica a ciegas).
+// ======================================================================================================
+const DEF_SCHEDULE = { long_per_week: 2, shorts_per_week: 7, long_time: "18:30", short_times: ["13:00", "20:30"], buffer_days: 5 };
+// deno-lint-ignore no-explicit-any
+function scheduleOf(ch: any) {
+  const s = { ...DEF_SCHEDULE, ...(ch.schedule ?? {}) };
+  const fm: string[] = ch.formats?.length ? ch.formats : [ch.format ?? "long"];
+  if (!fm.includes("long")) s.long_per_week = 0;
+  if (!fm.includes("short") && !(ch.clips_per_long > 0)) s.shorts_per_week = 0;
+  return s;
+}
+// Hora de Madrid ↔ UTC (con el cambio de horario)
+function madridOffsetMin(d: Date) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d).map((x) => [x.type, x.value]));
+  return (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(d.getTime() / 60000) * 60000) / 60000;
+}
+function madridToUtc(y: number, m: number, d: number, hh: number, mm: number) {
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  let t = guess - madridOffsetMin(new Date(guess)) * 60000;
+  t = guess - madridOffsetMin(new Date(t)) * 60000;
+  return new Date(t);
+}
+// Huecos de publicación de los próximos días: n por semana repartidos de forma regular
+// deno-lint-ignore no-explicit-any
+function slotsFor(ch: any, format: string, days = 21) {
+  const s = scheduleOf(ch), n = format === "short" ? s.shorts_per_week : s.long_per_week;
+  const times: string[] = format === "short" ? (s.short_times?.length ? s.short_times : ["13:00"]) : [s.long_time || "18:30"];
+  const out: Date[] = []; if (!n) return out;
+  const now = new Date(), base = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+  for (let i = 0; i < days; i++) {
+    const day = new Date(Date.UTC(base.getFullYear(), base.getMonth(), base.getDate() + i));
+    const idx = Math.floor(day.getTime() / 86400000);
+    const count = Math.floor(((idx + 1) * n) / 7) - Math.floor((idx * n) / 7);
+    for (let k = 0; k < count; k++) {
+      const [hh, mm] = String(times[(idx + k) % times.length]).split(":").map(Number);
+      const t = madridToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), (hh + (k >= times.length ? 2 * Math.floor(k / times.length) : 0)) % 24, mm || 0);
+      if (t.getTime() > now.getTime() + 60 * 60000) out.push(t);
+    }
+  }
+  return out.sort((a, b) => a.getTime() - b.getTime());
+}
+// Primer hueco libre del calendario para ese formato (o null si el canal no tiene ritmo para él)
+// deno-lint-ignore no-explicit-any
+async function nextSlot(ch: any, format: string, notBefore?: Date) {
+  const slots = slotsFor(ch, format, 42); if (!slots.length) return null;
+  const { data: taken } = await sb.from("videos").select("id,publish_at,published_at,format").eq("channel_id", ch.id).in("status", ["publishing", "scheduled", "published"]).gte("publish_at", new Date(Date.now() - 86400000).toISOString());
+  const busy = (taken ?? []).filter((x) => (x.format ?? ch.format) === format).map((x) => new Date(x.publish_at ?? x.published_at).getTime());
+  return slots.find((t) => (!notBefore || t >= notBefore) && !busy.some((b) => Math.abs(b - t.getTime()) < 45 * 60000)) ?? null;
+}
+
+// ---------- Control de políticas de YouTube (contenido repetitivo, duplicados, transparencia) ----------
+const TITLE_STOP = new Set(["el", "la", "los", "las", "de", "del", "que", "y", "en", "un", "una", "por", "con", "para", "the", "of", "and", "to", "a", "in", "es", "se", "lo", "al"]);
+function titleWords(t: string) { return new Set(String(t ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9ñ ]+/g, " ").split(/\s+/).filter((w) => w.length > 2 && !TITLE_STOP.has(w))); }
+function jaccard(a: Set<string>, b: Set<string>) { if (!a.size || !b.size) return 0; let i = 0; for (const x of a) if (b.has(x)) i++; return i / (a.size + b.size - i); }
+// deno-lint-ignore no-explicit-any
+async function policyCheck(v: any, ch: any) {
+  const block: string[] = [], warn: string[] = [];
+  const title = v.title ?? v.idea_title ?? "";
+  // 1) Títulos casi iguales a otro vídeo del canal o de canales del mismo idioma (YouTube penaliza el contenido repetido)
+  const { data: sameLang } = await sb.from("channels").select("id").eq("language", ch.language ?? "es");
+  const ids = (sameLang ?? []).map((x) => x.id);
+  const { data: others } = await sb.from("videos").select("id,title,channel_id,derived,parent_id").in("channel_id", ids.length ? ids : [ch.id]).in("status", ["publishing", "scheduled", "published", "final_review"]).neq("id", v.id).order("created_at", { ascending: false }).limit(600);
+  const tw = titleWords(title);
+  for (const o of others ?? []) {
+    if (o.id === v.parent_id || o.parent_id === v.id) continue; // un Short sacado de su propio largo sí puede parecerse
+    const s = jaccard(tw, titleWords(o.title));
+    if (s >= (v.engine === "challenges" ? 0.95 : 0.75)) { (o.channel_id === ch.id ? block : warn).push(`Título casi igual a «${o.title}»`); break; }
+  }
+  // 2) Retos: no repetir los mismos acertijos ya publicados
+  if (v.engine === "challenges") {
+    const sigs = (v.retos?.challenges ?? []).map((c: { signature: string }) => c.signature);
+    if (sigs.length) {
+      const { data: used } = await sb.from("challenge_history").select("signature,video_id").eq("channel_id", ch.id).in("signature", sigs.slice(0, 200));
+      const rep = new Set((used ?? []).filter((u) => u.video_id !== v.id).map((u) => u.signature));
+      if (rep.size / sigs.length > 0.3) block.push(`${rep.size} de ${sigs.length} retos ya se usaron en otros vídeos`);
+    }
+  } else {
+    // 3) Documental: guion con fuentes y descripción propia (valor añadido y transparencia)
+    if (!(v.sources ?? v.script?.sources ?? []).length) warn.push("El guion no cita fuentes");
+    if (String(v.description ?? "").trim().length < 80) warn.push("Descripción muy corta");
+  }
+  // 4) Ritmo: no más de 3 Shorts y 1 largo al día por canal (las ráfagas parecen spam)
+  return { ok: block.length === 0, block, warn, at: new Date().toISOString() };
+}
+// Transparencia: YouTube exige declarar el contenido realista generado con IA. Los retos dibujados no lo son.
+// deno-lint-ignore no-explicit-any
+async function needsAiDisclosure(v: any, ch: any) {
+  if (v.engine === "challenges") return false;
+  const { data: sc } = await sb.from("scenes").select("shots,media_url").eq("video_id", v.parent_id ?? v.id).limit(200);
+  // deno-lint-ignore no-explicit-any
+  const ai = (sc ?? []).some((s: any) => (s.shots ?? []).some((sh: any) => sh?.media?.gen === "ai"));
+  return ai || ch.ai_disclosure_default !== false;
+}
+
+// Encola el planificador de un canal si no hay ya uno pendiente
+async function kickPlanner(chId: string, delaySec = 20) {
+  const { count } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "planner").eq("channel_id", chId).eq("status", "queued");
+  if (!count) await enqueue("planner", { channel_id: chId, delaySec });
+}
+
+async function stepPlanner(job: Job) {
+  let q = sb.from("channels").select("*").eq("status", "active");
+  if (job.channel_id) q = q.eq("id", job.channel_id);
+  const { data: chs } = await q;
+  for (const ch of chs ?? []) {
+    if (ch.autopilot === "manual" && !(ch.clips_per_long > 0) && !(ch.mirror_of && ch.mirror_auto)) continue;
+    CUR_CH = ch.id;
+    try { await planChannel(job, ch); } catch (e) { if (e instanceof OverBudget) throw e; await log({ ...job, channel_id: ch.id }, `Piloto automático: ${(e as Error).message}`, "warn"); }
+  }
+}
+// deno-lint-ignore no-explicit-any
+async function planChannel(job: Job, ch: any) {
+  const J = { ...job, channel_id: ch.id };
+  const { data: vids } = await sb.from("videos").select("id,status,format,engine,auto,analysis,retos,script,title,idea_title,description,sources,publish_at,published_at,video_url,parent_id,derived,created_at,youtube_video_id").eq("channel_id", ch.id).neq("status", "idea_rejected").order("created_at", { ascending: true }).limit(400);
+  const V = vids ?? [];
+  const fmtOf = (v: { format?: string }) => v.format ?? ch.format ?? "long";
+  const minQ = Number(ch.quality_min ?? 8);
+  const setAuto = (v: { id: string; auto?: unknown }, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) => sb.from("videos").update({ auto: { ...((v.auto as object) ?? {}), ...patch }, ...extra }).eq("id", v.id);
+
+  if (ch.autopilot !== "manual") {
+    // 1) Guiones (y retos) por revisar: se aprueban solos si pasan los controles
+    for (const v of V.filter((x) => x.status === "script_review" && !x.auto?.script)) {
+      let score: number | null = null, why = "";
+      if (v.engine === "challenges") { const val = validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
+      else { score = Number(v.script?.director?.score_after ?? v.script?.director?.score_before ?? NaN); if (!isFinite(score)) { score = null; why = "el guion no tiene nota del director"; } else if (score < minQ) why = `nota del guion ${score}/10 (mínimo ${minQ})`; }
+      const pol = await policyCheck(v, ch);
+      if (!pol.ok) why = pol.block.join(" · ");
+      if (!why && score != null) {
+        await setAuto(v, { script: { by: "auto", score, at: new Date().toISOString(), warn: pol.warn } }, { status: "producing", progress: 0, stage: "En cola" });
+        await log({ ...J, video_id: v.id }, `Piloto automático: guion aprobado (${score}/10) «${v.title ?? v.idea_title}»`);
+      } else {
+        await setAuto(v, { script: { held: why, at: new Date().toISOString() } });
+        await log({ ...J, video_id: v.id }, `Piloto automático: el guion de «${v.title ?? v.idea_title}» te espera (${why})`, "warn");
+      }
+    }
+    // 2) Vídeos finales (solo en automático): análisis + nota mínima + políticas → se programa en el calendario
+    if (ch.autopilot === "auto") {
+      for (const v of V.filter((x) => x.status === "final_review" && !x.auto?.final)) {
+        if (!ch.youtube_connected) { await setAuto(v, { final: { held: "conecta el canal de YouTube", at: new Date().toISOString() } }); continue; }
+        let score: number | null = null, why = "";
+        if (v.engine === "challenges") { const a = v.retos?.report?.audio; if (!a || a.lufs == null) why = "el informe de sonido no está completo"; else score = 10; }
+        else {
+          if (v.analysis?.status !== "done" || v.analysis?.video_url !== v.video_url) {
+            if (!v.auto?.analyze_requested) { await enqueue("analyze", { video_id: v.id }); await setAuto(v, { analyze_requested: new Date().toISOString() }, { analysis: { status: "running" } }); }
+            continue;
+          }
+          score = Number(v.analysis.score ?? 0); if (score < minQ) why = `nota del vídeo ${score}/10 (mínimo ${minQ})`;
+        }
+        const pol = await policyCheck(v, ch); if (!pol.ok) why = pol.block.join(" · ");
+        if (why) { await setAuto(v, { final: { held: why, at: new Date().toISOString() } }); await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» te espera (${why})`, "warn"); continue; }
+        const parent = v.parent_id ? V.find((x) => x.id === v.parent_id) : null;
+        const after = parent?.publish_at ? new Date(new Date(parent.publish_at).getTime() + 3 * 3600000) : undefined;
+        const at = await nextSlot(ch, fmtOf(v), after);
+        const ai = await needsAiDisclosure(v, ch);
+        await setAuto(v, { final: { by: "auto", score, at: new Date().toISOString(), warn: pol.warn } }, { status: "publishing", stage: "Subiendo a YouTube", publish_at: at ? at.toISOString() : null, ai_disclosure: ai });
+        await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» aprobado (${score}/10) y programado ${at ? `para el ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}` : "ya"}`);
+      }
+    }
+    // 3) Mantener la cola llena según el calendario
+    const s = scheduleOf(ch), horizon = Date.now() + (s.buffer_days ?? 5) * 86400000;
+    for (const f of ["long", "short"]) {
+      const slots = slotsFor(ch, f, s.buffer_days ?? 5).filter((t) => t.getTime() <= horizon).length; if (!slots) continue;
+      const inFlight = V.filter((v) => fmtOf(v) === f && (["scripting", "script_review", "producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now()))).length;
+      let need = Math.min(slots - inFlight, f === "long" ? 1 : 2); // como mucho 1 largo y 2 Shorts nuevos por hora y canal
+      if (need <= 0) continue;
+      if (f === "short" && ch.clips_per_long > 0 && ch.production_type !== "challenges" && !(ch.formats ?? []).includes("short")) continue; // los Shorts salen de los largos
+      if (ch.production_type === "challenges") {
+        const cfg = ch.retos_config ?? {};
+        for (; need > 0; need--) await enqueue("retos_generate", { channel_id: ch.id, payload: { format: f, game_style: cfg.game_style ?? "world", minutes: ch.long_minutes ?? 8, auto: true } });
+        await log(J, `Piloto automático: ${f === "long" ? "nuevo vídeo largo" : "nuevo Short"} de retos para llenar el calendario`);
+      } else {
+        const ideas = V.filter((v) => v.status === "idea_review" && (!v.format || v.format === f));
+        for (const v of ideas.slice(0, need)) { await setAuto(v, { idea: { by: "auto", at: new Date().toISOString() } }, { status: "scripting", format: f }); need--; await log({ ...J, video_id: v.id }, `Piloto automático: idea aprobada «${v.idea_title}»`); }
+        if (need > 0 && ideas.length < 3) await sb.rpc("draw_ideas_internal", { p_channel: ch.id, p_n: Math.max(3, need + 2) });
+      }
+    }
+  }
+  // 4) Shorts a partir de los vídeos largos ya aprobados
+  if (ch.clips_per_long > 0) {
+    for (const v of V.filter((x) => fmtOf(x) === "long" && !x.derived && ["publishing", "scheduled", "published"].includes(x.status) && !x.auto?.clips)) {
+      await setAuto(v, { clips: { requested: new Date().toISOString() } });
+      await enqueue("clips", { video_id: v.id, channel_id: ch.id, payload: { n: ch.clips_per_long } });
+    }
+  }
+}
+
+// ======================================================================================================
+// Shorts a partir de un vídeo largo
+// - Documental: se eligen los mejores tramos (escenas seguidas de 25-58 s que se entienden solas) y se vuelven a
+//   MONTAR en vertical con la misma voz e imágenes: subtítulos a tamaño de Short y sin gastar en voz ni imágenes.
+// - Retos: un Short nativo por reto, con los más vistosos del largo.
+// ======================================================================================================
+async function stepClips(job: Job) {
+  const v = await getVideo(job.video_id); const ch = v.channel;
+  const want = Math.max(1, Math.min(5, Number(job.payload?.n ?? ch.clips_per_long ?? 2)));
+  const { data: ex } = await sb.from("videos").select("id").eq("parent_id", v.id).eq("derived", "clip");
+  const n = want - (ex ?? []).length; if (n <= 0) return;
+  const link = v.youtube_video_id ? `https://youtu.be/${v.youtube_video_id}` : "";
+  if (v.engine === "challenges") return clipsRetos(job, v, ch, n, link);
+  const { data: sc } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
+  const scenes = (sc ?? []).filter((x) => x.audio_url && (x.media_url || (x.shots ?? []).length));
+  if (scenes.length < 4) throw new UserError("El vídeo largo no tiene escenas producidas para sacar Shorts");
+  const dur = (x: { audio_duration?: number }) => Math.max(1.6, Number(x.audio_duration ?? 3) + 0.6);
+  const list = scenes.map((x) => `${x.n} (${dur(x).toFixed(1)} s): ${String(x.narration ?? "").replace(/\s+/g, " ").slice(0, 400)}`).join("\n");
+  const tool = { name: "cortes", description: "Tramos elegidos para Shorts", input_schema: { type: "object", required: ["clips"], properties: { clips: { type: "array", maxItems: 5, items: { type: "object", required: ["first", "last", "title", "hook"], properties: { first: { type: "integer" }, last: { type: "integer" }, title: { type: "string", description: "Título del Short, < 55 caracteres, concreto y con curiosidad" }, hook: { type: "string", description: "Primera línea de la descripción" } } } } } } };
+  let picks: { first: number; last: number; title: string; hook: string }[] = [];
+  try {
+    const r = await claudeTool(MODEL_CHEAP, `Eres editor de Shorts de YouTube. De un vídeo largo eliges tramos de escenas seguidas que funcionan solos como Short: empiezan con una frase que engancha sin contexto previo, cuentan algo completo y terminan con un remate. Escribe en ${ch.language === "en" ? "inglés" : "español"}.`, `Vídeo: «${v.title}»\nEscenas (número, duración y narración):\n${list}\n\nElige ${n} tramos distintos, sin solaparse, de 25 a 58 segundos cada uno (suma las duraciones). Llama a cortes.`, tool, 2000);
+    await bumpUsage(v.id, usageOf(r));
+    picks = (r.input.clips ?? []) as typeof picks;
+  } catch (e) { if (e instanceof OverBudget) throw e; }
+  // Validación (y plan B sin IA: tramos seguidos repartidos por el vídeo)
+  const byN = new Map(scenes.map((x) => [x.n, x]));
+  const used = new Set<number>();
+  const ok = (p: { first: number; last: number }) => { if (!(p.first <= p.last)) return false; let t = 0; for (let k = p.first; k <= p.last; k++) { const x = byN.get(k); if (!x || used.has(k)) return false; t += dur(x); } return t >= 18 && t <= 59; };
+  const chosen: typeof picks = [];
+  for (const p of picks) if (chosen.length < n && ok(p)) { chosen.push(p); for (let k = p.first; k <= p.last; k++) used.add(k); }
+  for (let start = 1; chosen.length < n && start <= scenes.length; ) {
+    let t = 0, k = start; while (k <= scenes.length && t + dur(byN.get(k) ?? {}) <= 55) { t += dur(byN.get(k) ?? {}); k++; }
+    const p = { first: start, last: k - 1, title: `${v.title}`.slice(0, 55), hook: "" };
+    if (ok(p)) { chosen.push(p); for (let j = p.first; j <= p.last; j++) used.add(j); }
+    start = k + Math.max(1, Math.floor(scenes.length / (n + 1)));
+  }
+  let made = 0;
+  for (const p of chosen) {
+    const part = scenes.filter((x) => x.n >= p.first && x.n <= p.last);
+    const desc = [p.hook, link ? `Historia completa: ${link}` : "", (v.description ?? "").split("\n").slice(0, 1).join("")].filter(Boolean).join("\n\n");
+    const { data: cv, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: v.engine, status: "producing", stage: "Volviendo a montar", progress: 80, format: "short", derived: "clip", parent_id: v.id, clip: { first: p.first, last: p.last }, title: p.title.slice(0, 100), idea_title: p.title.slice(0, 100), description: desc, tags: v.tags ?? [], sources: v.sources ?? [], music_url: v.music_url, ai_disclosure: v.ai_disclosure, script: { title: p.title, scenes: (v.script?.scenes ?? []).filter((_: unknown, i: number) => i + 1 >= p.first && i + 1 <= p.last) }, usage: {} }).select("id").single();
+    if (error) throw new Error(error.message);
+    const rows = part.map((x, i) => { const { id: _id, video_id: _v, ...rest } = x; return { ...rest, video_id: cv.id, n: i + 1 }; });
+    const { error: e2 } = await sb.from("scenes").insert(rows);
+    if (e2) throw new Error(e2.message);
+    await enqueue("render", { video_id: cv.id, payload: { no_thumbs: true } });
+    made++;
+  }
+  await sb.from("videos").update({ auto: { ...(v.auto ?? {}), clips: { made, at: new Date().toISOString() } } }).eq("id", v.id);
+  await log(job, `${made} Short${made === 1 ? "" : "s"} sacados de «${v.title}»: se están montando en vertical`);
+}
+// deno-lint-ignore no-explicit-any
+async function clipsRetos(job: Job, v: any, ch: any, n: number, link: string) {
+  const all = (v.retos?.challenges ?? []) as { mechanic: string; difficulty: string; [k: string]: unknown }[];
+  const rank = (c: { mechanic: string; difficulty: string }) => (WORLD_MECH.has(c.mechanic) ? 10 : 0) + ({ easy: 0, medium: 1, hard: 3, extreme: 2 } as Record<string, number>)[c.difficulty];
+  const picked: typeof all = [];
+  for (const c of [...all].sort((a, b) => rank(b) - rank(a))) if (picked.length < n && !picked.some((x) => x.mechanic === c.mechanic)) picked.push(c);
+  let made = 0;
+  for (const c of picked) {
+    const project = { ...(v.retos ?? {}), format: "short", title: "¿Lo resuelves a tiempo?", challenges: [{ ...c, format: "short" }], report: undefined };
+    const auto = ch.autopilot !== "manual";
+    const { data: cv, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: auto ? "producing" : "script_review", progress: 2, stage: auto ? "En cola de montaje" : null, format: "short", derived: "clip", parent_id: v.id, title: project.title, idea_title: project.title, description: link ? `¿Lo resuelves a tiempo? Más niveles en el vídeo completo: ${link}` : "", retos: project, usage: {}, auto: auto ? { script: { by: "auto", at: new Date().toISOString() } } : {} }).select("id").single();
+    if (error) throw new Error(error.message);
+    if (auto) await enqueue("retos_assets", { video_id: cv.id });
+    made++;
+  }
+  await sb.from("videos").update({ auto: { ...(v.auto ?? {}), clips: { made, at: new Date().toISOString() } } }).eq("id", v.id);
+  await log(job, `${made} Short${made === 1 ? "" : "s"} de retos sacados de «${v.title}»`);
 }

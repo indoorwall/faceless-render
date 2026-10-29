@@ -678,6 +678,12 @@ async function budgetMsg(){
 }
 async function genIdeas(){
   const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value, format=$("#g-fmt").value||null;
+  // Sin tema concreto: salen al instante de la reserva del canal (y la reserva se rellena sola por detrás)
+  if(!focus && kind==="mix" && !format){
+    try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:5}); if(error) throw error;
+      if(data>0){ await kick(); await load(); return toast(`${data} ideas nuevas en Revisar`); } }
+    catch(e){ return toast(e.message||String(e)); }
+  }
   if(ideaJobs(id).length){ const w=ideasWaitUntil(id); return toast(w?`Ya hay ideas pedidas para este canal: llegarán a las ${hhmm(w)} (tope de gasto de hoy alcanzado).`:"Ya se están generando ideas para este canal."); }
   const warn=await budgetMsg();
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5,now:true}}); if(error) throw error; await kick(); await load(); }, warn||"Generando ideas a medida. Llegarán aquí en un minuto.");

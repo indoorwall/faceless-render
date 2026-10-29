@@ -109,10 +109,16 @@ const norm = (w) => String(w).toLowerCase().normalize("NFD").replace(/[\u0300-\u
 
 export function buildAss(spec, starts) {
   const W = spec.width, H = spec.height;
-  const sub = { max_words: W < H ? 3 : 6, y: W < H ? 0.64 : 0.86, size: W < H ? 0.07 : 0.05, color: "#FFFFFF", highlight: "#FFD400", ...(spec.subtitles || {}) };
+  const sub = { max_words: W < H ? 3 : 6, y: W < H ? 0.64 : 0.86, size: W < H ? 0.07 : 0.05, color: "#FFFFFF", highlight: "#FFD400", font: "Montserrat ExtraBold", style: "classic", ...(spec.subtitles || {}) };
+  // Estilo «box»: la palabra que suena va dentro de una caja de color (texto negro), como los Shorts virales
+  const box = sub.style === "box";
+  // Bangers (cómic) es más estrecha que Montserrat
+  const narrow = /bangers/i.test(sub.font) ? 0.62 : 1;
   const fontSize = Math.round(Math.min(W, H) * sub.size * 1.35);
   const outline = Math.max(3, Math.round(fontSize * 0.11));
   const marginV = Math.round(H * (1 - sub.y));
+  const fontName = String(sub.font).replace(/,/g, "");
+  const boxPad = Math.max(4, Math.round(fontSize * 0.07));
   const head = `[Script Info]
 ScriptType: v4.00+
 PlayResX: ${W}
@@ -122,15 +128,16 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,Montserrat ExtraBold,${fontSize},${assColor(sub.color)},${assColor(sub.color)},&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,${outline},${Math.round(outline * 0.4)},2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
-
+Style: Cap,${fontName},${fontSize},${assColor(sub.color)},${assColor(sub.color)},&H00000000,&H64000000,0,0,0,0,100,100,${box ? 2 : 0},0,1,${outline},${Math.round(outline * 0.4)},2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
+Style: Box,${fontName},${fontSize},&H00000000,&H00000000,${assColor(sub.highlight)},&H00000000,0,0,0,0,100,100,${box ? 2 : 0},0,3,${boxPad},0,2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
+${titleStyles(spec)}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
   // Ancho aproximado de una línea en Montserrat ExtraBold mayúsculas (en píxeles)
   const em = fontSize;
   const charW = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /[J]/.test(c) ? 0.6 : /\s/.test(c) ? 0.3 : 0.7);
-  const textW = (s) => [...s].reduce((a, c) => a + charW(c), 0) * em + outline * 2;
+  const textW = (s) => [...s].reduce((a, c) => a + charW(c), 0) * em * narrow + outline * 2;
   // Espacio útil: ancho menos márgenes y el 6 % extra de la palabra resaltada
   const budget = W * 0.88 * 0.93;
   const lines = [];
@@ -155,7 +162,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       // Si una sola palabra es demasiado larga, se reduce la línea entera para que quepa
       const fit = Math.min(100, Math.floor((budget / textW(full)) * 100));
       const pre = fit < 100 ? `{\\fscx${fit}\\fscy${fit}}` : "";
-      const hi = Math.round(fit * (keyMode ? 1.08 : 1.06));
+      const hi = box ? fit : Math.round(fit * (keyMode ? 1.08 : 1.06));
       const yellow = `{\\c${assColor(sub.highlight)}}`;
       chunk.forEach((w, j) => {
         const s = starts[i] + w.s;
@@ -168,11 +175,44 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           if (isKey) return `${yellow}${pop}${word}{\\r}${pre}`;
           return n === j ? `${pop}${word}{\\r}${pre}` : word;
         }).join(" ");
+        if (box) {
+          // Capa 0: la línea en blanco; capa 1: la misma línea con solo la palabra que suena visible, en su caja
+          // Espacio extra entre palabras para que la caja no las pegue
+          const plain = chunk.map((x) => assEsc(x.w.toUpperCase())).join(" \\h");
+          const hid = chunk.map((x, n) => (n === j ? `{\\alpha&H00&}${assEsc(x.w.toUpperCase())}{\\alpha&HFF&}` : assEsc(x.w.toUpperCase()))).join(" \\h");
+          lines.push(`Dialogue: 0,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Cap,,0,0,0,,${pre}${plain}`);
+          lines.push(`Dialogue: 1,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Box,,0,0,0,,${pre}{\\alpha&HFF&}${hid}`);
+          return;
+        }
         lines.push(`Dialogue: 0,${assTime(s)},${assTime(Math.max(e, s + 0.05))},Cap,,0,0,0,,${pre}${text}`);
       });
     });
   });
-  return head + lines.join("\n") + "\n";
+  return head + titleEvents(spec) + lines.join("\n") + "\n";
+}
+// Título fijo en pantalla durante todo el vídeo (p. ej. «CURIOSIDADES / DE / GATOS»), con una palabra en caja de color
+function titleSize(spec) { const t = spec.title_overlay; return Math.round(Math.min(spec.width, spec.height) * (t?.size ?? 0.115)); }
+function titleStyles(spec) {
+  const t = spec.title_overlay; if (!t?.lines?.length) return "";
+  const fs = titleSize(spec);
+  return `Style: Title,Montserrat ExtraBold,${fs},${assColor(t.color ?? "#FFFFFF")},${assColor(t.color ?? "#FFFFFF")},&H00000000,&H78000000,0,0,0,0,100,100,0,0,1,0,${Math.round(fs * 0.04)},8,0,0,0,1
+Style: TitleBox,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor(t.accent_bg ?? "#E83030")},&H00000000,0,0,0,0,100,100,0,0,3,${Math.round(fs * 0.09)},0,8,0,0,0,1
+`;
+}
+function titleEvents(spec) {
+  const t = spec.title_overlay; if (!t?.lines?.length) return "";
+  const W = spec.width, H = spec.height, fs = titleSize(spec), rot = t.rotate ?? 5;
+  const cw = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /\s/.test(c) ? 0.3 : 0.72);
+  let y = Math.round(H * (t.y ?? 0.07));
+  return t.lines.map((raw, i) => {
+    const line = assEsc(String(raw).toUpperCase());
+    const w = [...line].reduce((a, c) => a + cw(c), 0) * fs;
+    const k = Math.min(100, Math.floor(((W * 0.86) / Math.max(1, w)) * 100));
+    const acc = i === t.accent;
+    const ev = `Dialogue: ${acc ? 1 : 0},0:00:00.00,9:00:00.00,${acc ? "TitleBox" : "Title"},,0,0,0,,{\\an8\\pos(${Math.round(W * (t.x ?? 0.46))},${y})\\frz${rot}\\fscx${k}\\fscy${k}}${line}`;
+    y += Math.round(fs * (acc ? 1.12 : 1.0) * k / 100);
+    return ev;
+  }).join("\n") + "\n";
 }
 
 // ---------- montaje ----------

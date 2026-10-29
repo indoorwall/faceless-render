@@ -1197,7 +1197,8 @@ async function stepRender(job: Job) {
       scenes: (scenes ?? []).map((s) => ({ media_url: s.media_url, media_kind: s.media_kind, audio_url: s.audio_url, sfx_url: s.sfx_url, narration: s.narration, voice_duration: s.audio_duration, words: s.words, keywords: s.keywords ?? [], shots: (s.shots ?? []).map((x: any) => ({ media_url: x.media_url, media_kind: x.media_kind, fit: x.fit ?? "cover", reframe: x.reframe ?? null, line: x.line })) })),
       music: music ? { url: music, volume: ch.music_volume ?? 12, fade_in: 1, fade_out: 2.5 } : null,
       sfx_volume: ch.sfx_volume ?? 55,
-      subtitles: sh ? { max_words: 3, y: 0.64, size: 0.07 } : { max_words: 6, y: 0.86, size: 0.05 },
+      subtitles: { ...(sh ? { max_words: 3, y: 0.64, size: 0.07 } : { max_words: 6, y: 0.86, size: 0.05 }), ...subStyleOf(ch, sh) },
+      ...(await titleOverlayOf(v, ch, sh)),
     };
     const base = KEYS["RENDER_URL"].replace(/\/+$/, "");
     const r = await fetch(`${base}/jobs`, { method: "POST", headers: { Authorization: `Bearer ${KEYS["RENDER_SECRET"]}`, "Content-Type": "application/json" }, body: JSON.stringify(spec) });
@@ -2103,6 +2104,35 @@ async function generateAudio(chId: string, kind: "sfx" | "music" | "voice", code
   return data;
 }
 
+// ---------- Estilo visual del canal en el montaje (channels.render_style) ----------
+// sub_style: "classic" (palabra clave en amarillo) o "box" (la palabra que suena en una caja amarilla, letra de cómic)
+// title_template: título fijo en pantalla, p. ej. «CURIOSIDADES DE {tema}»; title_accent: la palabra que va en caja roja
+// deno-lint-ignore no-explicit-any
+function subStyleOf(ch: any, sh: boolean) {
+  const rs = ch.render_style ?? {};
+  if (rs.sub_style !== "box") return {};
+  return { style: "box", font: rs.sub_font ?? "Bangers", ...(sh ? { y: rs.sub_y ?? 0.76, size: 0.068 } : {}) };
+}
+// deno-lint-ignore no-explicit-any
+async function titleOverlayOf(v: any, ch: any, sh: boolean) {
+  const rs = ch.render_style ?? {};
+  if (!rs.title_template || (rs.title_shorts_only !== false && !sh)) return {};
+  let text: string = v.script?.overlay ?? "";
+  if (!text) {
+    let tema = "";
+    if (String(rs.title_template).includes("{tema}")) {
+      const r = await claude(MODEL_CHEAP, "Respondes solo con el tema, sin comillas ni punto.", `Título del vídeo: «${v.title ?? v.idea_title}»\nPrimera frase: «${v.script?.scenes?.[0]?.narration ?? ""}»\n\nEn 1-2 palabras y en plural, ¿de qué animal, cosa o tema trata? (p. ej. «gatos», «pulpos», «abejas»).`, { maxTokens: 20 });
+      tema = r.text.trim().replace(/^[«"']|[»"'.]$/g, "").split("\n")[0].slice(0, 24);
+    }
+    text = String(rs.title_template).replace("{tema}", tema).replace(/\s+/g, " ").trim().toUpperCase();
+    await sb.from("videos").update({ script: { ...(v.script ?? {}), overlay: text } }).eq("id", v.id);
+  }
+  const acc = String(rs.title_accent ?? "").toUpperCase().trim();
+  const words = text.split(" ");
+  const ai = acc ? words.indexOf(acc) : -1;
+  const lines = ai > 0 ? [words.slice(0, ai).join(" "), acc, words.slice(ai + 1).join(" ")].filter(Boolean) : [text];
+  return { title_overlay: { lines, accent: ai > 0 ? 1 : -1, accent_bg: rs.title_accent_bg ?? "#E83030" } };
+}
 // ---------- Traducción de retos (canales en otros idiomas) ----------
 // Memoria de traducciones (i18n_cache): las frases se repiten mucho entre vídeos, así que casi todo sale gratis.
 const I18N_TOOL = { name: "traducciones", description: "Devuelve la traducción de cada texto, en el mismo orden", input_schema: { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { i: { type: "integer" }, t: { type: "string" } }, required: ["i", "t"] } } }, required: ["items"] } };

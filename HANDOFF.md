@@ -164,6 +164,8 @@ Giol quiere llevar muchos canales a la vez para un ingreso pasivo. Todo se confi
   - Retos: un canal de retos con `language` ≠ es traduce cada vídeo antes de montarlo (`translateRetos`, Haiku + memoria `i18n_cache`). Textos fijos del juego en `web/retos/i18n.js` (es, en, pt, fr, de, it, ca). La voz usa el idioma del canal.
   - Documental: un canal con «Versión en otro idioma de» (`mirror_of`) recibe doblajes (paso `dub`: traduce guion y planos con Sonnet y vuelve a generar voz y montaje). Con `mirror_auto` el planificador dobla solo cada vídeo publicado del original; si no, botón «Doblar» en el vídeo.
 
+- **Calendario recomendado** (29/10): pasos `audience` (países y edades del público y visitas de las primeras 48 h por vídeo → `channels.yt_audience`, `videos.stats.analytics.v48`), `research` (estudio global semanal por idioma con búsqueda web, cron `fs-research` los lunes 04:41 UTC → tabla `schedule_research`) y `advise` (sin IA, a diario: ritmo, horas y días de los largos → `channels.schedule_advice`). Si `schedule.auto_tune`, se aplica solo. Los largos pueden ir en días fijos (`schedule.long_days`). Ojo: `channels.audience` es el texto del público que escribe Giol, no tocarlo.
+
 ## Pendiente (por orden)
 0. **Playable World:** a Giol le encanta el formato y ya están los 6 juegos. Queda valorar los efectos sintetizados frente a ElevenLabs y, si hace falta, añadir más variantes por juego (más escenas, más objetos o laberintos con obstáculos).
 0. **YouTube:** la programación y la cuota ya están hechas (29/10). Falta redactar el texto del formulario «YouTube API Services Audit and Quota Extension» para pasar de 10.000 unidades (≈6 subidas al día).

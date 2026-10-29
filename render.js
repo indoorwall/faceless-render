@@ -188,7 +188,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       });
     });
   });
-  return head + titleEvents(spec) + chapterEvents(spec, starts) + lines.join("\n") + "\n";
+  return head + titleEvents(spec, starts) + chapterEvents(spec, starts) + lines.join("\n") + "\n";
 }
 // Título de cada curiosidad («1 · RECONOCEN SU NOMBRE»), estilo TikTok: aparece con un pequeño salto al empezar cada una
 function chapterSize(spec) { return Math.round(Math.min(spec.width, spec.height) * (spec.chapter_style?.size ?? 0.066)); }
@@ -196,33 +196,47 @@ function chapterStyles(spec) {
   if (!spec.chapters?.length) return "";
   const fs = chapterSize(spec), cs = spec.chapter_style ?? {};
   return `Style: Chap,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor(cs.bg ?? "#111111")},&H00000000,0,0,0,0,100,100,0,0,3,${Math.round(fs * 0.28)},0,8,0,0,0,1
+Style: ChapBig,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,${Math.max(3, Math.round(fs * 0.09))},${Math.round(fs * 0.06)},5,0,0,0,1
 `;
+}
+// Momento en que entra una curiosidad (si la escena empieza con la pregunta del gancho, al acabar la pregunta)
+function chapterStart(spec, starts, c) {
+  const sc = spec.scenes[c.scene]; if (!sc || starts[c.scene] == null) return null;
+  let off = 0;
+  if (c.after_question) {
+    const ws = sc.words?.length ? sc.words : [];
+    const q = ws.findIndex((w) => /\?$/.test(String(w.w)));
+    if (q >= 0 && q < ws.length - 1) off = ws[q + 1].s;
+  }
+  return starts[c.scene] + off;
 }
 function chapterEvents(spec, starts) {
   const ch = spec.chapters; if (!ch?.length) return "";
   const W = spec.width, H = spec.height, fs = chapterSize(spec);
-  const y = Math.round(H * (spec.chapter_style?.y ?? 0.285));
   const cw = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /\s/.test(c) ? 0.3 : 0.72);
   const out = [];
   ch.forEach((c, i) => {
-    const sc = spec.scenes[c.scene]; if (!sc || starts[c.scene] == null) return;
-    // Si la escena empieza con una pregunta de gancho, el título sale al acabar la pregunta
-    let off = 0;
-    if (c.after_question) {
-      const ws = sc.words?.length ? sc.words : [];
-      const q = ws.findIndex((w) => /\?$/.test(String(w.w)));
-      if (q >= 0 && q < ws.length - 1) off = ws[q + 1].s;
-    }
-    const s = starts[c.scene] + off;
+    const s = chapterStart(spec, starts, c); if (s == null) return;
     const next = ch[i + 1];
     const e = next && starts[next.scene] != null ? starts[next.scene] : 32400;
     const title = assEsc(String(c.title ?? "").toUpperCase());
-    // Una sola línea centrada: número en caja de color y título en caja oscura (cada tramo con su color de caja)
-    const est = ([...title].reduce((a, ch2) => a + cw(ch2), 0) + 3.4) * fs * 0.72;
-    const k = Math.min(100, Math.floor(((W * 0.88) / est) * 100));
-    const pop = `\\fscx${Math.round(k * 0.55)}\\fscy${Math.round(k * 0.55)}\\t(0,160,\\fscx${Math.round(k * 1.08)}\\fscy${Math.round(k * 1.08)})\\t(160,260,\\fscx${k}\\fscy${k})`;
+    // 1) Entrada «wow»: enorme en el centro, en varias líneas, con un salto. 2) Se encoge hacia arriba y se queda en una línea
     const acc = assColor(spec.chapter_style?.accent ?? "#FFD400");
-    out.push(`Dialogue: 2,${assTime(s)},${assTime(e)},Chap,,0,0,0,,{\\an8\\pos(${Math.round(W / 2)},${y})${pop}}{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\h\\h${title}`);
+    const est1 = ([...title].reduce((a, ch2) => a + cw(ch2), 0) + 3.4) * fs * 0.72;
+    const k = Math.min(100, Math.floor(((W * 0.88) / est1) * 100));
+    const bigK = 210, maxW = W * 0.9;
+    const lineW = (t) => [...t].reduce((a, ch2) => a + cw(ch2), 0) * fs * 0.72 * (bigK / 100);
+    const rows = []; let cur = "";
+    for (const w of title.split(/\s+/)) { const cand = cur ? `${cur} ${w}` : w; if (cur && lineW(cand) > maxW) { rows.push(cur); cur = w; } else cur = cand; }
+    if (cur) rows.push(cur);
+    const fitBig = Math.min(bigK, Math.floor(bigK * Math.min(1, maxW / Math.max(...rows.map(lineW)))));
+    const hold = 1250, shrink = 1650;
+    const yTop = Math.round(H * (spec.chapter_style?.y ?? 0.085)), yMid = Math.round(H * 0.4);
+    const sTop = s + shrink / 1000 - 0.12;
+    const pop = `\\fscx${Math.round(fitBig * 0.35)}\\fscy${Math.round(fitBig * 0.35)}\\t(0,170,\\fscx${Math.round(fitBig * 1.1)}\\fscy${Math.round(fitBig * 1.1)})\\t(170,290,\\fscx${fitBig}\\fscy${fitBig})\\t(${hold},${shrink},0.7,\\fscx${Math.round(k * 0.6)}\\fscy${Math.round(k * 0.6)})`;
+    const bigText = `{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\N${rows.join("\\N")}`;
+    out.push(`Dialogue: 3,${assTime(s)},${assTime(Math.min(e, s + shrink / 1000))},ChapBig,,0,0,0,,{\\an5\\move(${Math.round(W / 2)},${yMid},${Math.round(W / 2)},${yTop},${hold},${shrink})${pop}\\fad(0,120)}${bigText}`);
+    if (sTop < e) out.push(`Dialogue: 2,${assTime(sTop)},${assTime(e)},Chap,,0,0,0,,{\\an5\\pos(${Math.round(W / 2)},${yTop})\\fscx${k}\\fscy${k}\\fad(120,0)}{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\h\\h${title}`);
   });
   return out.length ? out.join("\n") + "\n" : "";
 }
@@ -235,8 +249,13 @@ function titleStyles(spec) {
 Style: TitleBox,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor(t.accent_bg ?? "#E83030")},&H00000000,0,0,0,0,100,100,0,0,3,${Math.round(fs * 0.09)},0,8,0,0,0,1
 `;
 }
-function titleEvents(spec) {
+function titleEvents(spec, starts = []) {
   const t = spec.title_overlay; if (!t?.lines?.length) return "";
+  // El título fijo se va cuando entra la primera curiosidad (o a los t.seconds segundos); si no, dura todo el vídeo
+  const c0 = spec.chapters?.length ? chapterStart(spec, starts, spec.chapters[0]) : null;
+  const until = t.seconds ?? (c0 != null ? Math.max(2, c0) : null);
+  const endT = until != null ? assTime(until) : "9:00:00.00";
+  const fade = until != null ? "\\fad(0,250)" : "";
   const W = spec.width, H = spec.height, fs = titleSize(spec), rot = t.rotate ?? 5;
   const cw = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /\s/.test(c) ? 0.3 : 0.72);
   let y = Math.round(H * (t.y ?? 0.07));
@@ -245,7 +264,7 @@ function titleEvents(spec) {
     const w = [...line].reduce((a, c) => a + cw(c), 0) * fs;
     const k = Math.min(100, Math.floor(((W * 0.86) / Math.max(1, w)) * 100));
     const acc = i === t.accent;
-    const ev = `Dialogue: ${acc ? 1 : 0},0:00:00.00,9:00:00.00,${acc ? "TitleBox" : "Title"},,0,0,0,,{\\an8\\pos(${Math.round(W * (t.x ?? 0.46))},${y})\\frz${rot}\\fscx${k}\\fscy${k}}${line}`;
+    const ev = `Dialogue: ${acc ? 1 : 0},0:00:00.00,${endT},${acc ? "TitleBox" : "Title"},,0,0,0,,{\\an8\\pos(${Math.round(W * (t.x ?? 0.46))},${y})\\frz${rot}\\fscx${k}\\fscy${k}${fade}}${line}`;
     y += Math.round(fs * (acc ? 1.12 : 1.0) * k / 100);
     return ev;
   }).join("\n") + "\n";

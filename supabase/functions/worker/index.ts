@@ -191,6 +191,8 @@ async function runStep(job: Job) {
     case "money": return stepMoney(job);
     case "audience": return stepAudience(job);
     case "top_videos": return stepTopVideos(job);
+    case "voice_search": return stepVoiceSearch(job);
+    case "voice_pick": return stepVoicePick(job);
     case "research": return stepResearch(job);
     case "advise": return stepAdvise(job);
     case "dub": return stepDub(job);
@@ -2818,6 +2820,40 @@ async function stepTopVideos(job: Job) {
   rows.sort((a, b) => b.views - a.views);
   await sb.from("channels").update({ yt_top: { at: new Date().toISOString(), total: rows.length, videos: rows.slice(0, 40) } }).eq("id", chId);
   await log(job, `Vídeos del canal en YouTube: ${rows.length} (el más visto: «${rows[0]?.title ?? "-"}», ${rows[0]?.views ?? 0} visitas)`);
+}
+// ---------- Voces: buscar en la biblioteca de ElevenLabs y elegir de oído ----------
+// voice_search guarda en channels.voice_options las voces nativas del idioma del canal (con su muestra); voice_pick la añade a la cuenta y la pone en el canal
+async function stepVoiceSearch(job: Job) {
+  const { data: ch } = await sb.from("channels").select("id,language").eq("id", job.channel_id).single();
+  if (!ch) return;
+  const gender = job.payload?.gender === "male" ? "male" : "female";
+  const lang = ch.language ?? "es";
+  // deno-lint-ignore no-explicit-any
+  const found: any[] = [];
+  for (const extra of [{ use_cases: "narrative_story" }, { use_cases: "social_media" }, {}] as Record<string, string>[]) {
+    const q = new URLSearchParams({ page_size: "30", gender, language: lang, sort: "usage_character_count_1y", ...extra, ...(job.payload?.search ? { search: String(job.payload.search) } : {}) });
+    const r = await fetch(`https://api.elevenlabs.io/v1/shared-voices?${q}`, { headers: { "xi-api-key": key("ELEVENLABS_API_KEY") } });
+    if (!r.ok) throw new Error(`ElevenLabs voces ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    for (const v of (await r.json()).voices ?? []) if (v.preview_url && !found.some((x) => x.voice_id === v.voice_id)) found.push(v);
+    if (found.length >= 24) break;
+  }
+  const voices = found.slice(0, 12).map((v) => ({ voice_id: v.voice_id, owner: v.public_owner_id, name: v.name, accent: v.accent, age: v.age, gender: v.gender, use_case: v.use_case, description: String(v.description ?? "").slice(0, 200), preview_url: v.preview_url, locale: v.locale, usage: v.usage_character_count_1y }));
+  await sb.from("channels").update({ voice_options: { at: new Date().toISOString(), gender, voices } }).eq("id", ch.id);
+  await log(job, `Voces encontradas: ${voices.length} (${gender === "female" ? "chica" : "chico"}, ${LANG_NAME[lang] ?? lang})`);
+}
+async function stepVoicePick(job: Job) {
+  const p = job.payload ?? {};
+  if (!p.voice_id) throw new UserError("Falta la voz");
+  let id = String(p.voice_id);
+  if (p.owner) {
+    const r = await fetch(`https://api.elevenlabs.io/v1/voices/add/${encodeURIComponent(p.owner)}/${encodeURIComponent(p.voice_id)}`, { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ new_name: String(p.name ?? "Voz").slice(0, 40) }) });
+    const t = await r.text();
+    // Si ya estaba añadida, ElevenLabs avisa: se usa igual
+    if (r.ok) { try { id = JSON.parse(t).voice_id ?? id; } catch (_) { /* id original */ } }
+    else if (!/already|exists/i.test(t)) throw new UserError(`No se pudo añadir la voz a tu cuenta de ElevenLabs (${r.status}): ${t.slice(0, 160)}`);
+  }
+  await sb.from("channels").update({ voice_id: id, voice_provider: "elevenlabs" }).eq("id", job.channel_id);
+  await log(job, `Voz del canal cambiada a «${p.name ?? id}»`);
 }
 // ---------- Paso: estudio global semanal con búsqueda web (por idioma) ----------
 const RESEARCH_TOOL = {

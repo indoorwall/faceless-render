@@ -680,7 +680,7 @@ async function genIdeas(){
   const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value, format=$("#g-fmt").value||null;
   if(ideaJobs(id).length){ const w=ideasWaitUntil(id); return toast(w?`Ya hay ideas pedidas para este canal: llegarán a las ${hhmm(w)} (tope de gasto de hoy alcanzado).`:"Ya se están generando ideas para este canal."); }
   const warn=await budgetMsg();
-  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5}}); if(error) throw error; await kick(); await load(); }, warn||"Generando ideas a medida. Llegarán aquí en un minuto.");
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"refill_ideas",channel_id:id,payload:{focus,kind,format,then_draw:5,now:true}}); if(error) throw error; await kick(); await load(); }, warn||"Generando ideas a medida. Llegarán aquí en un minuto.");
 }
 function ideaCard(v){
   const ev = Array.isArray(v.idea_evidence) ? v.idea_evidence.filter(e=>e&&e.url).slice(0,4) : [];

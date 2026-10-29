@@ -1,4 +1,4 @@
-# Faceless Studio — traspaso a Claude Code (28/10/2026)
+# Faceless Studio — traspaso a Claude Code (29/10/2026)
 
 Sistema automático de canales de YouTube faceless: ideas → guion → voz → música/efectos → imágenes → montaje → revisión → publicación. Hablar con el usuario (Giol) en español, tuteando, conciso. Prioridad: **máxima calidad con mínimo coste**; el tiempo de producción da igual.
 
@@ -150,9 +150,23 @@ Giol quiere que Reto Imposible parezca una colección de pequeños videojuegos, 
   - Largo `33cde24c…`: unos 80 s.
 - El primer Short `77b98d23…` se ha vuelto a montar con el estilo claro.
 
+## Multicanal en piloto automático (29/10)
+Giol quiere llevar muchos canales a la vez para un ingreso pasivo. Todo se configura por canal en su ficha («Piloto automático»).
+- **Modos** (`channels.autopilot`): `manual` (como antes), `semi` (el guion pasa solo si la nota del director ≥ `quality_min` y pasa las políticas; el final lo aprueba Giol) y `auto` (también publica solo: exige YouTube conectado, análisis/informe de audio ≥ `quality_min` y políticas). El motivo de cada parada queda en `videos.auto` y la web lo muestra en la tarjeta.
+- **Planificador** (`stepPlanner`, cron `fs-planner` cada hora en el minuto 7 + `kickPlanner` tras cada paso): puertas de guion y final, mantiene la cola llena para `schedule.buffer_days`, aprueba ideas o genera retos, clips y doblajes.
+- **Calendario** (`channels.schedule`): largos y Shorts por semana y horas (hora de Madrid). Sin fecha, `stepPublish` usa el siguiente hueco (`nextSlot`), subiendo como privado con `publishAt`.
+- **Cuota de YouTube:** `yt_quota_take(1650)` por subida, 10.000 unidades al día (día del Pacífico, `app_config.yt_quota_daily`). Sin cuota, el trabajo espera a medianoche del Pacífico (`QuotaWait`).
+- **Presupuesto por canal:** `channels.daily_budget_eur` (gasto en `spend_daily` con clave `eur:<id>`); el tope global de 3 €/día sigue mandando.
+- **Shorts de largos** (`clips_per_long`, paso `clips`): documental → Haiku elige tramos de 25-58 s y se vuelve a montar en vertical; retos → se rehacen los mejores retos en formato Short. Los clips se publican como mínimo 3 h después del largo y enlazan al vídeo completo. Botón manual «Sacar 2 Shorts».
+- **Políticas** (`policyCheck`): títulos casi iguales (Jaccard) en el canal o en canales del mismo idioma, retos repetidos (>30 %), fuentes y descripción en documental. Declaración de contenido sintético (`ai_disclosure`) automática si hay imágenes IA o por defecto del canal.
+- **Dinero** (vista «Dinero», paso `money` diario): ingresos (YouTube Analytics `currency=EUR`), RPM, coste, beneficio y progreso a la monetización (1.000 suscriptores + 4.000 h o 10 M vistas de Shorts). Necesita el permiso `yt-analytics-monetary.readonly`: **cada canal debe pulsar «Reconectar YouTube»**.
+- **Otros idiomas:**
+  - Retos: un canal de retos con `language` ≠ es traduce cada vídeo antes de montarlo (`translateRetos`, Haiku + memoria `i18n_cache`). Textos fijos del juego en `web/retos/i18n.js` (es, en, pt, fr, de, it, ca). La voz usa el idioma del canal.
+  - Documental: un canal con «Versión en otro idioma de» (`mirror_of`) recibe doblajes (paso `dub`: traduce guion y planos con Sonnet y vuelve a generar voz y montaje). Con `mirror_auto` el planificador dobla solo cada vídeo publicado del original; si no, botón «Doblar» en el vídeo.
+
 ## Pendiente (por orden)
 0. **Playable World:** a Giol le encanta el formato y ya están los 6 juegos. Queda valorar los efectos sintetizados frente a ElevenLabs y, si hace falta, añadir más variantes por juego (más escenas, más objetos o laberintos con obstáculos).
-0. **YouTube (en cola, lo pidió Giol el 28/10):** redactar el texto del formulario «YouTube API Services Audit and Quota Extension» y dejar lista la programación desde la plataforma (subir como privado con `publishAt`, cuota diaria). Está detrás del motor de retos.
+0. **YouTube:** la programación y la cuota ya están hechas (29/10). Falta redactar el texto del formulario «YouTube API Services Audit and Quota Extension» para pasar de 10.000 unidades (≈6 subidas al día).
 1. **Escalar a 10 canales, unos 10 largos y 20 Shorts al día, por unos 300 $/mes en vez de más de 800 $.** Giol quiere que la voz sea muy profesional.
    - **Voz:** probar **Fish Audio `s2-pro`** (15 $ por millón de bytes de texto) frente a ElevenLabs v3 con el mismo Short, y que Giol elija de oído.
      - Si se cambia, los tiempos por palabra para los subtítulos saldrían de la transcripción de OpenAI (Whisper, 0,006 $/min) o del alineado forzado.

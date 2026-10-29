@@ -116,6 +116,35 @@ section{display:flex;flex-direction:column;gap:12px}
 .ret .tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12.5px;box-shadow:0 4px 14px rgba(0,0,0,.12);white-space:nowrap;transform:translate(-50%,-110%)}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
+/* Revisar por canal */
+.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:thin}
+.tab{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:999px;font:600 14px var(--body,inherit);cursor:pointer;white-space:nowrap}
+.tab .dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
+.tab .n{background:var(--accent);color:var(--on-accent);font-size:12px;padding:1px 7px;border-radius:10px}
+.tab.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
+.tab:hover{border-color:var(--muted)}
+.chsum{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.chcard{border-top:5px solid var(--c);font:inherit;color:inherit;text-align:left}
+.chname{display:flex;align-items:center;gap:9px;font:600 17px var(--display)}
+.chname h2{margin:0}
+.chname .dot{width:12px;height:12px;border-radius:50%;background:var(--c);flex:none}
+.mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(68px,1fr));gap:6px}
+.mini div{background:var(--sunk);border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;min-width:0}
+.mini b{font:600 18px var(--display);font-variant-numeric:tabular-nums}
+.mini span{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .hot{background:var(--accent-soft)} .mini .hot b{color:var(--accent)}
+.chblock{border:1px solid var(--line);border-left:6px solid var(--c);border-radius:var(--r);padding:16px;gap:14px;background:color-mix(in srgb, var(--c) 4%, transparent)}
+.chblock-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.sub{display:flex;flex-direction:column;gap:8px}
+.sub-h{display:flex;gap:8px;align-items:baseline;font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.ilist{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.irow{display:flex;justify-content:space-between;gap:12px;padding:10px 14px;border:0;border-bottom:1px solid var(--line);background:transparent;font:inherit;color:var(--ink);text-align:left;cursor:pointer}
+.irow:last-child{border-bottom:0}
+.irow:hover{background:var(--sunk)}
+.irow span:first-child{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.irow span:last-child{white-space:nowrap;flex:none}
+.chhero{border-left:6px solid var(--c);padding:4px 0 4px 14px;display:flex;flex-direction:column;gap:4px}
+@media (max-width:820px){ .flow{grid-template-columns:repeat(2,1fr)} }
 .empty{border:1px dashed var(--line);border-radius:var(--r);padding:22px;color:var(--muted);text-align:center}
 
 label.f{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;min-width:0}
@@ -263,7 +292,7 @@ const SB_KEY = "sb_publishable_LJvU-FYxfiy6dmQz7B6V6A_ZCLJlMKl";
 const REDIRECT_URI = SB_URL + "/functions/v1/youtube-auth";
 const sb = supabase.createClient(SB_URL, SB_KEY);
 
-const S = { session:null, view:"hoy", channels:[], videos:[], proposals:[], activity:[], keys:[], jobs:[], filterCh:"", open:null, busy:false };
+const S = { session:null, view:"hoy", channels:[], videos:[], proposals:[], activity:[], keys:[], jobs:[], filterCh:(()=>{ try{ return localStorage.getItem("fs_filterCh")||""; }catch(_){ return ""; } })(), open:null, busy:false };
 
 const KEY_INFO = {
   ANTHROPIC_API_KEY:["Claude (Anthropic)","Ideas, guiones e investigación","https://console.anthropic.com/settings/keys", true],
@@ -499,54 +528,104 @@ function bindAuth(){
   };
 }
 
-// --- Vista: Revisar
+// --- Vista: Revisar (segmentada por canal: pestañas arriba; en «Todos», un bloque por canal)
+const isRetosCh = (c) => c?.production_type === "challenges";
+const chColor = (id) => ch(id).color || "#888";
+function pendingOf(cid){ const vs=S.videos.filter(v=>v.channel_id===cid), n=(st)=>vs.filter(v=>st.includes(v.status)).length;
+  return { ideas:n(["idea_review"]), scripts:n(["script_review"]), finals:n(["final_review"]), prod:n(["scripting","producing","publishing"]), failed:n(["failed"]), pub:n(["published","scheduled"]) }; }
+const todo = (p) => p.ideas + p.scripts + p.finals + p.failed;
+function setFilterCh(id){ S.filterCh=id||""; try{ localStorage.setItem("fs_filterCh", S.filterCh); }catch(_){ /* sin almacenamiento */ } render(); window.scrollTo(0,0); }
+function chTabs(){
+  const chs=S.channels; if(chs.length<2) return "";
+  const all=chs.reduce((a,c)=>a+todo(pendingOf(c.id)),0);
+  const tab=(id,label,n,color)=>`<button class="tab ${S.filterCh===id?"on":""}" onclick="setFilterCh('${id}')" ${color?`style="--c:${esc(color)}"`:""}>${color?`<span class="dot"></span>`:""}<span>${esc(label)}</span>${n?`<span class="n">${n}</span>`:""}</button>`;
+  return `<div class="tabs" role="tablist">${tab("","Todos",all)}${chs.map(c=>tab(c.id,c.name,todo(pendingOf(c.id)),c.color||"#888")).join("")}</div>`;
+}
+// Tarjetas (con el color del canal en el borde izquierdo)
+const bl = (v) => `style="border-left:4px solid ${esc(chColor(v.channel_id))}"`;
+const finalCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')">
+  ${v.thumbnail_url?`<img src="${esc(v.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px">`:""}
+  <div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span><span class="mono muted">${dur(v.duration_sec)}</span>${costTag(v)}</div>
+  <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`;
+const scriptCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span></div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`;
+const failedCard = (v, tag=true) => `<div class="card" ${bl(v)}><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
+  <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`;
+const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
+  ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`;
+const pubCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`;
 function viewHoy(){
-  const vs = S.filterCh ? S.videos.filter(v=>v.channel_id===S.filterCh) : S.videos;
-  const by = (st) => vs.filter(v=>st.includes(v.status));
-  const ideas=by(["idea_review"]), scripts=by(["script_review"]), finals=by(["final_review"]);
-  const prod=by(["scripting","producing","publishing"]), failed=by(["failed"]), pub=by(["published","scheduled"]).slice(0,6);
-  const ideasRunning = S.jobs.filter(j=>j.step==="ideas").length;
   if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal o deja que el estudio te proponga nichos con demanda real.</p></div></div>
     <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button><a class="btn" href="#descubrir">Ver propuestas de canales</a></div>
     ${setupHint()}`;
-  return `<div class="head"><div><h1>Revisar</h1><p>Tú solo decides en tres momentos: la idea, el guion y el vídeo final. El resto lo hace el estudio.</p>${S.prices?`<div class="card" style="margin-top:12px">${budgetBar(false)}</div>`:""}</div>
-    <div class="row"><select id="fch" style="width:auto">${[`<option value="">Todos los canales</option>`,...S.channels.map(c=>`<option value="${c.id}" ${S.filterCh===c.id?"selected":""}>${esc(c.name)}</option>`)].join("")}</select></div></div>
-    ${setupHint()}
+  if(S.filterCh && !S.channels.some(c=>c.id===S.filterCh)) S.filterCh="";
+  if(S.channels.length===1) S.filterCh=S.channels[0].id;
+  const head = `<div class="head"><div><h1>Revisar</h1><p>Tú solo decides en tres momentos: la idea, el guion y el vídeo final. El resto lo hace el estudio.</p>${S.prices?`<div class="card" style="margin-top:12px">${budgetBar(false)}</div>`:""}</div></div>
+    ${chTabs()}${setupHint()}`;
+  return head + (S.filterCh ? viewChannelReview(ch(S.filterCh)) : viewAllChannels());
+}
+// «Todos»: resumen por canal y un bloque por canal con lo que tiene pendiente
+function viewAllChannels(){
+  const chs=S.channels;
+  const summary = `<div class="chsum">${chs.map(c=>{ const p=pendingOf(c.id), t=todo(p);
+    const cell=(n,l,warn)=>`<div class="${n&&warn?"hot":""}"><b>${n}</b><span>${l}</span></div>`;
+    return `<button class="card click chcard" style="--c:${esc(c.color||"#888")}" onclick="setFilterCh('${c.id}')">
+      <div class="spread"><div style="min-width:0;text-align:left"><div class="chname"><span class="dot"></span>${esc(c.name)}</div><div class="muted" style="font-size:12px">${isRetosCh(c)?"Retos":"Documental"} · ${chFormats(c).map(f=>f==="short"?"Shorts":"Largos").join(" + ")}</div></div>${t?`<span class="chip st-acc">${t} pendiente${t>1?"s":""}</span>`:`<span class="chip st-ok">Al día</span>`}</div>
+      <div class="mini">${isRetosCh(c)?"":cell(p.ideas,"ideas",1)}${cell(p.scripts,isRetosCh(c)?"retos":"guiones",1)}${cell(p.prod,"en producción")}${cell(p.finals,"vídeos",1)}${p.failed?cell(p.failed,"con error",1):""}</div>
+    </button>`; }).join("")}</div>`;
+  const blocks = chs.map(c=>{
+    const vs=S.videos.filter(v=>v.channel_id===c.id), by=(st)=>vs.filter(v=>st.includes(v.status));
+    const failed=by(["failed"]), finals=by(["final_review"]), scripts=by(["script_review"]), ideas=by(["idea_review"]), prod=by(["scripting","producing","publishing"]);
+    const more=(n,shown,what)=>n>shown?`<button class="btn sm ghost" onclick="setFilterCh('${c.id}')">Ver ${n-shown} ${what} más →</button>`:"";
+    const sub=(title,n,body)=>n?`<div class="sub"><div class="sub-h">${title}<span class="mono">${n}</span></div>${body}</div>`:"";
+    const empty=!failed.length&&!finals.length&&!scripts.length&&!ideas.length&&!prod.length;
+    return `<section class="chblock" style="--c:${esc(c.color||"#888")}">
+      <div class="chblock-h"><div class="chname"><span class="dot"></span><h2>${esc(c.name)}</h2></div>
+        <div class="row">${isRetosCh(c)?`<button class="btn sm" onclick="setFilterCh('${c.id}')">Producir retos</button>`:`<button class="btn sm" onclick="askIdeas('${c.id}')">Pedir ideas</button>`}<button class="btn sm ghost" onclick="setFilterCh('${c.id}')">Ver canal →</button></div></div>
+      ${empty?`<div class="empty" style="padding:14px">Al día: no hay nada pendiente en este canal.</div>`:""}
+      ${sub("Con error",failed.length,`<div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div>`)}
+      ${sub("Vídeos por aprobar",finals.length,`<div class="grid">${finals.slice(0,6).map(v=>finalCard(v,false)).join("")}</div>${more(finals.length,6,"vídeos")}`)}
+      ${sub(isRetosCh(c)?"Retos por revisar":"Guiones por revisar",scripts.length,`<div class="list">${scripts.slice(0,4).map(v=>scriptCard(v,false)).join("")}</div>${more(scripts.length,4,"guiones")}`)}
+      ${sub("Ideas por aprobar",ideas.length,`<div class="ilist">${ideas.slice(0,5).map(v=>`<button class="irow" onclick="setFilterCh('${c.id}')"><span>${esc(v.title||v.idea_title)}</span><span class="muted">${ago(v.created_at)}</span></button>`).join("")}</div><div class="row">${ideas.length>5?`<span class="muted" style="font-size:13px">y ${ideas.length-5} más</span>`:""}<button class="btn sm" onclick="setFilterCh('${c.id}')">Revisar ideas de ${esc(c.name)} →</button></div>`)}
+      ${sub("En producción",prod.length,`<div class="list">${prod.map(v=>prodCard(v,false)).join("")}</div>`)}
+    </section>`;
+  }).join("");
+  return summary + blocks;
+}
+// Un canal: su tira del proceso, sus herramientas y su contenido
+function viewChannelReview(c){
+  const vs=S.videos.filter(v=>v.channel_id===c.id), by=(st)=>vs.filter(v=>st.includes(v.status));
+  const ideas=by(["idea_review"]), scripts=by(["script_review"]), finals=by(["final_review"]);
+  const prod=by(["scripting","producing","publishing"]), failed=by(["failed"]), pub=by(["published","scheduled"]).slice(0,6), retos=isRetosCh(c);
+  if(retos && window.RetosUI) RetosUI.forChannel(c.id);
+  return `<div class="chhero" style="--c:${esc(c.color||"#888")}"><div class="chname"><span class="dot"></span><h2>${esc(c.name)}</h2></div><div class="muted">${esc(c.niche||"")}</div>
+      <div class="row" style="margin-top:4px">${retos?"":`<button class="btn sm" onclick="askIdeas('${c.id}')">Pedir ideas</button>`}<button class="btn sm ghost" onclick="openChannel('${c.id}')">Ajustes del canal</button></div></div>
     <div class="flow">
-      <div class="you"><span class="label">1 · Ideas</span><b>${ideas.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
-      <div class="you"><span class="label">2 · Guiones</span><b>${scripts.length}</b><span class="muted" style="font-size:12px">por revisar</span></div>
-      <div><span class="label">Producción</span><b>${prod.length}</b><span class="muted" style="font-size:12px">voz, imagen, montaje</span></div>
+      ${retos?`<div class="you"><span class="label">1 · Generar</span><b>—</b><span class="muted" style="font-size:12px">retos al momento</span></div>`:`<div class="you"><span class="label">1 · Ideas</span><b>${ideas.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>`}
+      <div class="you"><span class="label">2 · ${retos?"Retos":"Guiones"}</span><b>${scripts.length}</b><span class="muted" style="font-size:12px">por revisar</span></div>
+      <div><span class="label">Producción</span><b>${prod.length}</b><span class="muted" style="font-size:12px">${retos?"dibujo y montaje":"voz, imagen, montaje"}</span></div>
       <div class="you"><span class="label">3 · Vídeos</span><b>${finals.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
       <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
     </div>
-    ${window.RetosUI?RetosUI.producerSection():""}
-    ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>`
-      <div class="card"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
-      <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`).join("")}</div></section>`:""}
+    ${retos&&window.RetosUI?RetosUI.producerSection():""}
+    ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div></section>`:""}
     <section><div class="sec-h"><h2>Vídeos por aprobar</h2><span class="mono">${finals.length}</span></div>
-      ${finals.length?`<div class="grid">${finals.map(v=>`<div class="card click" onclick="openVideo('${v.id}')">
-        ${v.thumbnail_url?`<img src="${esc(v.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px">`:""}
-        <div class="row">${chTag(v.channel_id)}<span class="mono muted">${dur(v.duration_sec)}</span>${costTag(v)}</div>
-        <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
+      ${finals.length?`<div class="grid">${finals.map(v=>finalCard(v,false)).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
     </section>
-    <section><div class="sec-h"><h2>Guiones por revisar</h2><span class="mono">${scripts.length}</span></div>
-      ${scripts.length?`<div class="list">${scripts.map(v=>`<div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`).join("")}</div>`:`<div class="empty">Sin guiones pendientes.</div>`}
+    <section><div class="sec-h"><h2>${retos?"Retos por revisar":"Guiones por revisar"}</h2><span class="mono">${scripts.length}</span></div>
+      ${scripts.length?`<div class="list">${scripts.map(v=>scriptCard(v,false)).join("")}</div>`:`<div class="empty">${retos?"Sin retos pendientes. Genera un vídeo arriba.":"Sin guiones pendientes."}</div>`}
     </section>
-    <section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasChip()}</div>
-      ${ideaGenerator()}
-      ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pide ideas nuevas desde un canal; además, cada mañana a las 8:30 llegan solas.</div>`}
-    </section>
-    ${prod.length?`<section><div class="sec-h"><h2>En producción</h2><span class="mono">${prod.length}</span></div><div class="list">${prod.map(v=>`
-      <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
-      ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`).join("")}</div></section>`:""}
-    ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>`
-      <div class="card click" onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${chTag(v.channel_id)}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`).join("")}</div></section>`:""}`;
+    ${retos&&!ideas.length?"":`<section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasChip(c.id)}</div>
+      ${retos?"":ideaGenerator(c.id)}
+      ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pídelas arriba; además, cada mañana a las 8:30 llegan solas.</div>`}
+    </section>`}
+    ${prod.length?`<section><div class="sec-h"><h2>En producción</h2><span class="mono">${prod.length}</span></div><div class="list">${prod.map(v=>prodCard(v,false)).join("")}</div></section>`:""}
+    ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>pubCard(v,false)).join("")}</div></section>`:""}`;
 }
 const chFormats = (c) => (c?.formats?.length ? c.formats : [c?.format||"long"]);
 const longMin = (c) => c?.format==="long" ? c.target_minutes : (c?.long_minutes ?? 8);
 const fmtLabel = (f,c) => f==="short" ? "Short" : `Largo · ${longMin(c)} min`;
-function ideaGenerator(){
-  const chs=S.channels.filter(c=>c.status!=="archived"); if(!chs.length) return "";
+function ideaGenerator(only){
+  const chs=S.channels.filter(c=>c.status!=="archived"&&(!only||c.id===only)); if(!chs.length) return "";
   return `<div class="card" style="margin-bottom:12px"><div class="label" style="margin-bottom:8px">Pedir ideas a medida</div>
     <div class="gen-row">
       ${chs.length>1?`<select id="g-ch">${chs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`:`<input type="hidden" id="g-ch" value="${chs[0].id}">`}
@@ -562,9 +641,9 @@ const IDEA_STEPS=["ideas","refill_ideas"];
 function ideaJobs(chId){ return S.jobs.filter(j=>IDEA_STEPS.includes(j.step)&&(!chId||j.channel_id===chId)); }
 function ideasWaitUntil(chId){ const t=ideaJobs(chId).filter(j=>j.status==="queued"&&j.run_after&&new Date(j.run_after)-Date.now()>90000).map(j=>new Date(j.run_after)); return t.length?new Date(Math.min(...t)):null; }
 const hhmm=(d)=>d.toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"});
-function ideasChip(){
-  const jobs=ideaJobs(); if(!jobs.length) return "";
-  const w=ideasWaitUntil(), now=jobs.some(j=>!(j.status==="queued"&&j.run_after&&new Date(j.run_after)-Date.now()>90000));
+function ideasChip(chId){
+  const jobs=ideaJobs(chId); if(!jobs.length) return "";
+  const w=ideasWaitUntil(chId), now=jobs.some(j=>!(j.status==="queued"&&j.run_after&&new Date(j.run_after)-Date.now()>90000));
   if(now) return `<span class="chip st-warn">Generando ideas…</span>`;
   return `<span class="chip st-bad" title="Hoy se ha alcanzado el tope de gasto diario">Sin presupuesto hoy · llegarán a las ${hhmm(w)}</span>`;
 }
@@ -1157,7 +1236,6 @@ async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("
 // ---------- arranque ----------
 function route(){ const h=location.hash.slice(1); S.view=["hoy","canales","descubrir","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
-document.addEventListener("change", e=>{ if(e.target.id==="fch"){ S.filterCh=e.target.value; render(); } });
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{

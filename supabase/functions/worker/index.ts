@@ -2122,8 +2122,8 @@ async function titleOverlayOf(v: any, ch: any, sh: boolean) {
   if (!text) {
     let tema = "";
     if (String(rs.title_template).includes("{tema}")) {
-      const r = await claude(MODEL_CHEAP, "Respondes solo con el tema, sin comillas ni punto.", `Título del vídeo: «${v.title ?? v.idea_title}»\nPrimera frase: «${v.script?.scenes?.[0]?.narration ?? ""}»\n\nEn 1-2 palabras y en plural, ¿de qué animal, cosa o tema trata? (p. ej. «gatos», «pulpos», «abejas»).`, { maxTokens: 20 });
-      tema = r.text.trim().replace(/^[«"']|[»"'.]$/g, "").split("\n")[0].slice(0, 24);
+      const r = await claude(MODEL_CHEAP, "Respondes solo con el tema, sin comillas ni punto.", `Título del vídeo: «${v.title ?? v.idea_title}»\nPrimera frase: «${v.script?.scenes?.[0]?.narration ?? ""}»\n\n¿De qué tema trata? Responde en 1-3 palabras tal como iría detrás de «CURIOSIDADES DE» (p. ej. «gatos», «tu cerebro», «el Papa», «Eurovisión», «las fobias»).`, { maxTokens: 20 });
+      tema = r.text.trim().replace(/^[«"']|[»"'.]$/g, "").split("\n")[0].slice(0, 28);
     }
     text = String(rs.title_template).replace("{tema}", tema).replace(/\s+/g, " ").trim().toUpperCase();
     await sb.from("videos").update({ script: { ...(v.script ?? {}), overlay: text } }).eq("id", v.id);

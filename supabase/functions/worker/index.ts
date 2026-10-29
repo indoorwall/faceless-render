@@ -977,6 +977,23 @@ async function safeImage(prompt: string, short: boolean, quality = "medium"): Pr
     return null;
   }
 }
+// Pixabay: fotos y vídeos reales gratis (alternativa o complemento a Pexels)
+async function pixabay(kind: "photo" | "video", query: string, short: boolean, used: Set<string>) {
+  if (!KEYS["PIXABAY_API_KEY"]) return null;
+  const base = kind === "photo" ? "https://pixabay.com/api/" : "https://pixabay.com/api/videos/";
+  const q = new URLSearchParams({ key: KEYS["PIXABAY_API_KEY"], q: query.slice(0, 95), per_page: "20", safesearch: "true", ...(kind === "photo" ? { image_type: "photo", orientation: short ? "vertical" : "horizontal" } : {}) });
+  const r = await fetch(`${base}?${q}`);
+  if (!r.ok) throw new Error(`Pixabay ${r.status}`);
+  const d = await r.json();
+  if (kind === "photo") {
+    // deno-lint-ignore no-explicit-any
+    const p = (d.hits ?? []).map((x: any) => x.largeImageURL).find((x: string) => x && !used.has(x));
+    return p ? { url: p, kind: "image" } : null;
+  }
+  // deno-lint-ignore no-explicit-any
+  for (const h of d.hits ?? []) { const f = h.videos?.large?.url || h.videos?.medium?.url; if (f && !used.has(f)) return { url: f, kind: "video" }; }
+  return null;
+}
 async function pexels(kind: "photo" | "video", query: string, short: boolean, used: Set<string>) {
   const orientation = short ? "portrait" : "landscape";
   const u = kind === "photo" ? `https://api.pexels.com/v1/search?per_page=15&orientation=${orientation}&query=${encodeURIComponent(query)}` : `https://api.pexels.com/videos/search?per_page=15&orientation=${orientation}&query=${encodeURIComponent(query)}`;
@@ -1105,7 +1122,11 @@ async function stepVisuals(job: Job) {
         media = await pexels(type === "stock_video" ? "video" : "photo", sh.stock_query || sh.visual_prompt?.split(",")[0] || v.idea_title, short, used);
         if (!media && type === "stock_video") media = await pexels("photo", sh.stock_query || v.idea_title, short, used);
       }
-      // Sin Pexels (o sin resultado): foto real de Wikimedia Commons con la misma búsqueda
+      // Sin Pexels (o sin resultado): Pixabay y, si no, foto real de Wikimedia Commons con la misma búsqueda
+      if (!media && (type === "stock_photo" || type === "stock_video") && KEYS["PIXABAY_API_KEY"]) {
+        const q = sh.stock_query || sh.visual_prompt?.split(",")[0] || v.idea_title;
+        try { media = await pixabay(type === "stock_video" ? "video" : "photo", q, short, used); if (!media && type === "stock_video") media = await pixabay("photo", q, short, used); } catch (_) { /* sigue */ }
+      }
       if (!media && (type === "stock_photo" || type === "stock_video") && sh.stock_query) {
         try { media = await commons(sh.stock_query, used); } catch (_) { /* sigue */ }
       }

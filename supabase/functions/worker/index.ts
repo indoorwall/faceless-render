@@ -188,6 +188,7 @@ async function runStep(job: Job) {
     case "audio_asset": return stepAudioAsset(job);
     case "retos_generate": return stepRetosGenerate(job);
     case "quiz_refill": return stepQuizRefill(job);
+    case "budget": return stepBudget(job);
     case "planner": return stepPlanner(job);
     case "money": return stepMoney(job);
     case "audience": return stepAudience(job);
@@ -3102,6 +3103,46 @@ async function stepRepackage(job: Job) {
   const script = { ...v.script, title: p.title, description: p.description, tags: p.tags, title_candidates: p.title_candidates };
   await sb.from("videos").update({ script, title: p.title, description: p.description, tags: p.tags }).eq("id", v.id);
   await log(job, `Título nuevo: «${p.title}»`);
+}
+// ---------- Paso: tope diario automático (cada noche a las 00:02) ----------
+// Calcula lo que cuesta sacar lo que cada canal tiene que publicar al día (según su calendario), más lo que falta
+// para cubrir los huecos de los próximos 2 días que aún no tienen vídeo. Coste por vídeo: lo medido en el canal
+// (gasto de los últimos 14 días / vídeos terminados) o, si aún no hay datos, una estimación por tipo.
+const UNIT_COST: Record<string, { short: number; long: number }> = { documentary: { short: 0.55, long: 2.5 }, challenges: { short: 0.06, long: 0.3 } };
+async function stepBudget(job: Job) {
+  const { data: cfgRows } = await sb.from("app_config").select("key,value").in("key", ["budget_auto", "budget_max", "budget_min"]);
+  const cfg = Object.fromEntries((cfgRows ?? []).map((r) => [r.key, r.value]));
+  if (cfg.budget_auto === "false") return;
+  const max = Number(cfg.budget_max ?? 10), min = Number(cfg.budget_min ?? 3);
+  const { data: chs } = await sb.from("channels").select("*").eq("status", "active");
+  const since = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+  const lines: string[] = []; let total = 0;
+  for (const ch of chs ?? []) {
+    const s = scheduleOf(ch);
+    const spd = (s.shorts_per_week ?? 0) / 7, lpd = (s.long_per_week ?? 0) / 7;
+    if (!spd && !lpd) continue;
+    const base = UNIT_COST[ch.production_type === "challenges" ? "challenges" : "documentary"];
+    // Coste real medido del canal (si hay datos suficientes)
+    const { data: sp } = await sb.from("spend_daily").select("n").eq("k", `eur:${ch.id}`).gte("day", since);
+    const spent = (sp ?? []).reduce((a, r) => a + Number(r.n), 0);
+    const { count: made } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).not("video_url", "is", null).gte("updated_at", since);
+    let cs = base.short, cl = base.long;
+    if ((made ?? 0) >= 4 && spent > 0) { const avg = spent / (made ?? 1); const k = avg / ((spd * base.short + lpd * base.long) / Math.max(0.01, spd + lpd)); cs = base.short * Math.min(2, Math.max(0.5, k)); cl = base.long * Math.min(2, Math.max(0.5, k)); }
+    let need = spd * cs + lpd * cl + 0.15; // 0,15 €: ideas, títulos, estudios
+    // Huecos de los próximos 2 días sin vídeo preparado: se recuperan a mitad de ritmo
+    const { data: V } = await sb.from("videos").select("format,status,publish_at").eq("channel_id", ch.id).in("status", ["scripting", "script_review", "producing", "final_review", "publishing", "scheduled"]);
+    let catchUp = 0;
+    for (const f of ["short", "long"]) {
+      const slots = slotsFor(ch, f, 2).length;
+      const have = (V ?? []).filter((v) => (v.format ?? ch.format) === f && (!v.publish_at || new Date(v.publish_at).getTime() > Date.now())).length;
+      catchUp += Math.max(0, slots - have) * (f === "short" ? cs : cl) * 0.5;
+    }
+    need += catchUp; total += need;
+    lines.push(`${ch.name} ${need.toFixed(2)} €`);
+  }
+  const cap = Math.min(max, Math.max(min, Math.ceil(total * 1.1 * 10) / 10));
+  await sb.from("app_config").update({ value: String(cap) }).eq("key", "daily_cap_eur");
+  await log(job, `Tope de hoy calculado: ${cap.toFixed(2)} € (${lines.join(" · ")}${total * 1.1 > max ? ` · limitado al máximo de ${max} €` : ""})`);
 }
 // ---------- Paso: estudio global semanal con búsqueda web (por idioma) ----------
 const RESEARCH_TOOL = {

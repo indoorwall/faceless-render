@@ -1590,7 +1590,8 @@ TAREA: piensa unas 30 candidatas y quédate solo con las 20 mejores, que cumplan
 4. El gancho (hook) es la frase con la que arrancaría el vídeo: el dato más fuerte primero.
 ${want === "compilation" ? "5. TODAS deben ser recopilatorios (kind: compilation): un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\") y cada historia con su dato sorprendente." : want === "single" ? "5. Todas deben ser de una sola historia (kind: single)." : "5. Mezcla: unas 2 de cada 3 de una sola historia y 1 de cada 3 recopilatorios con un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\")."}
 Varía épocas, países y tipos de historia. Llama a guardar_ideas.`;
-  const r = await claudeTool(MODEL_FAST, system, user, IDEAS_TOOL, 20000, { job, tag: "ideas" });
+  // Pedidas desde la web (now): al momento. Las automáticas de cada mañana, por lotes (la mitad de precio, pueden tardar)
+  const r = await claudeTool(MODEL_FAST, system, user, IDEAS_TOOL, 20000, job.payload?.now ? undefined : { job, tag: "ideas" });
   // A veces el modelo entrega la lista como texto JSON en vez de como array
   // deno-lint-ignore no-explicit-any
   let ideas: any = r.input?.ideas ?? [];

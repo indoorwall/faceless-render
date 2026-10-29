@@ -113,6 +113,7 @@ export const GAME_STYLES = { classic: { label: "Clásico (cuadrículas y opcione
 // ---------- Azar reproducible ----------
 import { hashStr, rng } from "./util.js";
 import { WORLD, WORLD_CATEGORIES, WORLD_ORDER, WORLD_SOUNDS } from "./world.js";
+import { tr as trText, translatables } from "./i18n.js";
 export { hashStr, rng };
 const di = (d) => Math.max(0, DIFFS.indexOf(d));
 
@@ -546,7 +547,7 @@ export function timeline(project, opts = {}) {
   const narr = cfg.narration;
   const segs = [], events = [], voice = [], music = [];
   const ev = (t, code, gain = 1) => events.push({ t: fr(t), code, gain });
-  const say = (t, text) => { if (narr !== "none" && text) voice.push({ t: fr(t), text }); };
+  const say = (t, text) => { if (narr !== "none" && text) voice.push({ t: fr(t), text: trText(project, text) }); };
   let t = 0;
   const chs = project.challenges || [];
   const total = chs.length;
@@ -663,4 +664,10 @@ export function reshuffle(c, seed) {
   x.signature = signature(x);
   x.validation = { ...validateChallenge(x), engine: ENGINE_VERSION };
   return x;
+}
+
+// Textos de un proyecto que hay que traducir para un canal en otro idioma (retos, títulos, rangos y frases de la voz)
+export function projectStrings(project) {
+  const v = [VOICE.start[0], VOICE.last, VOICE.end, ...Object.values(VOICE.round)];
+  return translatables({ ...project, config: mergeConfig(project.config) }, v);
 }

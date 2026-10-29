@@ -2604,7 +2604,7 @@ const ACT_WD = [0.3, 0.16, 0.09, 0.06, 0.05, 0.07, 0.14, 0.24, 0.3, 0.33, 0.37, 
 const ACT_WE = [0.42, 0.27, 0.14, 0.08, 0.06, 0.06, 0.08, 0.15, 0.3, 0.46, 0.6, 0.7, 0.76, 0.76, 0.72, 0.7, 0.72, 0.78, 0.86, 0.93, 1.0, 0.98, 0.86, 0.62];
 // Un vídeo se juega su suerte en las primeras horas: un Short en 0-3 h, un largo en 1-5 h
 const LEAD: Record<string, [number, number][]> = { short: [[0, 0.6], [1, 1], [2, 0.8], [3, 0.5]], long: [[1, 0.4], [2, 0.8], [3, 1], [4, 0.9], [5, 0.6]] };
-const DAYS_ES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const DAYS_ES = ["domingos", "lunes", "martes", "miércoles", "jueves", "viernes", "sábados"];
 function tzOffsetMin(tz: string, d = new Date()) {
   try {
     const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(d).map((x) => [x.type, x.value]));
@@ -2654,10 +2654,10 @@ const hourDist = (a: number, b: number) => { const d = Math.abs(a - b) % 24; ret
 const hhmm = (h: number) => `${String(Math.floor(h) % 24).padStart(2, "0")}:${h % 1 ? "30" : "00"}`;
 // deno-lint-ignore no-explicit-any
 function audienceOf(ch: any, sameLang: any[]) {
-  if (ch.audience?.countries?.length) return { src: "canal", top: ch.audience.countries as [string, number][] };
+  if (ch.yt_audience?.countries?.length) return { src: "canal", top: ch.yt_audience.countries as [string, number][] };
   // Media del público real de los otros canales del mismo idioma
   const acc = new Map<string, number>(); let n = 0;
-  for (const o of sameLang) if (o.id !== ch.id && o.audience?.countries?.length) { n++; for (const [c, s] of o.audience.countries) acc.set(c, (acc.get(c) ?? 0) + Number(s)); }
+  for (const o of sameLang) if (o.id !== ch.id && o.yt_audience?.countries?.length) { n++; for (const [c, s] of o.yt_audience.countries) acc.set(c, (acc.get(c) ?? 0) + Number(s)); }
   if (n) return { src: "idioma", top: [...acc].map(([c, s]) => [c, s / n] as [string, number]).sort((a, b) => b[1] - a[1]).slice(0, 12) };
   return { src: "supuesto", top: LANG_AUDIENCE[ch.language ?? "es"] ?? LANG_AUDIENCE.es };
 }
@@ -2710,7 +2710,7 @@ async function stepAudience(job: Job) {
       n++;
     } catch { break; }
   }
-  await sb.from("channels").update({ audience: out }).eq("id", chId);
+  await sb.from("channels").update({ yt_audience: out }).eq("id", chId);
   await log(job, `Público del canal: ${(out.countries ?? []).slice(0, 3).map((x: [string, number]) => `${COUNTRY_ES[x[0]] ?? x[0]} ${Math.round(x[1] * 100)} %`).join(", ") || "aún sin datos suficientes"}${n ? ` · ${n} vídeos medidos en sus primeras 48 h` : ""}`);
   await enqueue("advise", { channel_id: chId, delaySec: 30 });
 }
@@ -2732,7 +2732,7 @@ const RESEARCH_TOOL = {
   }, required: ["summary", "peaks", "cadence", "channels"] },
 };
 async function stepResearch(job: Job) {
-  const { data: chs } = await sb.from("channels").select("id,name,niche,language,formats,format,production_type,audience,yt_stats").neq("status", "archived");
+  const { data: chs } = await sb.from("channels").select("id,name,niche,language,formats,format,production_type,audience,yt_audience,yt_stats").neq("status", "archived");
   const langs = [...new Set((chs ?? []).map((c) => c.language ?? "es"))];
   const { data: prev } = await sb.from("schedule_research").select("lang,updated_at");
   let done = 0;
@@ -2741,7 +2741,7 @@ async function stepResearch(job: Job) {
     if (p && !job.payload?.force && Date.now() - new Date(p.updated_at).getTime() < 6 * 864e5) continue;
     const mine = (chs ?? []).filter((c) => (c.language ?? "es") === lang);
     const aud = audienceOf(mine[0], mine).top.slice(0, 6).map(([c, s]) => `${COUNTRY_ES[c] ?? c} ${Math.round(s * 100)} %`).join(", ");
-    const list = mine.map((c) => `- id ${c.id} · «${c.name}» · nicho: ${c.niche ?? "?"} · ${c.production_type === "challenges" ? "retos/acertijos visuales" : "documental faceless con voz"} · formatos: ${(c.formats?.length ? c.formats : [c.format]).join(" y ")} · suscriptores: ${c.yt_stats?.subs ?? "?"}`).join("\n");
+    const list = mine.map((c) => `- id ${c.id} · «${c.name}» · nicho: ${c.niche ?? "?"} · ${c.production_type === "challenges" ? "retos/acertijos visuales" : "documental faceless con voz"} · formatos: ${(c.formats?.length ? c.formats : [c.format]).join(" y ")} · suscriptores: ${c.yt_stats?.subs ?? "?"}${c.audience ? ` · público objetivo: ${String(c.audience).slice(0, 200)}` : ""}`).join("\n");
     const system = `Eres analista de estrategia de YouTube. Investiga con la búsqueda web estudios y datos recientes (2025-2026) sobre la mejor frecuencia y las mejores horas para publicar Shorts y vídeos largos, para canales en ${LANG_NAME[lang] ?? lang} y para estos nichos. Prioriza datos (estudios de Buffer, Hootsuite, vidIQ, TubeBuddy, Sprout Social, YouTube Creator Insider…) sobre opiniones. Ten en cuenta que los canales son nuevos o pequeños, faceless y producidos con IA, y que el objetivo es crecer y monetizar sin parecer contenido repetitivo. Las horas que des son horas LOCALES del público.`;
     const user = `Idioma: ${LANG_NAME[lang] ?? lang}. Público aproximado: ${aud}.\nCanales:\n${list}\n\nDevuelve con la herramienta: resumen, horas pico locales por formato y tipo de día, mejores días para largos, ritmo semanal (mínimo, ideal y máximo) por formato y, para cada canal (por su id), cuántos Shorts y largos por semana le recomiendas y por qué (una frase).`;
     // deno-lint-ignore no-explicit-any
@@ -2758,7 +2758,7 @@ async function stepAdvise(job: Job) {
   const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
   if (!ch || ch.status === "archived") return;
   const lang = ch.language ?? "es";
-  const { data: all } = await sb.from("channels").select("id,language,audience,schedule,formats,format,clips_per_long,status").neq("status", "archived");
+  const { data: all } = await sb.from("channels").select("id,language,yt_audience,schedule,formats,format,clips_per_long,status").neq("status", "archived");
   const sameLang = (all ?? []).filter((c) => (c.language ?? "es") === lang);
   const { data: res } = await sb.from("schedule_research").select("data,updated_at").eq("lang", lang).maybeSingle();
   // deno-lint-ignore no-explicit-any
@@ -2802,7 +2802,8 @@ async function stepAdvise(job: Job) {
   const ideal = { shorts_per_week: spw, long_per_week: lpw };
   if (rc.why) reasons.push(rc.why);
   const y = ch.yt_stats ?? {};
-  if (spw && Number(y.subs ?? 0) < 1000 && cad.short?.max && spw < cad.short.max) { spw = Math.min(Math.round(cad.short.max), spw + 3); reasons.push("Menos de 1.000 suscriptores: más Shorts para captar suscriptores rápido."); }
+  // Solo si el estudio no ha dado un ritmo para este canal (si lo da, ya tiene en cuenta sus suscriptores)
+  if (spw && rc.short_per_week == null && Number(y.subs ?? 0) < 1000 && cad.short?.max && spw < cad.short.max) { spw = Math.min(Math.round(cad.short.max), spw + 3); reasons.push("Menos de 1.000 suscriptores: más Shorts para captar suscriptores rápido."); }
   // Cuota de YouTube: unas 6 subidas al día entre todos los canales
   const perDay = Math.floor(10000 / 1650) * 7;
   const others = (all ?? []).filter((c) => c.id !== ch.id).reduce((a, c) => { const s = { ...DEF_SCHEDULE, ...(c.schedule ?? {}) }; const f: string[] = c.formats?.length ? c.formats : [c.format ?? "long"]; return a + (f.includes("long") ? s.long_per_week : 0) + (f.includes("short") || c.clips_per_long > 0 ? s.shorts_per_week : 0); }, 0);

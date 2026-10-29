@@ -907,8 +907,8 @@ async function stepAudio(job: Job) {
         await sb.from("videos").update({ music_url: pick, script: { ...v.script, music_meta: { prompt, sec: 180, library: true } } }).eq("id", v.id);
         await log(job, "Música de la biblioteca del canal (sin coste)");
       } else {
-        // Pistas de 3 min: sirven para Shorts (se recortan) y para largos (se repiten con fundidos)
-        musicSec = 180;
+        // Largos: pistas de 3 min (se repiten con fundidos). Shorts: solo lo que dura el vídeo (componer cuesta por segundo)
+        musicSec = short ? Math.min(90, Math.ceil(need + 3)) : 180;
         const bytes = await elevenMusic(`${prompt}. Instrumental only, no vocals, mix leaves space for a voiceover.`, musicSec);
         const url = await upload(`${v.id}/music_${Date.now()}.mp3`, bytes, "audio/mpeg");
         await sb.from("videos").update({ music_url: url, script: { ...v.script, music_meta: { prompt, sec: musicSec } } }).eq("id", v.id);

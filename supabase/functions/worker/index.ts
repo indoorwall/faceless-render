@@ -2429,7 +2429,10 @@ async function stepRetosGenerate(job: Job) {
   for (const id of usedQ) { const q = quiz.find((x) => x.id === id); await sb.from("quiz_bank").update({ used_by: [...(q?.used_by ?? []), ch.id] }).eq("id", id); }
   // Título, texto de la portada y descripción llamativos (IA con el estudio de YouTube del canal)
   let pack: { title: string; screen_title?: string; description: string; tags: string[] } | null = null;
-  if (!p.title) { try { pack = await packageRetos(ch, project, theme?.label ?? "Retos variados"); } catch (e) { await log(job, `Título de retos con IA no disponible: ${(e as Error).message}`, "warn"); } }
+  if (!p.title) {
+    // Sin presupuesto: se espera (nunca sale con un título genérico); otros fallos, se avisa y se usa el del motor
+    try { pack = await packageRetos(ch, project, theme?.label ?? "Retos variados"); } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Título de retos con IA no disponible: ${(e as Error).message}`, "warn"); }
+  }
   if (pack?.screen_title) project.title = pack.screen_title;
   const title = pack?.title ?? project.title;
   const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: project.format, title, idea_title: title, description: pack?.description ?? null, tags: pack?.tags ?? [], retos: project, usage: {}, target_minutes: project.format === "long" ? Number(p.minutes) || 8 : null }).select("id").single();

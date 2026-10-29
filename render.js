@@ -196,7 +196,7 @@ function chapterStyles(spec) {
   if (!spec.chapters?.length) return "";
   const fs = chapterSize(spec), cs = spec.chapter_style ?? {};
   return `Style: Chap,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor(cs.bg ?? "#111111")},&H00000000,0,0,0,0,100,100,0,0,3,${Math.round(fs * 0.28)},0,8,0,0,0,1
-Style: ChapBig,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H96000000,0,0,0,0,100,100,0,0,1,${Math.max(3, Math.round(fs * 0.09))},${Math.round(fs * 0.06)},5,0,0,0,1
+Style: ChapBig,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,${Math.max(4, Math.round(fs * 0.13))},${Math.round(fs * 0.08)},5,0,0,0,1
 `;
 }
 // Momento en que entra una curiosidad (si la escena empieza con la pregunta del gancho, al acabar la pregunta)
@@ -224,6 +224,7 @@ function chapterEvents(spec, starts) {
     const acc = assColor(spec.chapter_style?.accent ?? "#FFD400");
     const est1 = ([...title].reduce((a, ch2) => a + cw(ch2), 0) + 3.4) * fs * 0.72;
     const k = Math.min(100, Math.floor(((W * 0.88) / est1) * 100));
+    const kTop = Math.min(125, Math.floor(((W * 0.9) / est1) * 100));
     const bigK = 210, maxW = W * 0.9;
     const lineW = (t) => [...t].reduce((a, ch2) => a + cw(ch2), 0) * fs * 0.72 * (bigK / 100);
     const rows = []; let cur = "";
@@ -231,12 +232,13 @@ function chapterEvents(spec, starts) {
     if (cur) rows.push(cur);
     const fitBig = Math.min(bigK, Math.floor(bigK * Math.min(1, maxW / Math.max(...rows.map(lineW)))));
     const hold = 1250, shrink = 1650;
-    const yTop = Math.round(H * (spec.chapter_style?.y ?? 0.085)), yMid = Math.round(H * 0.4);
-    const sTop = s + shrink / 1000 - 0.12;
-    const pop = `\\fscx${Math.round(fitBig * 0.35)}\\fscy${Math.round(fitBig * 0.35)}\\t(0,170,\\fscx${Math.round(fitBig * 1.1)}\\fscy${Math.round(fitBig * 1.1)})\\t(170,290,\\fscx${fitBig}\\fscy${fitBig})\\t(${hold},${shrink},0.7,\\fscx${Math.round(k * 0.6)}\\fscy${Math.round(k * 0.6)})`;
-    const bigText = `{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\N${rows.join("\\N")}`;
-    out.push(`Dialogue: 3,${assTime(s)},${assTime(Math.min(e, s + shrink / 1000))},ChapBig,,0,0,0,,{\\an5\\move(${Math.round(W / 2)},${yMid},${Math.round(W / 2)},${yTop},${hold},${shrink})${pop}\\fad(0,120)}${bigText}`);
-    if (sTop < e) out.push(`Dialogue: 2,${assTime(sTop)},${assTime(e)},Chap,,0,0,0,,{\\an5\\pos(${Math.round(W / 2)},${yTop})\\fscx${k}\\fscy${k}\\fad(120,0)}{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\h\\h${title}`);
+    // Arriba se queda el mismo rótulo, en varias líneas, a algo más de la mitad del tamaño de entrada
+    const topK = Math.round(fitBig * 0.68);
+    const lineH = fs * 1.25 * (topK / 100);
+    const yTop = Math.round(Math.max(H * 0.05 + (lineH * (rows.length + 1)) / 2, H * (spec.chapter_style?.y ?? 0.1))), yMid = Math.round(H * 0.4);
+    const pop = `\\fscx${Math.round(fitBig * 0.35)}\\fscy${Math.round(fitBig * 0.35)}\\t(0,170,\\fscx${Math.round(fitBig * 1.1)}\\fscy${Math.round(fitBig * 1.1)})\\t(170,290,\\fscx${fitBig}\\fscy${fitBig})\\t(${hold},${shrink},0.7,\\fscx${topK}\\fscy${topK}\\frz3)`;
+    const text = `{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\N${rows.join("\\N")}`;
+    out.push(`Dialogue: 3,${assTime(s)},${assTime(e)},ChapBig,,0,0,0,,{\\an5\\move(${Math.round(W / 2)},${yMid},${Math.round(W / 2)},${yTop},${hold},${shrink})${pop}}${text}`);
   });
   return out.length ? out.join("\n") + "\n" : "";
 }

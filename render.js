@@ -208,7 +208,9 @@ function chapterStart(spec, starts, c) {
     const q = ws.findIndex((w) => /\?$/.test(String(w.w)));
     if (q >= 0 && q < ws.length - 1) off = ws[q + 1].s;
   }
-  return starts[c.scene] + off;
+  // La primera curiosidad nunca pisa el título fijo: este se ve al menos 2,2 s y luego entra el título de la curiosidad
+  const first = spec.chapters?.[0] === c;
+  return first && spec.title_overlay?.lines?.length ? Math.max(starts[c.scene] + off, 2.2) : starts[c.scene] + off;
 }
 function chapterEvents(spec, starts) {
   const ch = spec.chapters; if (!ch?.length) return "";
@@ -255,7 +257,7 @@ function titleEvents(spec, starts = []) {
   const t = spec.title_overlay; if (!t?.lines?.length) return "";
   // El título fijo se va cuando entra la primera curiosidad (o a los t.seconds segundos); si no, dura todo el vídeo
   const c0 = spec.chapters?.length ? chapterStart(spec, starts, spec.chapters[0]) : null;
-  const until = t.seconds ?? (c0 != null ? Math.max(2, c0) : null);
+  const until = t.seconds ?? (c0 != null ? Math.max(0.5, c0 - 0.25) : null);
   const endT = until != null ? assTime(until) : "9:00:00.00";
   const fade = until != null ? "\\fad(0,250)" : "";
   const W = spec.width, H = spec.height, fs = titleSize(spec), rot = t.rotate ?? 5;

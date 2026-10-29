@@ -117,7 +117,7 @@ section{display:flex;flex-direction:column;gap:12px}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:middle}
 /* Revisar por canal */
-.tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:thin}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;padding:2px 0 4px}
 .tab{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:999px;font:600 14px var(--body,inherit);cursor:pointer;white-space:nowrap}
 .tab .dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
 .tab .n{background:var(--accent);color:var(--on-accent);font-size:12px;padding:1px 7px;border-radius:10px}
@@ -470,13 +470,13 @@ async function load(){
   const [c,v,p,a,k,pr,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
     sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,published_at,error,created_at,updated_at,usage,engine,revenue,stats").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
-    Promise.resolve({data:[]}), // «Descubrir» retirado: ya no se consultan propuestas
+    sb.from("schedule_research").select("lang,data,updated_at"), // estudio global de horarios (por idioma)
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
     sb.rpc("get_prices"),
     sb.from("jobs").select("id,step,status,channel_id,video_id,run_after").in("status",["queued","running"]),
   ]);
-  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[];
+  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[];
   render();
 }
 let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
@@ -629,6 +629,7 @@ function viewChannelReview(c){
       <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
     </div>
     ${(()=>{ const u=upcoming(c.id); return `<section><div class="sec-h"><h2>Próximas publicaciones</h2><span class="mono">${u.length}</span><span class="chip">${({manual:"Manual",semi:"Semiautomático",auto:"Automático"})[c.autopilot||"manual"]}</span></div>${u.length?`<div class="ilist">${u.slice(0,10).map(v=>`<button class="irow" onclick="openVideo('${v.id}')"><span>${esc(v.title||v.idea_title)}</span><span class="muted">${v.format==="short"?"Short":"Largo"} · ${whenTxt(v.publish_at)}</span></button>`).join("")}</div>`:`<div class="empty" style="padding:14px">No hay nada programado. Los vídeos que apruebes sin fecha irán al siguiente hueco del calendario${c.autopilot&&c.autopilot!=="manual"?"; en este modo el estudio también mantiene la cola llena":""}.</div>`}</section>`; })()}
+    ${adviceCard(c,false)}
     ${healthCard(c)}
     ${retos&&window.RetosUI?RetosUI.producerSection():""}
     ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div></section>`:""}
@@ -1075,11 +1076,51 @@ function learnHtml(c,L){
 
 // ---------- Ficha del canal: automatización, calendario y presupuesto ----------
 const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final."], semi:["Semiautomático","El estudio aprueba solo las ideas y los guiones que pasan los controles de calidad y de políticas. Tú solo ves el vídeo final."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
+// ---------- Calendario recomendado (público del canal + lo aprendido + estudio global) ----------
+const DAYS_SHORT=["dom","lun","mar","mié","jue","vie","sáb"];
+const COUNTRY={ES:"España",MX:"México",AR:"Argentina",CO:"Colombia",PE:"Perú",CL:"Chile",VE:"Venezuela",EC:"Ecuador",US:"EE. UU.",BR:"Brasil",PT:"Portugal",GB:"Reino Unido",CA:"Canadá",AU:"Australia",IN:"India",PH:"Filipinas",FR:"Francia",DE:"Alemania",IT:"Italia"};
+function adviceCost(c,a){
+  // Coste medio por vídeo de este canal (o de todos) por formato, frente al tope diario
+  const per=(f)=>{ const xs=S.videos.filter(v=>v.format===f&&v.usage&&["final_review","publishing","scheduled","published"].includes(v.status)).map(v=>({own:v.channel_id===c.id,t:costOf(v.usage)?.total||0})).filter(x=>x.t>0); const own=xs.filter(x=>x.own); const use=own.length>=2?own:xs; return use.length?use.reduce((s,x)=>s+x.t,0)/use.length:null; };
+  const cs=per("short"), cl=per("long"); if(cs==null&&cl==null) return "";
+  const week=(a.shorts_per_week||0)*(cs||0)+(a.long_per_week||0)*(cl||0), cap=Number(c.daily_budget_eur??S.prices?.cap??0)*7;
+  return `<div class="why">Coste estimado: <b>${eur(week)}/semana</b>${cap?` · tope ${c.daily_budget_eur!=null?"del canal":"general"}: ${eur(cap)}/semana${week>cap?` <span style="color:var(--bad)">(no cabe: sube el tope o baja el ritmo)</span>`:""}`:""}.</div>`;
+}
+function adviceCard(c, full=true){
+  const a=c.schedule_advice;
+  if(!a) return `<div class="card"><div class="spread"><div><h3 style="margin:0">Calendario recomendado</h3><div class="why">Aún no calculado. Se calcula cada mañana con el público del canal y lo que aprende de cada vídeo.</div></div><button class="btn sm" onclick="recalcAdvice('${c.id}')">Calcular ahora</button></div></div>`;
+  const s={...(c.schedule||{})}, auto=!!s.auto_tune;
+  const same=s.long_per_week===a.long_per_week&&s.shorts_per_week===a.shorts_per_week&&s.long_time===a.long_time&&JSON.stringify(s.short_times||[])===JSON.stringify(a.short_times||[]);
+  const conf={alta:"st-ok",media:"st-acc",baja:"st-warn"}[a.confidence]||"";
+  const res=(S.research||[]).find(r=>r.lang===(c.language||"es"));
+  const lines=[a.long_per_week?`<div><b>${a.long_per_week} largo${a.long_per_week>1?"s":""}/semana</b> a las <b>${esc(a.long_time)}</b>${a.long_days?.length?` · ${a.long_days.map(d=>DAYS_SHORT[d]).join(", ")}`:""}</div>`:"",
+    a.shorts_per_week?`<div><b>${a.shorts_per_week} Shorts/semana</b> a las <b>${esc((a.short_times||[]).join(" y "))}</b></div>`:""].join("");
+  return `<div class="card" style="gap:10px;border-left:4px solid var(--accent)">
+    <div class="spread"><div><h3 style="margin:0">Calendario recomendado</h3><div class="why">Hora de España · actualizado ${ago(a.at)}</div></div><span class="chip ${conf}">Confianza ${esc(a.confidence||"baja")}</span></div>
+    <div style="font-size:15px;display:grid;gap:4px">${lines||`<div class="muted">Este canal no tiene formatos activos.</div>`}</div>
+    ${a.ideal&&(a.ideal.shorts_per_week!==a.shorts_per_week||a.ideal.long_per_week!==a.long_per_week)?`<div class="why">Ideal según el estudio: ${a.ideal.long_per_week} largos y ${a.ideal.shorts_per_week} Shorts por semana.</div>`:""}
+    ${adviceCost(c,a)}
+    ${full?`<ul class="why" style="margin:0;padding-left:18px">${(a.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="why">Datos usados: ${a.evidence?.short?.own||0} Shorts y ${a.evidence?.long?.own||0} largos de este canal; ${(a.evidence?.short?.global||0)+(a.evidence?.long?.global||0)} vídeos de tus otros canales del mismo idioma.</div>
+    ${res?`<details><summary class="why" style="cursor:pointer">Estudio global (${esc(new Date(res.updated_at).toLocaleDateString("es-ES"))}, se actualiza cada lunes)</summary><div class="why" style="margin-top:6px">${esc(res.data?.summary||"")}</div>${(res.data?.sources||[]).length?`<div class="why">Fuentes: ${(res.data.sources||[]).slice(0,6).map(x=>/^https?:/.test(x)?`<a href="${esc(x)}" target="_blank" rel="noopener">${esc(x.replace(/^https?:\/\/(www\.)?/,"").split("/")[0])}</a>`:esc(x)).join(" · ")}</div>`:""}</details>`:""}`:""}
+    <div class="row">${same?`<span class="chip st-ok">Es tu calendario actual</span>`:`<button class="btn sm pri" onclick="applyAdvice('${c.id}')">Aplicar al calendario</button>`}${auto?`<span class="chip st-acc">Se ajusta solo</span>`:""}<button class="btn sm ghost" onclick="recalcAdvice('${c.id}')">Recalcular</button></div>
+  </div>`;
+}
+async function applyAdvice(id){
+  const c=ch(id), a=c.schedule_advice; if(!a) return;
+  const schedule={...(c.schedule||{}), long_per_week:a.long_per_week, shorts_per_week:a.shorts_per_week, long_time:a.long_time, short_times:a.short_times, long_days:a.long_days||[]};
+  await run(async()=>{ const {error}=await sb.from("channels").update({schedule}).eq("id",id); if(error) throw error; c.schedule=schedule;
+    if(S.open?.c?.id===id){ S.open.c.schedule=schedule; renderChannelSheet(true); } await load(); }, "Calendario aplicado");
+}
+async function recalcAdvice(id){
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"advise",channel_id:id}); if(error) throw error; await kick(); }, "Recalculando: tarda menos de un minuto");
+}
 function autoSection(c){
   const s={ long_per_week:2, shorts_per_week:7, long_time:"18:30", short_times:["13:00","20:30"], buffer_days:5, ...(c.schedule||{}) };
   const ap=c.autopilot||"manual", retos=c.production_type==="challenges";
   return `<div class="full card" style="gap:12px;border-left:4px solid var(--accent)">
     <div><h3 style="margin:0">Automatización y publicación</h3><div class="why">Cuánto trabaja el canal sin ti y cuándo publica.</div></div>
+    ${c.id?`<div class="full">${adviceCard(c)}</div>`:""}
     <div class="fgrid">
       <label class="f full">Piloto automático<select id="c-ap" onchange="document.getElementById('c-ap-why').textContent=AUTOPILOT[this.value][1]">${Object.entries(AUTOPILOT).map(([k,[l]])=>`<option value="${k}" ${ap===k?"selected":""}>${l}</option>`).join("")}</select><small id="c-ap-why">${AUTOPILOT[ap][1]}</small></label>
       <label class="f">Nota mínima para aprobar solo<select id="c-q">${[7,7.5,8,8.5,9].map(n=>`<option value="${n}" ${Number(c.quality_min??8)===n?"selected":""}>${String(n).replace(".",",")}/10${n===8?" (recomendado)":""}</option>`).join("")}</select></label>
@@ -1088,6 +1129,7 @@ function autoSection(c){
       <label class="f">Hora de los largos<input type="time" id="c-ltime" value="${esc(s.long_time)}"></label>
       <label class="f">Shorts por semana<input type="number" id="c-spw" min="0" max="21" value="${s.shorts_per_week}"></label>
       <label class="f">Horas de los Shorts <small>Separadas por comas</small><input type="text" id="c-stimes" value="${esc((s.short_times||[]).join(", "))}"></label>
+      <label class="check full"><input type="checkbox" id="c-autotune" ${s.auto_tune?"checked":""}> Ajustar el ritmo y las horas solo con cada recomendación (cada mañana)</label>
       <label class="f">Días de reserva <small>Vídeos listos por adelantado</small><input type="number" id="c-buf" min="1" max="14" value="${s.buffer_days}"></label>
       <label class="f">Shorts sacados de cada largo <small>0 = no sacar</small><input type="number" id="c-clips" min="0" max="5" value="${c.clips_per_long??0}"></label>
       ${retos?"":`<label class="f">Versión en otro idioma de <small>Este canal dobla los vídeos de otro (pon aquí su idioma)</small><select id="c-mirror"><option value="">— Canal independiente —</option>${S.channels.filter(x=>x.id!==c.id&&x.production_type!=="challenges").map(x=>`<option value="${x.id}" ${c.mirror_of===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>
@@ -1101,7 +1143,9 @@ function collectAuto(c){
   const num=(id,d)=>{ const v=document.getElementById(id)?.value; return v===""||v==null?d:Number(v); };
   const times=($("#c-stimes")?.value||"").split(",").map(x=>x.trim()).filter(x=>/^\d{1,2}:\d{2}$/.test(x));
   const row={ autopilot:$("#c-ap").value, quality_min:num("c-q",8), daily_budget_eur:$("#c-budget").value===""?null:Math.max(0,num("c-budget",0)), clips_per_long:Math.max(0,Math.min(5,num("c-clips",0))),
-    schedule:{ long_per_week:num("c-lpw",2), shorts_per_week:num("c-spw",7), long_time:$("#c-ltime").value||"18:30", short_times:times.length?times:["13:00"], buffer_days:num("c-buf",5) } };
+    schedule:{ long_per_week:num("c-lpw",2), shorts_per_week:num("c-spw",7), long_time:$("#c-ltime").value||"18:30", short_times:times.length?times:["13:00"], buffer_days:num("c-buf",5), auto_tune:!!$("#c-autotune")?.checked } };
+  // Los días fijos de los largos se mantienen solo si no se ha cambiado el número de largos a mano
+  const prevS=c.schedule||{}; if(Array.isArray(prevS.long_days)&&prevS.long_days.length===row.schedule.long_per_week) row.schedule.long_days=prevS.long_days;
   if($("#c-aid")) row.ai_disclosure_default=$("#c-aid").checked;
   if($("#c-mirror")){ row.mirror_of=$("#c-mirror").value||null; row.mirror_auto=!!row.mirror_of&&$("#c-mirror-auto").checked; }
   if($("#c-gstyle")) row.retos_config={...(c.retos_config||{}), game_style:$("#c-gstyle").value};

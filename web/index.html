@@ -231,7 +231,6 @@ video{width:100%;border-radius:10px;background:#000;max-height:60vh}
 .guide-fb{background:var(--sunk);border-color:transparent}
 .guide-fb textarea{background:var(--surface)}
 .guide-cta{background:var(--accent-soft);border-color:transparent;margin-bottom:6px}
-/* Descubrir */
 .disc-bar{gap:12px}
 .disc-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .disc-row input{flex:1 1 320px;min-width:0}
@@ -471,7 +470,7 @@ async function load(){
   const [c,v,p,a,k,pr,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
     sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage,engine").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
-    sb.from("channel_proposals").select("*").eq("status","pending").order("created_at",{ascending:false}),
+    Promise.resolve({data:[]}), // «Descubrir» retirado: ya no se consultan propuestas
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
     sb.rpc("get_prices"),
@@ -487,7 +486,7 @@ function render(){
   if(!S.session){ $("#root").innerHTML = authView(); bindAuth(); return; }
   const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
   const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
-  const views = {hoy:["Revisar",reviewCount],canales:["Canales",0],descubrir:["Descubrir",S.proposals.length],ajustes:["Ajustes",missing]};
+  const views = {hoy:["Revisar",reviewCount],canales:["Canales",0],ajustes:["Ajustes",missing]};
   const scrollY = window.scrollY;
   $("#root").innerHTML = `<div class="app">
     <nav class="rail">
@@ -495,7 +494,7 @@ function render(){
       ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
       <div class="foot">${esc(S.session.user.email)}</div>
     </nav>
-    <main><div class="wrap">${ ({hoy:viewHoy,canales:viewCanales,descubrir:viewDescubrir,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+    <main><div class="wrap">${ ({hoy:viewHoy,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
@@ -554,8 +553,8 @@ const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="ope
   ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`;
 const pubCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`;
 function viewHoy(){
-  if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal o deja que el estudio te proponga nichos con demanda real.</p></div></div>
-    <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button><a class="btn" href="#descubrir">Ver propuestas de canales</a></div>
+  if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal para empezar.</p></div></div>
+    <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button></div>
     ${setupHint()}`;
   if(S.filterCh && !S.channels.some(c=>c.id===S.filterCh)) S.filterCh="";
   if(S.channels.length===1) S.filterCh=S.channels[0].id;
@@ -692,71 +691,7 @@ function viewCanales(){
       <dt>Pipeline</dt><dd class="mono">${n(["idea_review"])} ideas · ${n(["scripting","script_review","producing","final_review"])} en curso · ${n(["published","scheduled"])} publicados</dd></dl>
       <div class="row" style="margin-top:auto"><button class="btn sm pri" ${gen?"disabled":""} onclick="askIdeas('${c.id}')">${genWait?`Ideas a las ${hhmm(genWait)}`:gen?"Buscando ideas…":"Pedir ideas"}</button><button class="btn sm" onclick="openGuide('${c.id}')">${c.style_guide?"Guía ✓":"Crear guía"}</button><button class="btn sm" onclick="openChannel('${c.id}')">Editar</button>
       ${c.youtube_connected?"":`<button class="btn sm ghost" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}</div>
-    </div>`;}).join("")}</div>`:`<div class="empty">Aún no hay canales. Crea uno o ve a Descubrir para que el estudio te proponga nichos.</div>`}`;
-}
-
-// --- Vista: Descubrir
-const FOCUS_CHIPS=["Historia","Finanzas personales","Ciencia y espacio","Misterios sin resolver","Tecnología e IA","Geografía y países","Psicología","Deporte"];
-const COMP={baja:["Competencia baja","st-ok"],media:["Competencia media","st-warn"],alta:["Competencia alta","st-bad"]};
-const PROD={facil:"Fácil de producir",media:"Producción media",dificil:"Producción exigente"};
-function scoreClass(n){ return n>=70?"sc-hi":n>=50?"sc-mid":"sc-lo"; }
-function rpmText(p){ if(p.rpm_low==null) return "–"; const c=p.rpm_currency==="USD"?"$":"€"; return `${String(p.rpm_low).replace(".",",")}–${String(p.rpm_high).replace(".",",")} ${c}`; }
-function proposalCard(p){
-  const m=p.metrics||{}; const has=m.sample>0;
-  const [cl,cc]=COMP[(p.competition||"").toLowerCase()]||[p.competition?`Competencia ${p.competition}`:"",""];
-  const vids=(p.videos||[]).slice(0,4);
-  return `<article class="prop">
-    <div class="prop-main">
-      <div class="prop-head">
-        <div class="score ${scoreClass(p.score||0)}" title="Puntuación de oportunidad: demanda, huecos para canales pequeños, RPM y competencia"><b>${p.score??"–"}</b><span>/100</span></div>
-        <div style="min-width:0"><h2>${esc(p.name)}</h2><div class="tagline">${esc(p.tagline||p.niche)}</div></div>
-      </div>
-      <div class="row">
-        <span class="chip">${p.format==="short"?"Shorts":"Vídeo largo"}</span>
-        ${cl?`<span class="chip ${cc}" title="${esc(p.competition_note||"")}">${esc(cl)}</span>`:""}
-        ${p.production?`<span class="chip" title="${esc(p.production_note||"")}">${PROD[p.production]||esc(p.production)}</span>`:""}
-        <span class="chip">${p.language==="en"?"Inglés":"Español"}</span>
-      </div>
-      ${p.description?`<p class="prop-desc">${esc(p.description)}</p>`:""}
-      ${p.audience?`<div class="why"><b>Para quién:</b> ${esc(p.audience)}</div>`:""}
-      ${(p.why_now||[]).length?`<div><div class="label">Por qué ahora</div><ul class="ticks">${p.why_now.map(t=>`<li>${esc(t)}</li>`).join("")}</ul></div>`:""}
-      ${(p.risks||[]).filter(Boolean).length?`<div><div class="label">A tener en cuenta</div><ul class="ticks warn">${p.risks.filter(Boolean).map(t=>`<li>${esc(t)}</li>`).join("")}</ul></div>`:""}
-      ${(p.sample_titles||[]).length?`<details class="titles"><summary>${p.sample_titles.length} títulos de ejemplo</summary><ol>${p.sample_titles.map(t=>`<li>${esc(t)}</li>`).join("")}</ol></details>`:""}
-    </div>
-    <aside class="prop-data">
-      <div class="label">Datos de YouTube · últimos ${m.window_days||75} días</div>
-      <div class="kpis">
-        <div><b>${has?fmtN(m.median_views):"–"}</b><span>vistas medianas</span></div>
-        <div><b>${has?m.outliers:"–"}</b><span>vídeos ×3 sobre su canal</span></div>
-        <div><b>${has?m.small_channel_hits:"–"}</b><span>éxitos de canales &lt;100k</span></div>
-        <div><b>${rpmText(p)}</b><span>RPM estimado${p.rpm_source?` · <a href="${esc(p.rpm_source)}" target="_blank" rel="noopener">fuente</a>`:""}</span></div>
-      </div>
-      ${vids.length?`<div class="label" style="margin-top:4px">Vídeos que lo demuestran</div><div class="vids">${vids.map(v=>`
-        <a class="vid" href="${esc(v.url)}" target="_blank" rel="noopener">
-          <img src="${esc(v.thumb)}" alt="" loading="lazy">
-          <div><div class="vt">${esc(v.title)}</div><div class="vm mono">${fmtN(v.views)} vistas · <span class="${v.score>=3?"hot":""}">×${String(v.score).replace(".",",")}</span> · ${esc(v.channel||"")}</div></div>
-        </a>`).join("")}</div>`:`<div class="muted" style="font-size:13px">${has?"":"Sin datos de YouTube para esta propuesta."}</div>`}
-      ${(p.sources||[]).length?`<div class="srcs">${p.sources.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc((s.title||s.url).slice(0,48))}</a>`).join("")}</div>`:""}
-    </aside>
-    <footer class="prop-foot"><button class="btn ghost danger" onclick="rejectProposal('${p.id}')">Descartar</button><button class="btn pri" onclick="acceptProposal('${p.id}')">Crear este canal</button></footer>
-  </article>`;
-}
-function viewDescubrir(){
-  const running = S.jobs.some(j=>j.step==="proposals");
-  const fresh = S.proposals.filter(p=>p.score!=null).sort((a,b)=>(b.score||0)-(a.score||0));
-  const old = S.proposals.filter(p=>p.score==null);
-  return `<div class="head"><div><h1>Descubrir canales</h1><p>Propuestas con datos reales: lo que está funcionando ahora en YouTube, cuánto paga cada nicho y dónde hay hueco para un canal nuevo.</p></div></div>
-  <div class="card disc-bar">
-    <div class="disc-row">
-      <input type="text" id="pfocus" oninput="S.pfocus=this.value" placeholder="¿Sobre qué te gustaría un canal? Déjalo vacío para que busque las mejores oportunidades" value="${esc(S.pfocus||"")}">
-      <div class="seg" role="radiogroup" aria-label="Mercado">${[["es","Español"],["en","Inglés"]].map(([k,l])=>`<button type="button" class="${(S.plang||"es")===k?"on":""}" onclick="S.plang='${k}';render()">${l}</button>`).join("")}</div>
-      <button class="btn pri" ${running?"disabled":""} onclick="askProposals()">${running?"Analizando…":"Buscar oportunidades"}</button>
-    </div>
-    <div class="row">${FOCUS_CHIPS.map(f=>`<button type="button" class="chip chip-btn" onclick="$('#pfocus').value='${f}';S.pfocus='${f}'">${f}</button>`).join("")}</div>
-  </div>
-  ${running?`<div class="card running"><div class="spin"></div><div><b>Analizando el mercado</b><div class="why">Busca tendencias y RPM en la web, consulta los vídeos que más destacan en YouTube y puntúa cada nicho. Tarda 2–3 minutos.</div></div></div>`:""}
-  ${fresh.length?`<div class="list">${fresh.map(proposalCard).join("")}</div>`:(running?"":`<div class="empty">Escribe un tema o pulsa «Buscar oportunidades» y en unos minutos tendrás 5 canales puntuados.</div>`)}
-  ${old.length?`<details class="old"><summary>${old.length===1?"1 propuesta anterior":old.length+" propuestas anteriores"}, sin datos de YouTube</summary><div class="list" style="margin-top:12px">${old.map(p=>`<div class="card"><div class="spread"><div style="min-width:0"><h3>${esc(p.name)}</h3><div class="why">${esc(p.niche)}</div></div><div class="row"><button class="btn sm ghost danger" onclick="rejectProposal('${p.id}')">Descartar</button><button class="btn sm" onclick="acceptProposal('${p.id}')">Crear</button></div></div></div>`).join("")}</div></details>`:""}`;
+    </div>`;}).join("")}</div>`:`<div class="empty">Aún no hay canales. Crea uno para empezar.</div>`}`;
 }
 
 // --- Vista: Ajustes
@@ -1214,18 +1149,6 @@ async function improveGuide(){
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"guide", channel_id:S.open.c.id, payload:{feedback:fb}}); if(error) throw error; $("#g-fb").value=""; await kick(); await load(); }, "Analizando el feedback…");
 }
 
-// ---------- descubrir ----------
-async function askProposals(){
-  S.pfocus=$("#pfocus").value.trim();
-  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"proposals", payload:{focus:S.pfocus||null, language:S.plang||"es"}}); if(error) throw error; await kick(); await load(); }, "Analizando el mercado…");
-}
-async function rejectProposal(id){ await run(async()=>{ await sb.from("channel_proposals").update({status:"rejected"}).eq("id",id); await load(); }); }
-async function acceptProposal(id){
-  const p=S.proposals.find(x=>x.id===id);
-  await sb.from("channel_proposals").update({status:"accepted"}).eq("id",id);
-  openChannel(null,{ name:p.name, niche:p.description?`${p.niche}. ${p.description}`:p.niche, format:p.format==="short"?"short":"long", target_minutes:p.format==="short"?1:8, language:p.language||"es", audience:p.audience });
-}
-
 // ---------- ajustes ----------
 async function saveKey(name){
   const v=$(`#k-${name}`).value; if(!v.trim()) return toast("Pega la clave primero");
@@ -1234,19 +1157,18 @@ async function saveKey(name){
 async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
 
 // ---------- arranque ----------
-function route(){ const h=location.hash.slice(1); S.view=["hoy","canales","descubrir","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+function route(){ const h=location.hash.slice(1); S.view=["hoy","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{
   const was=!!S.session; S.session=session;
   if(session && !was){
-    const h=location.hash.slice(1); S.view=["hoy","canales","descubrir","ajustes"].includes(h)?h:"hoy";
+    const h=location.hash.slice(1); S.view=["hoy","canales","ajustes"].includes(h)?h:"hoy";
     load();
     channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"activity"},reload)
-      .on("postgres_changes",{event:"*",schema:"public",table:"channel_proposals"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"channels"},reload).subscribe();
   } else if(!session){ if(channel) sb.removeChannel(channel); render(); }
 });

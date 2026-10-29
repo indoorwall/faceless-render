@@ -1131,6 +1131,9 @@ function autoSection(c){
       <label class="f">Horas de los Shorts <small>Separadas por comas</small><input type="text" id="c-stimes" value="${esc((s.short_times||[]).join(", "))}"></label>
       <label class="check full"><input type="checkbox" id="c-autotune" ${s.auto_tune?"checked":""}> Ajustar el ritmo y las horas solo con cada recomendación (cada mañana)</label>
       <label class="f">Días de reserva <small>Vídeos listos por adelantado</small><input type="number" id="c-buf" min="1" max="14" value="${s.buffer_days}"></label>
+      ${retos?"":`<label class="f">Estilo de subtítulos<select id="c-substyle"><option value="classic" ${(c.render_style?.sub_style||"classic")==="classic"?"selected":""}>Clásico (palabras clave en amarillo)</option><option value="box" ${c.render_style?.sub_style==="box"?"selected":""}>Viral (palabra en caja amarilla, letra de cómic)</option></select></label>
+      <label class="f">Título fijo en pantalla (Shorts) <small>Vacío = sin título. {tema} = el animal o tema de cada vídeo</small><input type="text" id="c-ttpl" value="${esc(c.render_style?.title_template||"")}" placeholder="CURIOSIDADES DE {tema}"></label>
+      <label class="f">Palabra en caja roja del título <small>Opcional, p. ej. DE</small><input type="text" id="c-tacc" value="${esc(c.render_style?.title_accent||"")}" placeholder="DE"></label>`}
       <label class="f">Shorts sacados de cada largo <small>0 = no sacar</small><input type="number" id="c-clips" min="0" max="5" value="${c.clips_per_long??0}"></label>
       ${retos?"":`<label class="f">Versión en otro idioma de <small>Este canal dobla los vídeos de otro (pon aquí su idioma)</small><select id="c-mirror"><option value="">— Canal independiente —</option>${S.channels.filter(x=>x.id!==c.id&&x.production_type!=="challenges").map(x=>`<option value="${x.id}" ${c.mirror_of===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>
       <label class="check"><input type="checkbox" id="c-mirror-auto" ${c.mirror_auto?"checked":""}> Doblar automáticamente cada vídeo que publique el canal original</label>`}
@@ -1148,6 +1151,7 @@ function collectAuto(c){
   const prevS=c.schedule||{}; if(Array.isArray(prevS.long_days)&&prevS.long_days.length===row.schedule.long_per_week) row.schedule.long_days=prevS.long_days;
   if($("#c-aid")) row.ai_disclosure_default=$("#c-aid").checked;
   if($("#c-mirror")){ row.mirror_of=$("#c-mirror").value||null; row.mirror_auto=!!row.mirror_of&&$("#c-mirror-auto").checked; }
+  if($("#c-substyle")) row.render_style={...(c.render_style||{}), sub_style:$("#c-substyle").value, title_template:$("#c-ttpl").value.trim()||null, title_accent:$("#c-tacc").value.trim()||null};
   if($("#c-gstyle")) row.retos_config={...(c.retos_config||{}), game_style:$("#c-gstyle").value};
   return row;
 }

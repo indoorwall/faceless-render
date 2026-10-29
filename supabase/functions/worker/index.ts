@@ -1202,6 +1202,7 @@ async function stepRender(job: Job) {
       sfx_volume: ch.sfx_volume ?? 55,
       subtitles: { ...(sh ? { max_words: 3, y: 0.64, size: 0.07 } : { max_words: 6, y: 0.86, size: 0.05 }), ...subStyleOf(ch, sh) },
       ...(await titleOverlayOf(v, ch, sh)),
+      ...(sh ? await chaptersOf(v, ch, scenes ?? []) : {}),
     };
     const base = KEYS["RENDER_URL"].replace(/\/+$/, "");
     const r = await fetch(`${base}/jobs`, { method: "POST", headers: { Authorization: `Bearer ${KEYS["RENDER_SECRET"]}`, "Content-Type": "application/json" }, body: JSON.stringify(spec) });
@@ -2133,9 +2134,16 @@ async function titleOverlayOf(v: any, ch: any, sh: boolean) {
   if (!text) {
     let tema = "";
     if (String(rs.title_template).includes("{tema}")) {
-      const r = await claude(MODEL_CHEAP, "Respondes solo con el tema, sin comillas ni punto.", `Título del vídeo: «${v.title ?? v.idea_title}»\nPrimera frase: «${v.script?.scenes?.[0]?.narration ?? ""}»\n\n¿De qué tema trata? Responde en 1-3 palabras tal como iría detrás de «CURIOSIDADES DE» (p. ej. «gatos», «tu cerebro», «el Papa», «Eurovisión», «las fobias»).`, { maxTokens: 20 });
+      // 1) El título ya lleva el tema en mayúsculas («No sabías esto de los LOROS», «Tu CEREBRO borra…»)
+      const m = String(v.title ?? v.idea_title ?? "").replace(/#\S+/g, " ").match(/(?:\b(tus?|Tus?|TUS?)\s+)?\b[A-ZÁÉÍÓÚÑÜ]{3,}(?:\s+[A-ZÁÉÍÓÚÑÜ]{3,})*\b/);
+      if (m) tema = m[0];
+    }
+    if (!tema && String(rs.title_template).includes("{tema}")) {
+      const r = await claude(MODEL_CHEAP, "Respondes solo con el tema, sin comillas ni punto.", `Título del vídeo: «${v.title ?? v.idea_title}»\nPrimera frase: «${v.script?.scenes?.[0]?.narration ?? ""}»\n\n¿De qué tema trata? Responde en 1-3 palabras tal como iría detrás de «CURIOSIDADES DE» (p. ej. «gatos», «tu cerebro», «el Papa», «Eurovisión», «las fobias»).`, { maxTokens: 60 });
       tema = r.text.trim().replace(/^[«"']|[»"'.]$/g, "").split("\n")[0].slice(0, 28);
     }
+    // Sin tema no se pone un título a medias («CURIOSIDADES DE»)
+    if (String(rs.title_template).includes("{tema}") && !tema.trim()) { await sb.from("activity").insert({ video_id: v.id, channel_id: ch.id, message: `Título fijo sin tema en «${v.title}»: se monta sin título`, level: "warn" }); return {}; }
     text = String(rs.title_template).replace("{tema}", tema).replace(/\s+/g, " ").trim().toUpperCase();
     await sb.from("videos").update({ script: { ...(v.script ?? {}), overlay: text } }).eq("id", v.id);
   }
@@ -2144,6 +2152,34 @@ async function titleOverlayOf(v: any, ch: any, sh: boolean) {
   const ai = acc ? words.indexOf(acc) : -1;
   const lines = ai > 0 ? [words.slice(0, ai).join(" "), acc, words.slice(ai + 1).join(" ")].filter(Boolean) : [text];
   return { title_overlay: { lines, accent: ai > 0 ? 1 : -1, accent_bg: rs.title_accent_bg ?? "#E83030" } };
+}
+// Título de cada curiosidad en pantalla (render_style.chapters): de las curiosidades de la idea o, si no cuadran con las escenas, por IA
+const CHAP_TOOL = { name: "capitulos", description: "Dónde empieza cada curiosidad", input_schema: { type: "object", required: ["chapters"], properties: { chapters: { type: "array", items: { type: "object", required: ["scene", "title"], properties: { scene: { type: "integer", description: "Número de escena (empieza en 1) donde arranca la curiosidad" }, title: { type: "string", description: "Título de la curiosidad, 2-5 palabras" } } } } } } };
+// deno-lint-ignore no-explicit-any
+async function chaptersOf(v: any, ch: any, scenes: any[]) {
+  if (!ch.render_style?.chapters || scenes.length < 2) return {};
+  // deno-lint-ignore no-explicit-any
+  if (Array.isArray(v.script?.chapters) && v.script.chapters.length) return { chapters: v.script.chapters };
+  // deno-lint-ignore no-explicit-any
+  const stories: any[] = Array.isArray(v.idea_stories) ? v.idea_stories : [];
+  const n = scenes.length;
+  // deno-lint-ignore no-explicit-any
+  let chapters: any[] = [];
+  if (stories.length >= 2 && (n === stories.length || n === stories.length + 1)) {
+    const off = n - stories.length;
+    chapters = stories.map((st, i) => ({ scene: i + off, n: i + 1, of: stories.length, title: String(st.title ?? "").slice(0, 40), after_question: i === 0 && off === 0 }));
+  } else {
+    try {
+      const r = await claudeTool(MODEL_CHEAP, "Divides el guion de un Short de curiosidades en sus curiosidades. Respondes con la herramienta.", `Escenas del guion:\n${scenes.map((s, i) => `${i + 1}. ${String(s.narration ?? "").slice(0, 400)}`).join("\n")}\n\nIndica en qué escena empieza cada curiosidad (normalmente 5) y dale un título corto y llamativo (2-5 palabras). El gancho inicial no es una curiosidad.`, CHAP_TOOL, 1500);
+      // deno-lint-ignore no-explicit-any
+      const raw: any[] = (r.input?.chapters ?? []).filter((c: any) => Number(c.scene) >= 1 && Number(c.scene) <= n);
+      chapters = raw.map((c, i) => ({ scene: Number(c.scene) - 1, n: i + 1, of: raw.length, title: String(c.title ?? "").slice(0, 40), after_question: Number(c.scene) === 1 }));
+    } catch (_) { chapters = []; }
+  }
+  if (!chapters.length) return {};
+  await sb.from("videos").update({ script: { ...(v.script ?? {}), chapters } }).eq("id", v.id);
+  v.script = { ...(v.script ?? {}), chapters };
+  return { chapters };
 }
 // ---------- Traducción de retos (canales en otros idiomas) ----------
 // Memoria de traducciones (i18n_cache): las frases se repiten mucho entre vídeos, así que casi todo sale gratis.

@@ -130,7 +130,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,${fontName},${fontSize},${assColor(sub.color)},${assColor(sub.color)},&H00000000,&H64000000,0,0,0,0,100,100,${box ? 2 : 0},0,1,${outline},${Math.round(outline * 0.4)},2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
 Style: Box,${fontName},${fontSize},&H00000000,&H00000000,${assColor(sub.highlight)},&H00000000,0,0,0,0,100,100,${box ? 2 : 0},0,3,${boxPad},0,2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
-${titleStyles(spec)}
+${titleStyles(spec)}${chapterStyles(spec)}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
@@ -188,7 +188,43 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       });
     });
   });
-  return head + titleEvents(spec) + lines.join("\n") + "\n";
+  return head + titleEvents(spec) + chapterEvents(spec, starts) + lines.join("\n") + "\n";
+}
+// Título de cada curiosidad («1 · RECONOCEN SU NOMBRE»), estilo TikTok: aparece con un pequeño salto al empezar cada una
+function chapterSize(spec) { return Math.round(Math.min(spec.width, spec.height) * (spec.chapter_style?.size ?? 0.066)); }
+function chapterStyles(spec) {
+  if (!spec.chapters?.length) return "";
+  const fs = chapterSize(spec), cs = spec.chapter_style ?? {};
+  return `Style: Chap,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor(cs.bg ?? "#111111")},&H00000000,0,0,0,0,100,100,0,0,3,${Math.round(fs * 0.28)},0,8,0,0,0,1
+`;
+}
+function chapterEvents(spec, starts) {
+  const ch = spec.chapters; if (!ch?.length) return "";
+  const W = spec.width, H = spec.height, fs = chapterSize(spec);
+  const y = Math.round(H * (spec.chapter_style?.y ?? 0.285));
+  const cw = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98 : /\s/.test(c) ? 0.3 : 0.72);
+  const out = [];
+  ch.forEach((c, i) => {
+    const sc = spec.scenes[c.scene]; if (!sc || starts[c.scene] == null) return;
+    // Si la escena empieza con una pregunta de gancho, el título sale al acabar la pregunta
+    let off = 0;
+    if (c.after_question) {
+      const ws = sc.words?.length ? sc.words : [];
+      const q = ws.findIndex((w) => /\?$/.test(String(w.w)));
+      if (q >= 0 && q < ws.length - 1) off = ws[q + 1].s;
+    }
+    const s = starts[c.scene] + off;
+    const next = ch[i + 1];
+    const e = next && starts[next.scene] != null ? starts[next.scene] : 32400;
+    const title = assEsc(String(c.title ?? "").toUpperCase());
+    // Una sola línea centrada: número en caja de color y título en caja oscura (cada tramo con su color de caja)
+    const est = ([...title].reduce((a, ch2) => a + cw(ch2), 0) + 3.4) * fs * 0.72;
+    const k = Math.min(100, Math.floor(((W * 0.88) / est) * 100));
+    const pop = `\\fscx${Math.round(k * 0.55)}\\fscy${Math.round(k * 0.55)}\\t(0,160,\\fscx${Math.round(k * 1.08)}\\fscy${Math.round(k * 1.08)})\\t(160,260,\\fscx${k}\\fscy${k})`;
+    const acc = assColor(spec.chapter_style?.accent ?? "#FFD400");
+    out.push(`Dialogue: 2,${assTime(s)},${assTime(e)},Chap,,0,0,0,,{\\an8\\pos(${Math.round(W / 2)},${y})${pop}}{\\1c${acc}}${c.n}/${c.of ?? ch.length}{\\1c&H00FFFFFF&}\\h\\h${title}`);
+  });
+  return out.length ? out.join("\n") + "\n" : "";
 }
 // Título fijo en pantalla durante todo el vídeo (p. ej. «CURIOSIDADES / DE / GATOS»), con una palabra en caja de color
 function titleSize(spec) { const t = spec.title_overlay; return Math.round(Math.min(spec.width, spec.height) * (t?.size ?? 0.115)); }

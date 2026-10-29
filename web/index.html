@@ -713,7 +713,7 @@ function viewCanales(){
     return `<div class="card">
       <div class="spread"><div style="min-width:0"><div class="row"><span class="chip"><span class="dot" style="background:${esc(c.color)}"></span>${chFormats(c).map(f=>fmtLabel(f,c)).join(" + ")}</span>${c.status==="paused"?`<span class="chip st-warn">En pausa</span>`:""}</div>
       <h2 style="margin-top:8px">${esc(c.name)}</h2><div class="why">${esc(c.niche)}</div></div></div>
-      <dl class="kv"><dt>Idioma</dt><dd>${esc(c.language)}</dd><dt>Imágenes</dt><dd>${{ai:"IA",stock:"Stock real",mix:"Mezcla"}[c.image_source]}</dd><dt>YouTube</dt><dd>${c.youtube_connected?`<span style="color:var(--ok)">Conectado</span>`:`<span class="muted">Sin conectar</span>`}</dd>
+      <dl class="kv"><dt>Idioma</dt><dd>${esc(c.language)}</dd><dt>Imágenes</dt><dd>${{ai:"IA",stock:"Stock real",mix:"Mezcla"}[c.image_source]}</dd><dt>YouTube</dt><dd>${c.youtube_connected?`<span style="color:var(--ok)">Conectado</span>${c.youtube_channel_title?` a «${esc(c.youtube_channel_title)}»`:""}`:`<span class="muted">Sin conectar</span>`}</dd>
       <dt>Pipeline</dt><dd class="mono">${n(["idea_review"])} ideas · ${n(["scripting","script_review","producing","final_review"])} en curso · ${n(["published","scheduled"])} publicados</dd></dl>
       <div class="row" style="margin-top:auto"><button class="btn sm pri" ${gen?"disabled":""} onclick="askIdeas('${c.id}')">${genWait?`Ideas a las ${hhmm(genWait)}`:gen?"Buscando ideas…":"Pedir ideas"}</button><button class="btn sm" onclick="openGuide('${c.id}')">${c.style_guide?"Guía ✓":"Crear guía"}</button><button class="btn sm" onclick="openChannel('${c.id}')">Editar</button>
       ${c.youtube_connected?"":`<button class="btn sm ghost" onclick="connectYT('${c.id}')">Conectar YouTube</button>`}</div>
@@ -1154,7 +1154,11 @@ function collectAuto(c){
 function renderChannelSheet(first){
   if(!first) return;
   const c=S.open.c;
-  const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div><div class="card" id="learn-box" style="margin-top:10px">${learnHtml(c,S.open.learn)}</div>`:""}<div class="fgrid">
+  const ytHelp=c.id?`<details class="card"><summary style="cursor:pointer"><b>¿No aparece tu canal al conectar YouTube?</b>${c.youtube_connected&&c.youtube_channel_title?` <span class="muted">Ahora: «${esc(c.youtube_channel_title)}»</span>`:""}</summary><ol class="why" style="margin:8px 0 0;padding-left:18px">
+    <li>Comprueba que el canal existe: entra en youtube.com con esa cuenta, pulsa tu foto → «Cambiar de cuenta». Si no sale, aún no está creado: créalo en youtube.com/channel_switcher → «Crear un canal».</li>
+    <li>Si sale ahí pero no al conectar, eres <b>gestor</b> invitado desde YouTube Studio («Permisos»): esos accesos no sirven para conectar apps. Entra con la cuenta <b>propietaria</b> del canal, o hazte propietario/gestor de la cuenta de marca en myaccount.google.com/brandaccounts.</li>
+    <li>Al conectar, Google pregunta primero la cuenta y luego «Elige una cuenta o una cuenta de marca»: ahí debe salir el canal. Elige ese, no tu nombre.</li></ol></details>`:"";
+  const body=`${ytHelp}${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div><div class="card" id="learn-box" style="margin-top:10px">${learnHtml(c,S.open.learn)}</div>`:""}<div class="fgrid">
     <label class="f full">Tipo de producción <small>Cada canal usa siempre su motor</small><select id="c-ptype"><option value="documentary" ${c.production_type!=="challenges"?"selected":""}>Documental / Narrativo</option><option value="challenges" ${c.production_type==="challenges"?"selected":""}>Retos / Juegos visuales</option></select></label>
     ${autoSection(c)}
     <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
@@ -1186,7 +1190,7 @@ function renderChannelSheet(first){
     ${c.production_type==="challenges"&&window.RetosUI?RetosUI.channelPanel(c):""}
   </div>`;
   const foot=`${c.id?`<button class="btn ghost danger" onclick="archiveChannel()">Archivar</button>`:""}${c.id?`<button class="btn" onclick="connectYT('${c.id}')">${c.youtube_connected?"Reconectar YouTube":"Conectar YouTube"}</button>`:""}<button class="btn pri" onclick="saveChannel()">${c.id?"Guardar":"Crear canal y pedir ideas"}</button>`;
-  sheetShell(c.id?c.name:"Nuevo canal", c.id?`<span class="chip">${c.youtube_connected?"YouTube conectado":"Sin YouTube"}</span>`:"", body, foot);
+  sheetShell(c.id?c.name:"Nuevo canal", c.id?`<span class="chip">${c.youtube_connected?`YouTube: ${esc(c.youtube_channel_title||"conectado")}`:"Sin YouTube"}</span>`:"", body, foot);
   $("#c-mmode").onchange = (e) => { $("#c-music-w").hidden = e.target.value !== "url"; };
   // Canal de retos: se ocultan los ajustes del motor documental y aparecen su identidad visual y sonora
   const retosCh = c.production_type==="challenges";

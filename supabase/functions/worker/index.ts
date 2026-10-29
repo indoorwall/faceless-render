@@ -575,7 +575,9 @@ async function wikiArticle(lang: string, query: string, max: number) {
 }
 // deno-lint-ignore no-explicit-any
 async function researchPack(v: any) {
-  const topics: string[] = v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? (v.idea_stories ?? []).map((x: { title: string }) => x.title) : [v.idea_evidence?.[0]?.title || v.idea_title];
+  // En los canales de listas («5 curiosidades») las curiosidades son datos sueltos de un mismo tema: se documenta el tema
+  const list5 = v.channel?.idea_format === "list5";
+  const topics: string[] = !list5 && v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? (v.idea_stories ?? []).map((x: { title: string }) => x.title) : [v.idea_evidence?.[0]?.title || v.idea_title];
   const per = topics.length > 1 ? 3500 : 9000;
   const docs: { title: string; url: string; text: string }[] = [];
   for (const t of topics.slice(0, 6)) {
@@ -1573,7 +1575,9 @@ async function stepRefillIdeas(job: Job) {
   const wantF = ["short", "long"].includes(job.payload?.format) && allowedF.includes(job.payload.format) ? job.payload.format : allowedF.length === 1 ? allowedF[0] : "mix";
   const longMin = ch.format === "long" ? ch.target_minutes : (ch.long_minutes ?? 8);
   const fmtLine = wantF === "short" ? "Shorts verticales de 45-60 s (un recopilatorio en Short tiene 3 historias como máximo). Todas las ideas con format: short." : wantF === "long" ? `vídeos largos de ~${longMin} min (un recopilatorio largo tiene 4-6 historias). Todas las ideas con format: long.` : `el canal publica Shorts (45-60 s, recopilatorio de 3 historias como máximo) Y vídeos largos de ~${longMin} min (historias con más profundidad, o recopilatorios de 4-6 historias). Mezcla: unas 3 de cada 5 en Short y 2 de cada 5 en largo; indica el formato de cada idea.`;
-  const system = `Eres el editor jefe de un canal de YouTube faceless y tu trabajo más importante es decidir qué historias se cuentan. Conoces a fondo la historia y eliges solo hechos REALES y documentados (nada de leyendas presentadas como hechos ni datos que no puedas respaldar con un artículo de Wikipedia). Cada idea tiene que encajar de lleno con la identidad y los temas del canal: si una historia es buena pero no es del canal, la descartas. Buscas lo poco conocido: nada de lo que sale en todos los documentales. Escribe en ${ch.language === "es" ? "español" : ch.language}.`;
+  // Canales de listas («5 curiosidades»): cada idea es un tema + exactamente 5 curiosidades poco conocidas
+  const list5 = ch.idea_format === "list5";
+  const system = list5 ? `Eres el editor jefe de un canal de YouTube faceless de curiosidades. Cada vídeo es UN tema concreto que el público ya conoce y le importa, contado con EXACTAMENTE 5 curiosidades poco conocidas, reales y comprobables (nada de datos que circulan por todas partes: si es un dato típico, lo cambias por otro). Sigue la guía del canal y su reparto de temas. Escribe en ${ch.language === "es" ? "español" : ch.language}.` : `Eres el editor jefe de un canal de YouTube faceless y tu trabajo más importante es decidir qué historias se cuentan. Conoces a fondo la historia y eliges solo hechos REALES y documentados (nada de leyendas presentadas como hechos ni datos que no puedas respaldar con un artículo de Wikipedia). Cada idea tiene que encajar de lleno con la identidad y los temas del canal: si una historia es buena pero no es del canal, la descartas. Buscas lo poco conocido: nada de lo que sale en todos los documentales. Escribe en ${ch.language === "es" ? "español" : ch.language}.`;
   const user = `CANAL: ${ch.name}
 Nicho: ${ch.niche}
 TEMAS DEL CANAL (obligatorio, solo de aquí): ${ch.topics || ch.niche}
@@ -1583,13 +1587,19 @@ ${approved.length ? `Ideas que el autor APROBÓ (busca más de este estilo, sin 
 Ya usadas o en cola (no repetir ni parafrasear la misma historia):
 ${used.slice(0, 220).map((t) => `- ${t}`).join("\n") || "-"}
 
-TAREA: piensa unas 30 candidatas y quédate solo con las 20 mejores, que cumplan TODO:
+${list5 ? `TAREA: piensa unos 30 temas candidatos y quédate con los 20 mejores, que cumplan TODO:
+1. Un tema concreto y popular (un animal, una parte del cuerpo o la mente, un personaje o evento de actualidad, un objeto cotidiano…), según el reparto de temas de la guía. Nada de temas ya usados.
+2. kind: compilation, y en stories EXACTAMENTE 5 curiosidades de ese tema (title: 2-5 palabras; hook: el dato en una frase), de menos a más sorprendente. Todas reales y poco conocidas.
+3. title: el título de YouTube según la guía (dato concreto o pregunta, o «No sabías esto de…», con 1-2 emojis), menos de 60 caracteres.
+4. hook: la primera frase, dirigida al espectador y a su relación con el tema («¿Tienes gatos? Esto te va a sorprender»).
+5. source_hint: el artículo de Wikipedia del tema. fit: 8 o más solo si encaja de lleno con la guía.
+Todas con format: short. Varía los temas entre sí. Llama a guardar_ideas.` : `TAREA: piensa unas 30 candidatas y quédate solo con las 20 mejores, que cumplan TODO:
 1. Encajan con los temas del canal (fit 8 o más).
 2. Son hechos reales y documentados, con un artículo de Wikipedia que los respalde.
 3. Se entienden en una frase y provocan "¿en serio pasó esto?".
 4. El gancho (hook) es la frase con la que arrancaría el vídeo: el dato más fuerte primero.
 ${want === "compilation" ? "5. TODAS deben ser recopilatorios (kind: compilation): un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\") y cada historia con su dato sorprendente." : want === "single" ? "5. Todas deben ser de una sola historia (kind: single)." : "5. Mezcla: unas 2 de cada 3 de una sola historia y 1 de cada 3 recopilatorios con un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\")."}
-Varía épocas, países y tipos de historia. Llama a guardar_ideas.`;
+Varía épocas, países y tipos de historia. Llama a guardar_ideas.`}`;
   // Pedidas desde la web (now): al momento. Las automáticas de cada mañana, por lotes (la mitad de precio, pueden tardar)
   const r = await claudeTool(MODEL_FAST, system, user, IDEAS_TOOL, 20000, job.payload?.now ? undefined : { job, tag: "ideas" });
   // A veces el modelo entrega la lista como texto JSON en vez de como array
@@ -1609,7 +1619,7 @@ Varía épocas, países y tipos de historia. Llama a guardar_ideas.`;
       channel_id: ch.id, format: i.format, title: clean(i.title), angle: clean(i.angle), reason: clean(i.reason), hook: clean(i.hook),
       kind: i.kind === "compilation" && Array.isArray(i.stories) && i.stories.length >= 2 ? "compilation" : "single",
       // deno-lint-ignore no-explicit-any
-      stories: i.kind === "compilation" && Array.isArray(i.stories) ? i.stories.slice(0, i.format === "short" ? 3 : 6).map((x: any) => ({ title: clean(x.title), hook: clean(x.hook) })) : [],
+      stories: i.kind === "compilation" && Array.isArray(i.stories) ? i.stories.slice(0, list5 ? 5 : i.format === "short" ? 3 : 6).map((x: any) => ({ title: clean(x.title), hook: clean(x.hook) })) : [],
       source_hint: clean(i.source_hint) || null, fit: Number(i.fit ?? 0), focus: focus || null,
     }));
   // deno-lint-ignore no-explicit-any

@@ -2145,7 +2145,8 @@ async function titleOverlayOf(v: any, ch: any, sh: boolean) {
     // Sin tema no se pone un título a medias («CURIOSIDADES DE»)
     if (String(rs.title_template).includes("{tema}") && !tema.trim()) { await sb.from("activity").insert({ video_id: v.id, channel_id: ch.id, message: `Título fijo sin tema en «${v.title}»: se monta sin título`, level: "warn" }); return {}; }
     text = String(rs.title_template).replace("{tema}", tema).replace(/\s+/g, " ").trim().toUpperCase();
-    await sb.from("videos").update({ script: { ...(v.script ?? {}), overlay: text } }).eq("id", v.id);
+    v.script = { ...(v.script ?? {}), overlay: text };
+    await sb.from("videos").update({ script: v.script }).eq("id", v.id);
   }
   const acc = String(rs.title_accent ?? "").toUpperCase().trim();
   const words = text.split(" ");

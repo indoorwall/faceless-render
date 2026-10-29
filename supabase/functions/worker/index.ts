@@ -192,6 +192,8 @@ async function runStep(job: Job) {
     case "audience": return stepAudience(job);
     case "top_videos": return stepTopVideos(job);
     case "voice_search": return stepVoiceSearch(job);
+    case "packaging_study": return stepPackagingStudy(job);
+    case "repackage": return stepRepackage(job);
     case "voice_pick": return stepVoicePick(job);
     case "research": return stepResearch(job);
     case "advise": return stepAdvise(job);
@@ -628,6 +630,10 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   // Descripción y etiquetas con Haiku (casi gratis) en vez de con Opus
   if (!s.description) {
     try { Object.assign(s, await seoText(ch, s)); } catch (_) { s.description = s.description ?? ""; s.tags = s.tags ?? []; }
+  }
+  // Título y descripción con el estudio real del nicho (si el canal lo tiene)
+  if (ch.packaging?.title_rules) {
+    try { const p = await packageVideo(ch, s, v); if (p) Object.assign(s, p); } catch (e) { await log(job, `Título con el estudio no disponible: ${(e as Error).message}`, "warn"); }
   }
   if (!s.thumbnail_text && (s.thumbnail_texts ?? []).length) s.thumbnail_text = s.thumbnail_texts[0];
   const score = Number(s.self_score ?? 0) || null;
@@ -2855,6 +2861,97 @@ async function stepVoicePick(job: Job) {
   await sb.from("channels").update({ voice_id: id, voice_provider: "elevenlabs" }).eq("id", job.channel_id);
   await log(job, `Voz del canal cambiada a «${p.name ?? id}»`);
 }
+// ======================================================================================================
+// Títulos y descripciones con datos reales de YouTube
+// packaging_study: busca los Shorts/vídeos del nicho con más visitas (últimos 4 meses), y Sonnet saca las fórmulas que funcionan → channels.packaging
+// packageVideo: con ese estudio escribe 10 títulos candidatos, elige el mejor y redacta la descripción (se usa al escribir el guion y en «repackage»)
+// ======================================================================================================
+const PACK_STUDY_TOOL = { name: "estudio_titulos", description: "Estudio de títulos y descripciones que funcionan", input_schema: { type: "object", required: ["title_rules", "title_formulas", "description_rules", "description_template", "hashtags", "avoid", "best_examples", "summary"], properties: {
+  summary: { type: "string", description: "3-4 frases en español con las conclusiones clave" },
+  title_rules: { type: "array", items: { type: "string" }, description: "Reglas concretas y medibles (longitud, mayúsculas, emojis, pregunta o afirmación, números, palabras que enganchan)" },
+  title_formulas: { type: "array", items: { type: "object", required: ["formula", "example"], properties: { formula: { type: "string" }, example: { type: "string", description: "Ejemplo REAL de la muestra" }, views: { type: "number" } } } },
+  description_rules: { type: "array", items: { type: "string" } },
+  description_template: { type: "string", description: "Plantilla de descripción con huecos entre <>" },
+  hashtags: { type: "array", items: { type: "string" }, description: "Hashtags que más usan los vídeos con éxito, sin #" },
+  avoid: { type: "array", items: { type: "string" }, description: "Lo que usan los vídeos que NO funcionan o que suena a spam" },
+  best_examples: { type: "array", items: { type: "object", required: ["title", "why"], properties: { title: { type: "string" }, views: { type: "number" }, why: { type: "string" } } } },
+} } };
+async function stepPackagingStudy(job: Job) {
+  if (!KEYS["YOUTUBE_API_KEY"]) throw new UserError("Falta YOUTUBE_API_KEY en Ajustes");
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch) return;
+  const lang = ch.language ?? "es";
+  const short = (ch.formats?.length ? ch.formats : [ch.format]).includes("short");
+  // Búsquedas que haría el público (Haiku)
+  const q = await claudeTool(MODEL_CHEAP, "Propones búsquedas de YouTube. Respondes con la herramienta.", `Canal: ${ch.name}\nNicho: ${ch.niche}\nTemas: ${String(ch.topics ?? "").slice(0, 600)}\nIdioma: ${LANG_NAME[lang] ?? lang}\n\nDame 7 búsquedas cortas (1-4 palabras), variadas, que harían los espectadores de este tipo de vídeos en YouTube, en su idioma (p. ej. «curiosidades», «datos curiosos», «sabías que», «curiosidades de animales»).`, { name: "busquedas", description: "Búsquedas", input_schema: { type: "object", required: ["queries"], properties: { queries: { type: "array", items: { type: "string" }, maxItems: 8 } } } }, 600);
+  const queries: string[] = (q.input?.queries ?? []).map((x: unknown) => String(x)).slice(0, 7);
+  const after = new Date(Date.now() - 120 * 864e5).toISOString();
+  const ids = new Set<string>();
+  for (const query of queries) {
+    try {
+      const r = await yt("search", { part: "id", q: query, type: "video", order: "viewCount", publishedAfter: after, maxResults: "30", relevanceLanguage: lang, videoDuration: short ? "short" : "medium" });
+      // deno-lint-ignore no-explicit-any
+      for (const i of r.items ?? []) if ((i as any).id?.videoId) ids.add((i as any).id.videoId);
+    } catch (_) { /* una búsqueda fallida no para el estudio */ }
+  }
+  // deno-lint-ignore no-explicit-any
+  const vids: any[] = [];
+  const all = [...ids];
+  for (let i = 0; i < all.length; i += 50) {
+    const v = await yt("videos", { part: "snippet,statistics", id: all.slice(i, i + 50).join(",") });
+    vids.push(...(v.items ?? []));
+  }
+  // deno-lint-ignore no-explicit-any
+  const good = vids.filter((i: any) => langOk(i.snippet, lang)).map((i: any) => ({ id: i.id, title: String(i.snippet.title), channel: i.snippet.channelTitle, views: Number(i.statistics?.viewCount ?? 0), likes: Number(i.statistics?.likeCount ?? 0), desc: String(i.snippet.description ?? "").slice(0, 400), tags: (i.snippet.tags ?? []).slice(0, 8) }))
+    .sort((a, b) => b.views - a.views);
+  if (good.length < 10) throw new UserError(`Pocos vídeos para estudiar (${good.length}). Revisa el nicho del canal.`);
+  const top = good.slice(0, 45), low = good.slice(-15);
+  const fmt = (x: typeof good[number]) => `- ${x.views.toLocaleString("es-ES")} visitas · «${x.title}» · descripción: ${x.desc.replace(/\s+/g, " ").slice(0, 220) || "(vacía)"}`;
+  const r = await claudeTool(MODEL_FAST, `Eres experto en empaquetado de YouTube (títulos y descripciones) para ${short ? "Shorts" : "vídeos"} en ${LANG_NAME[lang] ?? lang}. Analizas datos reales y sacas reglas concretas, no opiniones genéricas.`,
+    `Canal: ${ch.name} (${ch.niche}).\n\nLOS ${top.length} VÍDEOS CON MÁS VISITAS de los últimos 4 meses en las búsquedas del nicho:\n${top.map(fmt).join("\n")}\n\nLOS MENOS VISTOS de la misma muestra (para contrastar):\n${low.map(fmt).join("\n")}\n\nSaca qué tienen en común los títulos y descripciones que más funcionan frente a los que menos, y entrégalo con la herramienta. Los ejemplos tienen que ser títulos reales de la lista.`,
+    PACK_STUDY_TOOL, 6000);
+  const packaging = { at: new Date().toISOString(), queries, sample: top.slice(0, 30).map((x) => ({ title: x.title, views: x.views, channel: x.channel, url: `https://youtu.be/${x.id}` })), ...r.input };
+  await sb.from("channels").update({ packaging }).eq("id", ch.id);
+  await log(job, `Estudio de títulos de ${ch.name}: ${good.length} vídeos analizados (el más visto: «${top[0].title}», ${top[0].views.toLocaleString("es-ES")} visitas)`);
+}
+const PACK_TOOL = { name: "empaquetado", description: "Título y descripción finales", input_schema: { type: "object", required: ["candidates", "title", "description", "tags"], properties: {
+  candidates: { type: "array", items: { type: "object", required: ["title", "score"], properties: { title: { type: "string" }, score: { type: "number", description: "0-10: probabilidad de clic según el estudio" } } }, description: "10 títulos candidatos distintos" },
+  title: { type: "string", description: "El mejor título" },
+  description: { type: "string", description: "Descripción final" },
+  tags: { type: "array", items: { type: "string" }, maxItems: 15 },
+} } };
+// deno-lint-ignore no-explicit-any
+async function packageVideo(ch: any, s: any, v: any) {
+  const P = ch.packaging;
+  if (!P?.title_rules) return null;
+  // deno-lint-ignore no-explicit-any
+  const narr = (s.scenes ?? []).map((x: any) => x.narration ?? (x.shots ?? []).map((y: any) => y.line).join(" ")).join(" ").replace(/\[[^\]]*\]/g, "").slice(0, 3000);
+  // deno-lint-ignore no-explicit-any
+  const src = (s.sources ?? []).map((x: any) => `${x.title}: ${x.url}`).join("\n");
+  const guideTitles = String(ch.style_guide ?? "").split("\n").filter((l) => /t[íi]tulo|emoji|hashtag|descripci/i.test(l)).slice(0, 14).join("\n");
+  const { data: prev } = await sb.from("videos").select("title").eq("channel_id", ch.id).not("title", "is", null).neq("id", v.id).order("created_at", { ascending: false }).limit(12);
+  const r = await claudeTool(MODEL_FAST, `Eres el mejor especialista en títulos y descripciones de YouTube ${ch.format === "short" ? "Shorts" : ""} en ${LANG_NAME[ch.language ?? "es"] ?? ch.language}. Te basas en el estudio real del nicho y en la guía del canal (la guía manda si hay conflicto). Nada de clickbait falso: el título promete lo que el vídeo cuenta. No inventas datos que no estén en el guion.`,
+    `ESTUDIO REAL DEL NICHO (${new Date(P.at).toLocaleDateString("es-ES")}):\n${P.summary}\nReglas de título:\n- ${(P.title_rules ?? []).join("\n- ")}\nFórmulas que funcionan:\n${(P.title_formulas ?? []).map((f: { formula: string; example: string; views?: number }) => `- ${f.formula} (ej.: «${f.example}»${f.views ? `, ${f.views.toLocaleString("es-ES")} visitas` : ""})`).join("\n")}\nEvitar:\n- ${(P.avoid ?? []).join("\n- ")}\nTítulos reales con más visitas:\n${(P.sample ?? []).slice(0, 15).map((x: { title: string; views: number }) => `- «${x.title}» (${x.views.toLocaleString("es-ES")})`).join("\n")}\n\nReglas de descripción:\n- ${(P.description_rules ?? []).join("\n- ")}\nPlantilla: ${P.description_template}\nHashtags frecuentes: ${(P.hashtags ?? []).map((h: string) => `#${h}`).join(" ")}\n\n${guideTitles ? `GUÍA DEL CANAL (títulos, emojis, hashtags):\n${guideTitles}\n\n` : ""}Títulos recientes del canal (no repitas su estructura más de una vez seguida):\n${(prev ?? []).map((x) => `- ${x.title}`).join("\n") || "-"}\n\nVÍDEO:\nTema: ${v.idea_title ?? s.title}\n${(v.idea_stories ?? []).length ? `Curiosidades: ${(v.idea_stories ?? []).map((x: { title: string }) => x.title).join(" · ")}\n` : ""}Guion: ${narr}\nFuentes:\n${src || "-"}\n\nEscribe 10 títulos candidatos distintos (aplica las fórmulas, varía la estructura), puntúalos, elige el mejor y redacta la descripción siguiendo la plantilla (incluye las fuentes al final si las hay). Etiquetas: 8-15.`,
+    PACK_TOOL, 3000);
+  const t = String(r.input?.title ?? "").trim();
+  if (!t) return null;
+  return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
+}
+// Rehacer título y descripción de un vídeo ya escrito o montado
+async function stepRepackage(job: Job) {
+  const v = await getVideo(job.video_id);
+  if (!v.script) throw new UserError("El vídeo aún no tiene guion");
+  if (!v.channel.packaging?.title_rules) {
+    await enqueue("packaging_study", { channel_id: v.channel_id });
+    await enqueue("repackage", { video_id: v.id, delaySec: 120 });
+    return;
+  }
+  const p = await packageVideo(v.channel, v.script, v);
+  if (!p) throw new Error("No salió el título");
+  const script = { ...v.script, title: p.title, description: p.description, tags: p.tags, title_candidates: p.title_candidates };
+  await sb.from("videos").update({ script, title: p.title, description: p.description, tags: p.tags }).eq("id", v.id);
+  await log(job, `Título nuevo: «${p.title}»`);
+}
 // ---------- Paso: estudio global semanal con búsqueda web (por idioma) ----------
 const RESEARCH_TOOL = {
   name: "estudio_calendario", description: "Entrega el estudio de frecuencia y horarios de publicación",
@@ -2889,7 +2986,10 @@ async function stepResearch(job: Job) {
     await sb.from("schedule_research").upsert({ lang, data: { ...r.input, at: new Date().toISOString() }, updated_at: new Date().toISOString() });
     done++;
   }
-  for (const [i, c] of (chs ?? []).entries()) await enqueue("advise", { channel_id: c.id, delaySec: 20 + i * 5 });
+  for (const [i, c] of (chs ?? []).entries()) {
+    await enqueue("advise", { channel_id: c.id, delaySec: 20 + i * 5 });
+    if (c.production_type !== "challenges") await enqueue("packaging_study", { channel_id: c.id, delaySec: 60 + i * 30 });
+  }
   await log(job, done ? `Estudio global de horarios actualizado (${done} idioma${done > 1 ? "s" : ""})` : "Estudio global de horarios: al día");
 }
 

@@ -842,7 +842,7 @@ function renderSheet(first){
         ${c.sfx_enabled!==false?`<div class="scene-meta"><span class="muted" style="font-size:12.5px;align-self:center">Efecto de sonido</span><input type="text" data-i="${i}" data-k="sfx" value="${esc(sc.sfx||"")}" placeholder="Sin efecto"></div>`:""}</div></div>`).join("")}</div>
       ${(v.sources||[]).length?`<div><div class="label" style="margin-bottom:6px">Fuentes consultadas</div><div class="ev">${v.sources.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc((s.title||s.url).slice(0,60))}</a>`).join("")}</div></div>`:""}
       <label class="f">¿Algo que cambiar? <small>Escribe el feedback y pulsa «Rehacer guion»</small><textarea id="s-fb" rows="2">${esc("")}</textarea></label>`;
-    foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn" onclick="redoScript()">Rehacer guion</button><button class="btn pri" onclick="approveScript()">Aprobar y producir</button>`;
+    foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="redoScript()">Rehacer guion</button><button class="btn pri" onclick="approveScript()">Aprobar y producir</button>`;
   } else if(v.status==="final_review"){
     const pa = v.publish_at ? new Date(new Date(v.publish_at).getTime()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16) : "";
     body=`<video src="${esc(v.video_url)}" controls playsinline preload="metadata" ${v.thumbnail_url?`poster="${esc(v.thumbnail_url)}"`:""}></video>
@@ -859,7 +859,7 @@ function renderSheet(first){
       <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span> Descárgalo, súbelo a mano y márcalo como publicado.`}</p>
       ${c.youtube_connected?"":`<label class="f">Enlace del vídeo en YouTube <small>Opcional: con él la IA aprende de sus visitas</small><input type="url" id="f-yt" placeholder="https://youtu.be/…"></label>`}
       <label class="f">Si no te convence <small>Describe qué cambiar y se reescribe el guion</small><textarea id="f-fb" rows="2"></textarea></label>`;
-    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
+    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
   } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
     body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
       <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
@@ -1082,6 +1082,19 @@ function learnHtml(c,L){
 
 // ---------- Ficha del canal: automatización, calendario y presupuesto ----------
 const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final."], semi:["Semiautomático","El estudio aprueba solo las ideas y los guiones que pasan los controles de calidad y de políticas. Tú solo ves el vídeo final."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
+// ---------- Títulos y descripciones con el estudio real de YouTube ----------
+async function repackage(id){
+  const before=S.videos.find(x=>x.id===id)?.title;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"repackage",video_id:id}); if(error) throw error; await kick(); }, "Escribiendo 10 títulos con el estudio de YouTube y eligiendo el mejor…");
+  for(let i=0;i<25;i++){ await new Promise(r=>setTimeout(r,3000)); const {data}=await sb.from("videos").select("title,description").eq("id",id).single(); if(data&&data.title!==before){ toast(`Título nuevo: ${data.title}`); await load(); if(S.open?.v?.id===id) openVideo(id); return; } }
+  toast("Tarda más de lo normal (si el canal no tenía estudio, se está haciendo): vuelve a abrir el vídeo en un par de minutos.");
+}
+async function packStudy(id){ await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"packaging_study",channel_id:id}); if(error) throw error; await kick(); }, "Estudiando los títulos que más funcionan en YouTube (1-2 min)…"); }
+function packagingCard(c){
+  const P=c.packaging;
+  return `<div class="card" style="gap:8px"><div class="spread"><div><h3 style="margin:0">Títulos y descripciones</h3><div class="why">${P?`Estudio de ${P.sample?.length||0} vídeos que más funcionan en YouTube · ${ago(P.at)} · se actualiza cada lunes`:"Aún sin estudio de los títulos que más funcionan en YouTube."}</div></div><button class="btn sm" onclick="packStudy('${c.id}')">${P?"Actualizar estudio":"Hacer estudio"}</button></div>
+    ${P?`<div class="why">${esc(P.summary||"")}</div><details><summary class="why" style="cursor:pointer">Fórmulas y ejemplos reales</summary><ul class="why" style="margin:6px 0 0;padding-left:18px">${(P.title_formulas||[]).map(f=>`<li><b>${esc(f.formula)}</b> — «${esc(f.example)}»${f.views?` (${Number(f.views).toLocaleString("es-ES")})`:""}</li>`).join("")}</ul><div class="why" style="margin-top:6px">Más vistos: ${(P.sample||[]).slice(0,8).map(x=>`<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a> (${Number(x.views).toLocaleString("es-ES")})`).join(" · ")}</div></details>`:""}</div>`;
+}
 // ---------- Elegir la voz del canal de oído (biblioteca de ElevenLabs) ----------
 function voicePicker(c){
   const o=c.voice_options, vs=o?.voices||[];
@@ -1205,6 +1218,7 @@ function renderChannelSheet(first){
     <label class="f full">Estilo visual <small>En inglés funciona mejor</small><textarea id="c-style" rows="2" placeholder="cinematic documentary, muted colors, 35mm film grain">${esc(c.style_prompt)}</textarea></label>
     <label class="f">Voz de ElevenLabs <small>Voice ID de tu librería</small><input type="text" id="c-voice" value="${esc(c.voice_id)}" class="mono"></label>
     ${c.id?`<div class="full" id="voice-picker">${voicePicker(c)}</div>`:""}
+    ${c.id&&c.production_type!=="challenges"?`<div class="full">${packagingCard(c)}</div>`:""}
     <label class="f">Ideas por tanda<input type="number" id="c-ipr" min="1" max="10" value="${esc(c.ideas_per_run)}"></label>
     <label class="f" style="display:none">Exigencia del director <small>Interviene si el borrador saca menos</small><select id="c-dir">${[[7,"7/10 · interviene poco"],[8,"8/10 · equilibrado"],[9,"9/10 · casi siempre"],[11,"Siempre"]].map(([k,l])=>`<option value="${k}" ${Number(c.director_threshold??8)===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f full">Canales de referencia <small>IDs de canal (empiezan por UC), separados por comas</small><input type="text" id="c-refs" value="${esc((c.reference_channels||[]).join(", "))}" class="mono"></label>

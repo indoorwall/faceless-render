@@ -2485,10 +2485,17 @@ async function stepMoney(job: Job) {
   // deno-lint-ignore no-explicit-any
   const rows = async (params: Record<string, string>): Promise<any[]> => (await ytGet(token, YTA, { ids: "channel==MINE", ...params })).rows ?? [];
   try {
-    for (const r of await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedMinutesWatched,views", dimensions: "creatorContentType" })) {
-      if (r[0] === "VIDEO_ON_DEMAND" || r[0] === "LIVE_STREAM") out.long_hours_365 = Number(out.long_hours_365 ?? 0) + Math.round(Number(r[1]) / 60);
+    const byType = await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedMinutesWatched,views", dimensions: "creatorContentType" });
+    out.ypp_types = byType.map((r) => r[0]);
+    out.long_hours_365 = 0;
+    for (const r of byType) if (!/SHORT/i.test(String(r[0]))) out.long_hours_365 = Number(out.long_hours_365) + Math.round(Number(r[1]) / 60);
+    out.shorts_views_90 = 0;
+    for (const r of await rows({ startDate: day(90), endDate: day(1), metrics: "views", dimensions: "creatorContentType" })) if (/SHORT/i.test(String(r[0]))) out.shorts_views_90 = Number(r[1]);
+    // Plan B: si YouTube no desglosa por tipo, se usan los totales con los vídeos que conocemos
+    if (!byType.length) {
+      const tot = await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedMinutesWatched,views" });
+      out.long_hours_365 = Math.round(Number(tot[0]?.[0] ?? 0) / 60); out.ypp_approx = true;
     }
-    for (const r of await rows({ startDate: day(90), endDate: day(1), metrics: "views", dimensions: "creatorContentType" })) if (r[0] === "SHORTS") out.shorts_views_90 = Number(r[1]);
   } catch (e) { out.ypp_error = (e as Error).message.slice(0, 160); }
   // Ingresos (solo si el canal está monetizado y se dio el permiso de ingresos)
   try {

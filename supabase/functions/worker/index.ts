@@ -597,7 +597,7 @@ async function stepScript(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel;
   const short = ch.format === "short";
-  const words = short ? 140 : Math.round(ch.target_minutes * 150);
+  const words = short ? 125 : Math.round(ch.target_minutes * 150);
   const scenes = short ? "4-7" : `${Math.round(ch.target_minutes * 3)}-${Math.round(ch.target_minutes * 4)}`;
   const allowed = ch.image_source === "ai" ? `"ai" y "reframe"` : ch.image_source === "stock" ? `"archive", "stock_photo", "stock_video" y "reframe"` : `"ai", "archive", "stock_photo", "stock_video" y "reframe"`;
   const visualRule = `PLANOS: cada escena es un bloque de locución y se divide en planos (shots). Cada plano es un fragmento literal de la narración (line) con su visual; la unión de las line de una escena es su narración completa, sin cambiar ni una palabra. Duración de cada plano: ${short ? "1,5-3,5 s (4-9 palabras)" : "3-6 s (8-15 palabras)"}. Los cambios de plano acompañan lo que se cuenta, nunca cortes sin sentido. Tipos de visual permitidos en este canal: ${allowed}.
@@ -1066,6 +1066,20 @@ async function stepVisuals(job: Job) {
   // deno-lint-ignore no-explicit-any
   let aiUsed = (allScenes ?? []).flatMap((sc: any) => sc.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url).length;
   let aiBudget = fluxOn ? 5 : 2; let images = 0; let fluxN = 0;
+  // Planos sin búsqueda (el guionista a veces no la escribe): Haiku propone una búsqueda en inglés para cada uno, una sola vez por vídeo
+  // deno-lint-ignore no-explicit-any
+  const noQuery: any[] = [];
+  for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) if (!sh.media_url && sh.visual_type !== "reframe" && !sh.stock_query && !sh.archive_query && !sh.visual_prompt) noQuery.push(sh);
+  if (noQuery.length) {
+    try {
+      const r = await claudeTool(MODEL_CHEAP, "Propones búsquedas de imágenes reales para cada frase de un vídeo. Respondes con la herramienta.", `Vídeo: «${v.title ?? v.idea_title}»\nPara cada frase, una búsqueda en INGLÉS de 2-4 palabras para encontrar una foto o vídeo REAL que la ilustre en un banco de imágenes (sujeto concreto y visible; p. ej. «dog sniffing grass», «rabbit ears close up»). Si la frase es abstracta, usa el sujeto principal del vídeo.\n${noQuery.map((x, i) => `${i}. ${String(x.line).slice(0, 160)}`).join("\n")}`, { name: "busquedas", description: "Una búsqueda por frase", input_schema: { type: "object", required: ["items"], properties: { items: { type: "array", items: { type: "object", required: ["i", "q"], properties: { i: { type: "integer" }, q: { type: "string" } } } } } } }, 2000);
+      for (const it of r.input?.items ?? []) if (noQuery[it.i] && it.q) noQuery[it.i].stock_query = String(it.q).slice(0, 60);
+    } catch (_) { /* sin búsquedas: se usa el tema del vídeo */ }
+  }
+  // Nunca la misma imagen en más de 2 planos seguidos (antes, sin resultado se repetía la anterior y quedaba clavada)
+  const reuse = new Map<string, number>();
+  for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) if (sh.media_url) reuse.set(sh.media_url, (reuse.get(sh.media_url) ?? 0) + 1);
+  const canReuse = (u?: string) => !!u && (reuse.get(u) ?? 0) < 2;
   // deno-lint-ignore no-explicit-any
   let prev: any = null;
   for (const sc of allScenes ?? []) {
@@ -1076,11 +1090,11 @@ async function stepVisuals(job: Job) {
     for (const sh of shots) {
       if (sh.media_url) { prev = sh; continue; }
       let type = sh.visual_type as string;
-      if (type === "reframe" && !prev) type = "ai";
+      if (type === "reframe" && (!prev || !canReuse(prev.media_url))) type = sh.stock_query || sh.archive_query ? "stock_photo" : "ai";
       if (ch.image_source === "ai" && !["ai", "reframe"].includes(type)) type = "ai";
       if (ch.image_source === "stock" && type === "ai") type = "stock_photo";
       if (type === "ai" && !KEYS["OPENAI_API_KEY"] && !fluxOn) type = "stock_photo";
-      if (type === "reframe") { Object.assign(sh, { media_url: prev.media_url, media_kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: sh.reframe ?? { x: 0.5, y: 0.4, zoom: 1.5 } }); prev = sh; continue; }
+      if (type === "reframe") { Object.assign(sh, { media_url: prev.media_url, media_kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: sh.reframe ?? { x: 0.5, y: 0.4, zoom: 1.5 } }); reuse.set(prev.media_url, (reuse.get(prev.media_url) ?? 0) + 1); prev = sh; continue; }
       // deno-lint-ignore no-explicit-any
       let media: any = null;
       if (type === "archive") {
@@ -1091,6 +1105,10 @@ async function stepVisuals(job: Job) {
         media = await pexels(type === "stock_video" ? "video" : "photo", sh.stock_query || sh.visual_prompt?.split(",")[0] || v.idea_title, short, used);
         if (!media && type === "stock_video") media = await pexels("photo", sh.stock_query || v.idea_title, short, used);
       }
+      // Sin Pexels (o sin resultado): foto real de Wikimedia Commons con la misma búsqueda
+      if (!media && (type === "stock_photo" || type === "stock_video") && sh.stock_query) {
+        try { media = await commons(sh.stock_query, used); } catch (_) { /* sigue */ }
+      }
       // Con el tope de IA alcanzado: foto de archivo, stock o acercamiento al plano anterior
       if (!media && aiUsed >= aiCap) {
         const q = sh.archive_query || String(sh.visual_prompt ?? "").split(/[,.]/)[0].split(/\s+/).slice(0, 6).join(" ");
@@ -1098,7 +1116,9 @@ async function stepVisuals(job: Job) {
           try { media = await commons(q, used); } catch (_) { /* sigue */ }
           if (!media && type !== "archive" && KEYS["PEXELS_API_KEY"]) { try { media = await pexels("photo", sh.stock_query || q, short, used); } catch (_) { /* sigue */ } }
         }
-        if (!media && prev?.media_url) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.35 + Math.random() * 0.3, y: 0.35, zoom: 1.4 + Math.random() * 0.3 } };
+        if (!media && canReuse(prev?.media_url)) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.35 + Math.random() * 0.3, y: 0.35, zoom: 1.4 + Math.random() * 0.3 } };
+        // Si no queda nada que reutilizar, se permite una imagen IA más aunque se pase del tope (mejor que una imagen clavada)
+        if (!media) aiBudget = Math.max(aiBudget, 1);
       }
       if (!media && ch.image_source !== "stock" && (KEYS["OPENAI_API_KEY"] || fluxOn)) {
         if (aiBudget <= 0) break;
@@ -1116,13 +1136,13 @@ async function stepVisuals(job: Job) {
         } else {
           // OpenAI no quiere generarla: foto de archivo del tema o, si no hay, un acercamiento al plano anterior
           try { media = await commons(sh.archive_query || v.idea_title, used); } catch (_) { /* sigue */ }
-          if (!media && prev?.media_url) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.5, y: 0.4, zoom: 1.4 } };
+          if (!media && canReuse(prev?.media_url)) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.5, y: 0.4, zoom: 1.4 } };
           await log(job, `${viaFlux ? "FLUX" : "OpenAI"} rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
         }
       }
       if (!media) throw new UserError(`No se encontró imagen para el plano «${String(sh.line).slice(0, 60)}». Revisa las claves de Pexels u OpenAI.`);
       Object.assign(sh, { media_url: media.url, media_kind: media.kind, fit: media.fit ?? "cover", reframe: media.reframe ?? null, credit: media.credit ?? null, gen: media.gen ?? null, provider: media.provider ?? null });
-      used.add(media.url); prev = sh;
+      used.add(media.url); reuse.set(media.url, (reuse.get(media.url) ?? 0) + 1); prev = sh;
     }
     const done = shots.every((x) => x.media_url);
     await sb.from("scenes").update({ shots, ...(done ? { media_url: shots[0].media_url, media_kind: shots[0].media_kind } : {}) }).eq("id", sc.id);
@@ -2174,14 +2194,14 @@ async function chaptersOf(v: any, ch: any, scenes: any[]) {
   const n = scenes.length;
   // deno-lint-ignore no-explicit-any
   let chapters: any[] = [];
-  if (stories.length >= 2 && (n === stories.length || n === stories.length + 1)) {
-    const off = n - stories.length;
-    chapters = stories.map((st, i) => ({ scene: i + off, n: i + 1, of: stories.length, title: String(st.title ?? "").slice(0, 40), after_question: i === 0 && off === 0 }));
-  } else {
+  void n;
+  {
+    // Siempre por el contenido: el guionista puede contar las curiosidades en otro orden que la idea
     try {
-      const r = await claudeTool(MODEL_CHEAP, "Divides el guion de un Short de curiosidades en sus curiosidades. Respondes con la herramienta.", `Escenas del guion:\n${scenes.map((s, i) => `${i + 1}. ${String(s.narration ?? "").slice(0, 400)}`).join("\n")}\n\nIndica en qué escena empieza cada curiosidad (normalmente 5) y dale un título corto y llamativo (2-5 palabras). El gancho inicial no es una curiosidad.`, CHAP_TOOL, 1500);
+      const r = await claudeTool(MODEL_CHEAP, "Divides el guion de un Short de curiosidades en sus curiosidades. Respondes con la herramienta.", `Escenas del guion:\n${scenes.map((s, i) => `${i + 1}. ${String(s.narration ?? "").slice(0, 400)}`).join("\n")}\n\n${stories.length ? `Curiosidades previstas (pueden estar en otro orden en el guion): ${stories.map((x) => x.title).join(" · ")}\n\n` : ""}Indica en qué escena empieza cada curiosidad, EN EL ORDEN EN QUE SE CUENTAN, y dale un título corto y llamativo (2-5 palabras) que corresponda exactamente a lo que dice esa escena. El gancho inicial no es una curiosidad.`, CHAP_TOOL, 1500);
       // deno-lint-ignore no-explicit-any
       const raw: any[] = (r.input?.chapters ?? []).filter((c: any) => Number(c.scene) >= 1 && Number(c.scene) <= n);
+      raw.sort((a, b) => Number(a.scene) - Number(b.scene));
       chapters = raw.map((c, i) => ({ scene: Number(c.scene) - 1, n: i + 1, of: raw.length, title: String(c.title ?? "").slice(0, 40), after_question: Number(c.scene) === 1 }));
     } catch (_) { chapters = []; }
   }

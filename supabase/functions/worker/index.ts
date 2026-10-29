@@ -190,6 +190,7 @@ async function runStep(job: Job) {
     case "planner": return stepPlanner(job);
     case "money": return stepMoney(job);
     case "audience": return stepAudience(job);
+    case "top_videos": return stepTopVideos(job);
     case "research": return stepResearch(job);
     case "advise": return stepAdvise(job);
     case "dub": return stepDub(job);
@@ -2745,6 +2746,31 @@ async function stepAudience(job: Job) {
   await enqueue("advise", { channel_id: chId, delaySec: 30 });
 }
 
+// ---------- Paso: los vídeos más vistos del canal en YouTube (también los subidos a mano) → channels.yt_top ----------
+async function stepTopVideos(job: Job) {
+  const chId = job.channel_id; const token = await ytAccess(chId); if (!token) return;
+  const me = await ytGet(token, "https://www.googleapis.com/youtube/v3/channels", { part: "contentDetails", mine: "true" });
+  const up = me.items?.[0]?.contentDetails?.relatedPlaylists?.uploads; if (!up) return;
+  const ids: string[] = []; let page = "";
+  for (let i = 0; i < 10; i++) {
+    const d = await ytGet(token, "https://www.googleapis.com/youtube/v3/playlistItems", { part: "contentDetails", playlistId: up, maxResults: "50", ...(page ? { pageToken: page } : {}) });
+    // deno-lint-ignore no-explicit-any
+    ids.push(...(d.items ?? []).map((x: any) => x.contentDetails?.videoId).filter(Boolean)); page = d.nextPageToken; if (!page) break;
+  }
+  // deno-lint-ignore no-explicit-any
+  const rows: any[] = [];
+  for (let i = 0; i < ids.length; i += 50) {
+    const d = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "snippet,statistics,contentDetails", id: ids.slice(i, i + 50).join(",") });
+    for (const it of d.items ?? []) {
+      const m = String(it.contentDetails?.duration ?? "").match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+      const sec = m ? Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0) : 0;
+      rows.push({ id: it.id, title: it.snippet?.title, description: String(it.snippet?.description ?? "").slice(0, 300), published: it.snippet?.publishedAt, sec, views: Number(it.statistics?.viewCount ?? 0), likes: Number(it.statistics?.likeCount ?? 0), comments: Number(it.statistics?.commentCount ?? 0) });
+    }
+  }
+  rows.sort((a, b) => b.views - a.views);
+  await sb.from("channels").update({ yt_top: { at: new Date().toISOString(), total: rows.length, videos: rows.slice(0, 40) } }).eq("id", chId);
+  await log(job, `Vídeos del canal en YouTube: ${rows.length} (el más visto: «${rows[0]?.title ?? "-"}», ${rows[0]?.views ?? 0} visitas)`);
+}
 // ---------- Paso: estudio global semanal con búsqueda web (por idioma) ----------
 const RESEARCH_TOOL = {
   name: "estudio_calendario", description: "Entrega el estudio de frecuencia y horarios de publicación",

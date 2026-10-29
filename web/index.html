@@ -862,6 +862,7 @@ function renderSheet(first){
     foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button>${/^(render|render_check)/.test(v.error||"")?`<button class="btn" onclick="rerender('${v.id}')">Volver a montar</button>`:""}<button class="btn pri" onclick="retry('${v.id}')">Reintentar desde ese paso</button>`;
   } else {
     body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>${dlBlock(v)}`:""}
+      ${dubButtons(v)}${clipButton(v)}
       <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>${perfBlock(v)}`;
   }
   const cost=costOf(usage);
@@ -1024,6 +1025,20 @@ async function publish(){
   if(edits.length) sb.from("jobs").insert({step:"learn",channel_id:v.channel_id,video_id:v.id,payload:{source:"edicion",material:`Antes de publicar «${v.title}», el autor cambió los metadatos:\n${edits.join("\n")}`}}).then(()=>{});
   await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",v.id); if(error) throw error; await kick(); closeSheet(); }, now?"Publicando en YouTube…":at?"Programando en YouTube…":"Se programará en el siguiente hueco del calendario");
 }
+// Doblar un vídeo publicado a los canales espejo (otros idiomas)
+function dubButtons(v){
+  if(v.engine==="challenges"||v.derived) return "";
+  const mirrors=S.channels.filter(c=>c.mirror_of===v.channel_id); if(!mirrors.length) return "";
+  const done=new Set(S.videos.filter(x=>x.parent_id===v.id&&x.derived==="dub").map(x=>x.channel_id));
+  return `<div class="row">${mirrors.map(m=>done.has(m.id)?`<span class="chip st-ok">Doblado a ${esc(m.name)}</span>`:`<button class="btn sm" onclick="dubTo('${v.id}','${m.id}')">Doblar a ${esc(m.name)} (${esc(m.language)})</button>`).join("")}</div>`;
+}
+function clipButton(v){
+  if(v.derived||(v.format||ch(v.channel_id).format)!=="long"||!v.video_url) return "";
+  const n=S.videos.filter(x=>x.parent_id===v.id&&x.derived==="clip").length;
+  return n?`<span class="chip st-ok">${n} Short${n>1?"s":""} sacados de este vídeo</span>`:`<button class="btn sm" onclick="makeClips('${v.id}')">Sacar 2 Shorts de este vídeo</button>`;
+}
+async function makeClips(vid){ await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"clips",video_id:vid,channel_id:ch(S.open?.v?.channel_id)?.id||null,payload:{n:2}}); if(error) throw error; await kick(); await load(); }, "Sacando Shorts: se montan en vertical con la misma voz e imágenes"); }
+async function dubTo(vid,chId){ await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"dub",video_id:vid,channel_id:chId}); if(error) throw error; await kick(); await load(); }, "Doblando: se traduce el guion y se genera solo la voz nueva"); }
 // Motivo por el que el piloto automático dejó algo esperándote
 function autoBanner(v){
   const a=v.auto||{}, held=a.final?.held||a.script?.held, warn=[...(a.final?.warn||[]),...(a.script?.warn||[])];
@@ -1075,9 +1090,11 @@ function autoSection(c){
       <label class="f">Horas de los Shorts <small>Separadas por comas</small><input type="text" id="c-stimes" value="${esc((s.short_times||[]).join(", "))}"></label>
       <label class="f">Días de reserva <small>Vídeos listos por adelantado</small><input type="number" id="c-buf" min="1" max="14" value="${s.buffer_days}"></label>
       <label class="f">Shorts sacados de cada largo <small>0 = no sacar</small><input type="number" id="c-clips" min="0" max="5" value="${c.clips_per_long??0}"></label>
+      ${retos?"":`<label class="f">Versión en otro idioma de <small>Este canal dobla los vídeos de otro (pon aquí su idioma)</small><select id="c-mirror"><option value="">— Canal independiente —</option>${S.channels.filter(x=>x.id!==c.id&&x.production_type!=="challenges").map(x=>`<option value="${x.id}" ${c.mirror_of===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" id="c-mirror-auto" ${c.mirror_auto?"checked":""}> Doblar automáticamente cada vídeo que publique el canal original</label>`}
       ${retos?`<label class="f">Estilo de juego automático<select id="c-gstyle"><option value="world" ${(c.retos_config?.game_style||"world")==="world"?"selected":""}>Playable World</option><option value="classic" ${c.retos_config?.game_style==="classic"?"selected":""}>Clásico</option></select></label>`:`<label class="check"><input type="checkbox" id="c-aid" ${c.ai_disclosure_default!==false?"checked":""}> Declarar contenido sintético (IA) por defecto</label>`}
     </div>
-    <div class="why">Horario de Madrid. Los vídeos aprobados sin fecha se programan en el siguiente hueco libre. Se respeta la cuota diaria de YouTube (unas 6 subidas al día entre todos los canales).</div>
+    <div class="why">Horario de Madrid. Los vídeos aprobados sin fecha se programan en el siguiente hueco libre. Se respeta la cuota diaria de YouTube (unas 6 subidas al día entre todos los canales). ${retos?"Para un canal de retos en otro idioma, crea otro canal de retos con ese idioma: genera sus propios retos con los textos traducidos.":""}</div>
   </div>`;
 }
 function collectAuto(c){
@@ -1086,6 +1103,7 @@ function collectAuto(c){
   const row={ autopilot:$("#c-ap").value, quality_min:num("c-q",8), daily_budget_eur:$("#c-budget").value===""?null:Math.max(0,num("c-budget",0)), clips_per_long:Math.max(0,Math.min(5,num("c-clips",0))),
     schedule:{ long_per_week:num("c-lpw",2), shorts_per_week:num("c-spw",7), long_time:$("#c-ltime").value||"18:30", short_times:times.length?times:["13:00"], buffer_days:num("c-buf",5) } };
   if($("#c-aid")) row.ai_disclosure_default=$("#c-aid").checked;
+  if($("#c-mirror")){ row.mirror_of=$("#c-mirror").value||null; row.mirror_auto=!!row.mirror_of&&$("#c-mirror-auto").checked; }
   if($("#c-gstyle")) row.retos_config={...(c.retos_config||{}), game_style:$("#c-gstyle").value};
   return row;
 }
@@ -1101,7 +1119,7 @@ function renderChannelSheet(first){
     <label class="f full">Temas del canal <small>De aquí salen las ideas automáticas. Uno por línea o separados por comas</small><textarea id="c-topics" rows="3" placeholder="Sé concreto: épocas, tipos de historia y lo que NO quieres. Ej.: anécdotas reales de guerras de la Antigüedad a la Guerra Fría, espías, animales soldado… Nada de ciencia ni naturaleza.">${esc(c.topics)}</textarea></label>
     <label class="f">Formatos <small>Qué tipo de vídeos hace el canal</small><select id="c-format"><option value="short" ${chFormats(c).join()==="short"?"selected":""}>Solo Shorts (9:16)</option><option value="long" ${chFormats(c).join()==="long"?"selected":""}>Solo vídeos largos (16:9)</option><option value="both" ${chFormats(c).length>1?"selected":""}>Shorts y vídeos largos</option></select></label>
     <label class="f">Duración de los vídeos largos (min)<input type="number" id="c-min" min="1" max="30" step="0.5" value="${esc(longMin(c))}"></label>
-    <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["ca","Catalán"],["pt","Portugués"],["fr","Francés"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>
+    <label class="f">Idioma<select id="c-lang">${[["es","Español"],["en","Inglés"],["pt","Portugués"],["fr","Francés"],["de","Alemán"],["it","Italiano"],["ca","Catalán"]].map(([k,l])=>`<option value="${k}" ${c.language===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f">Imágenes<select id="c-img"><option value="mix" ${c.image_source==="mix"?"selected":""}>Mezcla (recomendado)</option><option value="ai" ${c.image_source==="ai"?"selected":""}>Solo IA</option><option value="stock" ${c.image_source==="stock"?"selected":""}>Solo stock real</option></select></label>
     <label class="f full">Audiencia<input type="text" id="c-aud" value="${esc(c.audience)}" placeholder="Ej.: adultos de 25-45 interesados en actualidad internacional"></label>
     <label class="f full">Tono y voz editorial <small>Tu sello: opiniones, estructura, muletillas, lo que nunca harías</small><textarea id="c-tone" rows="3">${esc(c.tone)}</textarea></label>

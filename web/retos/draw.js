@@ -4,6 +4,11 @@
 import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr, solvedAt } from "./engine.js";
 import { drawWorldScene, isWorldMechanic } from "./world-draw.js";
 import { drawPix } from "./pix.js";
+import { uiOf, tr } from "./i18n.js";
+// Idioma del vídeo que se está dibujando (textos fijos del juego y traducciones de cada reto)
+let U = uiOf(null), PRJ = null;
+const TR = (s) => tr(PRJ, s);
+function setLang(project) { PRJ = project; U = uiOf(project); }
 
 const LETTERS = ["A", "B", "C", "D"];
 let FONT = "Montserrat, 'Arial Black', sans-serif";
@@ -292,7 +297,7 @@ function options(ctx, c, L, P, st) {
     ctx.beginPath(); ctx.arc(lx, 0, lr, 0, 7); ctx.fillStyle = ok && rv > 0 ? P.ok : P.timer; ctx.fill(); text(ctx, LETTERS[i], lx, 2, lr * 1.15, ok && rv > 0 ? "#FFFFFF" : "#20242B");
     const cx = (lr * 2 + 18) / 2, aw = w - lr * 2 - 46, it = list[i];
     if (typeof it === "number") fitText(ctx, String(it), cx, 3, h * 0.52, aw, P.cardInk);
-    else if (typeof it === "string") fitText(ctx, it, cx, 3, h * 0.34, aw, P.cardInk);
+    else if (typeof it === "string") fitText(ctx, TR(it), cx, 3, h * 0.34, aw, P.cardInk);
     else if (Array.isArray(it)) figure(ctx, it, cx, 0, Math.min(aw, h) * 1.02, itemHex(c.data.color));
     else if (it && it.icon) item(ctx, it.icon, cx, 0, Math.min(aw, h) * 0.36, it.color, it.rot || 0);
     if (ok && rv > 0) { const br = 22 * clamp(rv * 2); ctx.fillStyle = P.ok; ctx.beginPath(); ctx.arc(w / 2 - 6, -h / 2 + 6, br, 0, 7); ctx.fill(); check(ctx, w / 2 - 6, -h / 2 + 6, br * 0.9, "#FFFFFF"); }
@@ -319,10 +324,10 @@ export function drawTimer(ctx, cx, cy, r, P0, k, secondsLeft, mode = "normal", s
 function hud(ctx, L, P, seg, c, t, tl, k) {
   const col = ROUND_COLOR(P, c.difficulty);
   ctx.save(); ctx.globalAlpha = k; ctx.translate(0, (1 - k) * -16);
-  const label = `RETO ${seg.index + 1}/${seg.total}`, fs = L.v ? 30 : 27;
+  const label = U.reto(seg.index + 1, seg.total), fs = L.v ? 30 : 27;
   ctx.font = `800 ${fs}px ${FONT}`; const w1 = ctx.measureText(label).width + 44, h = fs * 1.7;
   pill(ctx, P, L.hud.x, L.hud.y - h / 2, w1, h, P.card); text(ctx, label, L.hud.x + w1 / 2, L.hud.y + 2, fs, P.cardInk);
-  const d = `${DIFF_LABEL[c.difficulty].toUpperCase()} · ${c.points} ${c.points === 1 ? "PTO" : "PTOS"}`; ctx.font = `800 ${fs * 0.88}px ${FONT}`; const w2 = ctx.measureText(d).width + 40;
+  const d = `${U.diff[c.difficulty].toUpperCase()} · ${c.points} ${U.pts(c.points)}`; ctx.font = `800 ${fs * 0.88}px ${FONT}`; const w2 = ctx.measureText(d).width + 40;
   pill(ctx, P, L.hud.x + w1 + 12, L.hud.y - h / 2, w2, h, col, { flat: true }); text(ctx, d, L.hud.x + w1 + 12 + w2 / 2, L.hud.y + 2, fs * 0.88, lum(col) > 0.6 ? "#20242B" : "#FFFFFF");
   if (!L.v) { const pw = L.W - 112, pr = clamp(t / tl.duration); rrect(ctx, 56, L.H - 26, pw, 8, 4); ctx.fillStyle = alpha(P.dark ? "#FFFFFF" : "#20242B", 0.08); ctx.fill(); rrect(ctx, 56, L.H - 26, Math.max(8, pw * pr), 8, 4); ctx.fillStyle = P.timer; ctx.fill(); }
   ctx.restore();
@@ -338,19 +343,19 @@ function roundScreen(ctx, L, P, seg, t, cfg) {
   ctx.save(); rrect(ctx, x, y, cw, ch, 44 * P.R); ctx.clip(); ctx.fillStyle = col; ctx.fillRect(x, y, cw, ch * 0.3);
   ctx.fillStyle = alpha("#FFFFFF", 0.18); for (let i = -4; i < 14; i++) { ctx.beginPath(); ctx.moveTo(x + i * 110, y); ctx.lineTo(x + i * 110 + 50, y); ctx.lineTo(x + i * 110 - 40, y + ch * 0.3); ctx.lineTo(x + i * 110 - 90, y + ch * 0.3); ctx.closePath(); ctx.fill(); }
   ctx.restore();
-  text(ctx, `RONDA ${seg.round}`, x + cw / 2, y + ch * 0.15, L.v ? 64 : 56, lum(col) > 0.6 ? "#20242B" : "#FFFFFF");
+  text(ctx, U.round(seg.round), x + cw / 2, y + ch * 0.15, L.v ? 64 : 56, lum(col) > 0.6 ? "#20242B" : "#FFFFFF");
   const s = eBack(clamp((k - 0.1) * 3.5));
-  ctx.save(); ctx.translate(x + cw / 2, y + ch * 0.55); zs(ctx, s, s); fitText(ctx, DIFF_LABEL[seg.difficulty].toUpperCase(), 0, 0, L.v ? 130 : 128, cw - 80, P.cardInk); ctx.restore();
+  ctx.save(); ctx.translate(x + cw / 2, y + ch * 0.55); zs(ctx, s, s); fitText(ctx, U.diff[seg.difficulty].toUpperCase(), 0, 0, L.v ? 130 : 128, cw - 80, P.cardInk); ctx.restore();
   const pts = mergeConfig(cfg).points[seg.difficulty];
-  ctx.globalAlpha = clamp((k - 0.25) * 4) * (1 - outK); text(ctx, `Cada acierto: ${pts} ${pts === 1 ? "punto" : "puntos"}`, x + cw / 2, y + ch * 0.82, L.v ? 42 : 38, P.muted);
+  ctx.globalAlpha = clamp((k - 0.25) * 4) * (1 - outK); text(ctx, U.eachHit(pts), x + cw / 2, y + ch * 0.82, L.v ? 42 : 38, P.muted);
   ctx.restore();
 }
 function resultsScreen(ctx, L, P, seg, t) {
   const k = t - seg.start;
   ctx.save(); ctx.globalAlpha = eOut(k / 0.5); ctx.translate(0, (1 - eOut(k / 0.5)) * -20);
-  const tl = L.v ? ["¿CUÁNTOS PUNTOS", "HAS SACADO?"] : ["¿CUÁNTOS PUNTOS HAS SACADO?"];
+  const tl = L.v ? U.howMany : [U.howMany.join(" ")];
   tl.forEach((l, i) => fitText(ctx, l, L.W / 2, (L.v ? 330 : 110) + i * 84, L.v ? 78 : 66, L.W - 120, P.ink));
-  text(ctx, `Máximo: ${seg.max} puntos`, L.W / 2, L.v ? 520 : 190, 38, P.muted);
+  text(ctx, U.max(seg.max), L.W / 2, L.v ? 520 : 190, 38, P.muted);
   ctx.restore();
   const rows = [...seg.ranks].reverse(), rh = L.v ? 150 : 112, w = Math.min(L.W - 120, 1150), x = (L.W - w) / 2, y0 = L.v ? 620 : 250;
   rows.forEach((r, i) => {
@@ -359,8 +364,8 @@ function resultsScreen(ctx, L, P, seg, t) {
     ctx.save(); ctx.translate(x + w / 2, y + rh / 2); zs(ctx, s, s);
     card(ctx, P, -w / 2, -rh / 2, w, rh, 28, top ? P.ok : P.card);
     const range = r.from === r.to ? `${r.to}` : `${r.from} – ${r.to}`;
-    text(ctx, r.name, -w / 2 + 40, 2, L.v ? 44 : 40, top ? "#FFFFFF" : P.cardInk, "left");
-    text(ctx, `${range} pts`, w / 2 - 40, 2, L.v ? 42 : 38, top ? "#FFFFFF" : mix(P.timer, "#000000", 0.3), "right");
+    text(ctx, TR(r.name), -w / 2 + 40, 2, L.v ? 44 : 40, top ? "#FFFFFF" : P.cardInk, "left");
+    text(ctx, `${range} ${U.ptsShort}`, w / 2 - 40, 2, L.v ? 42 : 38, top ? "#FFFFFF" : mix(P.timer, "#000000", 0.3), "right");
     ctx.restore();
   });
   if (k > 0.3) confetti(ctx, P, L.W / 2, L.v ? 300 : 110, clamp((k - 0.3) / 1.6), 3);
@@ -369,8 +374,8 @@ function outroScreen(ctx, L, P, seg, t) {
   const k = t - seg.start, s = eBack(clamp(k * 2.5)), cw = L.v ? 900 : 1100, ch = L.v ? 560 : 440;
   ctx.save(); ctx.translate(L.W / 2, L.H / 2); zs(ctx, s, s);
   card(ctx, P, -cw / 2, -ch / 2, cw, ch, 44);
-  text(ctx, "¿LO HAS", 0, -ch * 0.2, L.v ? 104 : 96, P.cardInk); text(ctx, "CONSEGUIDO?", 0, ch * 0.03, L.v ? 104 : 96, mix(P.timer, "#000000", 0.18));
-  text(ctx, "Más retos en el canal", 0, ch * 0.3, L.v ? 46 : 42, P.muted);
+  fitText(ctx, U.didIt[0], 0, -ch * 0.2, L.v ? 104 : 96, cw - 60, P.cardInk); fitText(ctx, U.didIt[1], 0, ch * 0.03, L.v ? 104 : 96, mix(P.timer, "#000000", 0.18));
+  fitText(ctx, U.more, 0, ch * 0.3, L.v ? 46 : 42, P.muted);
   ctx.restore();
 }
 function confetti(ctx, P, x, y, k, seed) {
@@ -384,7 +389,7 @@ function pointsPill(ctx, P, L, k, pts) {
   // Ocupa el sitio del temporizador (ya en 0): nunca tapa el reto
   const s = eBack(clamp(k * 2.2)), x = Math.min(L.timer.cx, L.W - 136), y = L.timer.cy;
   confetti(ctx, P, x, y, clamp(k * 0.9), pts);
-  ctx.save(); ctx.translate(x, y - 10 * eOut(k)); zs(ctx, s, s); pill(ctx, P, -112, -36, 224, 72, P.timer); text(ctx, `+${pts} ${pts === 1 ? "PUNTO" : "PUNTOS"}`, 0, 2, 31, "#20242B"); ctx.restore();
+  ctx.save(); ctx.translate(x, y - 10 * eOut(k)); zs(ctx, s, s); pill(ctx, P, -112, -36, 224, 72, P.timer); text(ctx, U.plusPts(pts), 0, 2, 31, "#20242B"); ctx.restore();
 }
 
 
@@ -413,8 +418,8 @@ function mapScreen(ctx, L, P, seg, t) {
   const N = Array.from({ length: seg.total }, (_, i) => { const j = i - w0; if (j >= 0 && j < n) return slots[j]; const a = slots[j < 0 ? 0 : n - 1], b2 = slots[j < 0 ? 1 : n - 2]; const m = j < 0 ? -j : j - n + 1; return { x: a.x + (a.x - b2.x) * m, y: a.y + (a.y - b2.y) * m, off: true }; });
   const inK = eOut(clamp(k * 5)), hop = eOut(clamp((k - 0.22) / 0.4));
   ctx.save(); ctx.globalAlpha = inK * (1 - eIn(clamp((k - 0.88) / 0.12)));
-  fitText(ctx, seg.to === seg.total - 1 && seg.total > 2 ? "DESAFÍO FINAL" : `NIVEL ${seg.to + 1}`, L.W / 2, L.v ? 300 : 120, L.v ? 110 : 96, L.W - 120, P.ink);
-  text(ctx, (MECH_NAME[seg.mechanics[seg.to]] || "").toUpperCase(), L.W / 2, L.v ? 400 : 205, L.v ? 46 : 40, mix(P.teal, "#000000", 0.15));
+  fitText(ctx, seg.to === seg.total - 1 && seg.total > 2 ? U.final : U.level(seg.to + 1), L.W / 2, L.v ? 300 : 120, L.v ? 110 : 96, L.W - 120, P.ink);
+  text(ctx, (U.mech[seg.mechanics[seg.to]] || MECH_NAME[seg.mechanics[seg.to]] || "").toUpperCase(), L.W / 2, L.v ? 400 : 205, L.v ? 46 : 40, mix(P.teal, "#000000", 0.15));
   // Camino
   ctx.lineCap = "round"; ctx.lineJoin = "round";
   ctx.strokeStyle = alpha(P.dark ? "#FFFFFF" : "#20242B", 0.12); ctx.lineWidth = 26; ctx.setLineDash([2, 44]); ctx.beginPath(); N.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y))); ctx.stroke(); ctx.setLineDash([]);
@@ -444,11 +449,11 @@ function introScreen(ctx, L, P, seg, t, project) {
   ctx.fillStyle = alpha(P.timer, 0.25); ctx.beginPath(); ctx.arc(0, -150, L.v ? 300 : 250, 0, 7); ctx.fill();
   drawPix(ctx, 0, L.v ? 120 : 110, L.v ? 520 : 420, k < d * 0.45 ? "happy" : "victory", t * 0.5);
   ctx.restore();
-  const tk = eOut(clamp((k - 0.15) / 0.5)), lines = wrap(ctx, String(project.title || "¿Puedes con todos?").toUpperCase(), L.v ? 960 : 1500, L.v ? 92 : 84).slice(0, 3);
+  const tk = eOut(clamp((k - 0.15) / 0.5)), lines = wrap(ctx, String(TR(project.title) || U.canAll).toUpperCase(), L.v ? 960 : 1500, L.v ? 92 : 84).slice(0, 3);
   ctx.save(); ctx.globalAlpha *= tk; ctx.translate(0, (1 - tk) * -30);
   lines.forEach((ln, i) => fitText(ctx, ln, L.W / 2, (L.v ? 300 : 110) + i * (L.v ? 100 : 90), L.v ? 92 : 84, L.W - 100, P.ink));
   const lk = eBack(clamp((k - 0.5) / 0.4)), ly = L.v ? 300 + lines.length * 100 + 30 : 110 + lines.length * 90 + 10;
-  ctx.translate(L.W / 2, ly); zs(ctx, lk); pill(ctx, P, -190, -38, 380, 76, P.timer); text(ctx, `${seg.total} NIVELES`, 0, 3, 40, "#20242B");
+  ctx.translate(L.W / 2, ly); zs(ctx, lk); pill(ctx, P, -190, -38, 380, 76, P.timer); text(ctx, U.levels(seg.total), 0, 3, 40, "#20242B");
   ctx.restore(); ctx.restore();
 }
 
@@ -460,6 +465,7 @@ export function drawFrame(ctx, W, H, project, tl, t, theme) {
   ctx.save(); zs(ctx, W / DW, H / DH); drawDesign(ctx, DW, DH, project, tl, t, theme); ctx.restore();
 }
 function drawDesign(ctx, W, H, project, tl, t, theme) {
+  setLang(project);
   const P = palette(theme || project.theme), L = frameLayout(W, H);
   const segs = tl.segments;
   const found = segs.findIndex((s) => t >= s.start && t < (s.end ?? s.start));
@@ -492,17 +498,17 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   const qk = eOut(clamp(inK * 1.8));
   const world = isWorldMechanic(c.mechanic), Q = world ? L.wq : L.q;
   ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(Q.x, Q.y - (1 - qk) * 24);
-  const memoNow = seg.memo && t < seg.memo[1], qText = world && memoNow ? (c.instructions || "¡Memoriza!") : c.question;
+  const memoNow = seg.memo && t < seg.memo[1], qText = world && memoNow ? (TR(c.instructions) || U.memorize) : TR(c.question);
   const lines = L.v ? wrap(ctx, qText.toUpperCase(), Q.maxW, Q.size).slice(0, 2) : [qText.toUpperCase()], qs = lines.length > 1 ? Q.size * 0.82 : Q.size;
   // Playable World: al resolverse, la pregunta se convierte en la solución («ENTRADA C», «¡LA VELA…!»)
   const solvedT = world && seg.reveal ? seg.reveal[0] + solvedAt(c) : Infinity, sk = clamp((t - solvedT) / 0.3);
   if (sk > 0 && c.answer?.label) {
-    ctx.globalAlpha = 1; const ls = wrap(ctx, c.answer.label.toUpperCase(), Q.maxW, Q.size * 0.9).slice(0, 2), s2 = (ls.length > 1 ? Q.size * 0.72 : Q.size * 0.9) * eBack(sk);
+    ctx.globalAlpha = 1; const ls = wrap(ctx, TR(c.answer.label).toUpperCase(), Q.maxW, Q.size * 0.9).slice(0, 2), s2 = (ls.length > 1 ? Q.size * 0.72 : Q.size * 0.9) * eBack(sk);
     ls.forEach((ln, i) => fitText(ctx, ln, 0, (i - (ls.length - 1) / 2) * s2 * 1.08, s2, Q.maxW, P.dark ? P.ok : mix(P.ok, "#000000", 0.25)));
   } else lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, Q.maxW, P.ink));
-  if (!world && seg.memo && t < seg.memo[1]) text(ctx, (c.instructions || "¡Memoriza!").toUpperCase(), 0, qs * (lines.length * 0.55 + 0.45), qs * 0.48, P.dark ? P.teal : mix(P.teal, "#000000", 0.15));
+  if (!world && seg.memo && t < seg.memo[1]) text(ctx, (TR(c.instructions) || U.memorize).toUpperCase(), 0, qs * (lines.length * 0.55 + 0.45), qs * 0.48, P.dark ? P.teal : mix(P.teal, "#000000", 0.15));
   ctx.restore();
-  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(Q.x, Q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); text(ctx, "¡TIEMPO!", 0, 4, 66, "#FFFFFF"); ctx.restore(); }
+  if (tk >= 0 && tk < 1) { const s = eBack(clamp(tk * 5)) * (1 - eIn(clamp((tk - 0.8) * 5))); ctx.save(); ctx.translate(Q.x, Q.y); ctx.rotate(-0.03); zs(ctx, s, s); pill(ctx, P, -230, -56, 460, 112, P.alert); fitText(ctx, U.time, 0, 4, 66, 420, "#FFFFFF"); ctx.restore(); }
   // Reto
   if (world) {
     // Playable World: la escena ocupa casi todo el fotograma y se anima con la simulación del reto
@@ -534,7 +540,7 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   // Explicación: tarjeta encima de las opciones (o al pie del reto)
   const ex = seg.explain && t >= seg.explain[0] ? clamp((t - seg.explain[0]) / 0.35) : 0;
   if (ex > 0 && c.explanation) {
-    const bw = L.box.w - (L.v ? 0 : 400), size = L.v ? 40 : 36, ls = wrap(ctx, c.explanation, bw - 80, size), bh = ls.length * size * 1.25 + 44;
+    const bw = L.box.w - (L.v ? 0 : 400), size = L.v ? 40 : 36, ls = wrap(ctx, TR(c.explanation), bw - 80, size), bh = ls.length * size * 1.25 + 44;
     const by = hasOptions(c) ? optsBox(L, c).y - bh - 14 : L.box.y + L.box.h - bh;
     ctx.save(); ctx.globalAlpha = eOut(ex); ctx.translate(0, (1 - eOut(ex)) * 20);
     card(ctx, P, (W - bw) / 2, by, bw, bh, 24); ctx.fillStyle = P.teal; rrect(ctx, (W - bw) / 2, by, 12, bh, 6); ctx.fill();
@@ -545,6 +551,7 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
 
 // ---------- Miniatura (programática, en el estilo del canal) ----------
 export function drawThumbnail(ctx, W, H, project, theme) {
+  setLang(project);
   const P = palette(theme || project.theme), u = H / 1080;
   ctx.save(); zs(ctx, u, u); const DW = W / u, DH = 1080;
   background(ctx, DW, DH, P, P.bg, null);
@@ -552,7 +559,7 @@ export function drawThumbnail(ctx, W, H, project, theme) {
   card(ctx, P, ox - 34, oy - 34, cols * cell + 68, rows * cell + 68, 40);
   for (let i = 0; i < cols * rows; i++) { const x = ox + cell * ((i % cols) + 0.5), y = oy + cell * (Math.floor(i / cols) + 0.5), odd = i === 17; text(ctx, odd ? "B" : "8", x, y + 4, 86, odd ? P.ok : P.cardInk); if (odd) solutionRing(ctx, P, x, y, 52, 1); }
   drawTimer(ctx, ox + cols * cell - 6, oy - 30, 86, P, 0.3, 3, "normal", "play");
-  const words = String(project.title || "¿Puedes superar estos retos?").toUpperCase();
+  const words = String(TR(project.title) || U.canAll).toUpperCase();
   const size = wrap(ctx, words, DW * 0.42, 116).length > 3 ? 96 : 116;
   wrap(ctx, words, DW * 0.42, size).slice(0, 4).forEach((l, i, a) => { const y = DH / 2 - ((a.length - 1) * size * 1.08) / 2 + i * size * 1.08; text(ctx, l, 90, y, size, /\d/.test(l) ? mix(P.timer, "#000000", 0.12) : P.ink, "left"); });
   ctx.restore();

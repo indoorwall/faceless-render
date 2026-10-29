@@ -3,7 +3,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
-import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
+import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, makeChallenge, projectStrings, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 import { WORLD } from "../../../web/retos/world.js";
 const WORLD_MECH = new Set(Object.keys(WORLD));
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
@@ -189,6 +189,7 @@ async function runStep(job: Job) {
     case "retos_generate": return stepRetosGenerate(job);
     case "planner": return stepPlanner(job);
     case "money": return stepMoney(job);
+    case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
@@ -2096,11 +2097,49 @@ async function generateAudio(chId: string, kind: "sfx" | "music" | "voice", code
   return data;
 }
 
+// ---------- Traducción de retos (canales en otros idiomas) ----------
+// Memoria de traducciones (i18n_cache): las frases se repiten mucho entre vídeos, así que casi todo sale gratis.
+const I18N_TOOL = { name: "traducciones", description: "Devuelve la traducción de cada texto, en el mismo orden", input_schema: { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { i: { type: "integer" }, t: { type: "string" } }, required: ["i", "t"] } } }, required: ["items"] } };
+// deno-lint-ignore no-explicit-any
+async function translateRetos(job: Job, v: any) {
+  const lang = v.channel.language;
+  const project = retosProject(v);
+  const src: string[] = projectStrings(project);
+  const map: Record<string, string> = { ...(v.retos?.i18n?.lang === lang ? v.retos.i18n.map : {}) };
+  if (v.title && !Object.values(map).includes(v.title)) src.push(v.title);
+  let todo = src.filter((s) => !map[s]);
+  if (!todo.length && v.retos?.i18n?.lang === lang) return;
+  if (todo.length) {
+    for (let k = 0; k < todo.length; k += 40) {
+      const { data: cached } = await sb.from("i18n_cache").select("src,dst").eq("lang", lang).in("src", todo.slice(k, k + 40));
+      for (const r of cached ?? []) map[r.src] = r.dst;
+    }
+    todo = todo.filter((s) => !map[s]);
+  }
+  for (let k = 0; k < todo.length; k += 60) {
+    const part = todo.slice(k, k + 60);
+    const res = await claudeTool(MODEL_CHEAP, `Traduces textos de un vídeo de YouTube de retos y acertijos del español al ${LANG_NAME[lang] ?? lang}. Tono natural y nativo, corto y directo, como un youtuber de ese idioma. Conserva números, emojis, signos y mayúsculas. Si un texto es una respuesta o una opción, tradúcelo de forma que la respuesta siga siendo correcta en ese idioma. No añadas nada.`,
+      part.map((t, i) => `${i}. ${t}`).join("\n"), I18N_TOOL, 8000);
+    const rows: { lang: string; src: string; dst: string }[] = [];
+    // deno-lint-ignore no-explicit-any
+    for (const it of (res.input?.items ?? []) as any[]) { const s = part[it.i]; if (s && typeof it.t === "string" && it.t.trim()) { map[s] = it.t.trim(); rows.push({ lang, src: s, dst: map[s] }); } }
+    if (rows.length) await sb.from("i18n_cache").upsert(rows, { onConflict: "lang,src" });
+  }
+  const miss = src.filter((s) => !map[s]);
+  if (miss.length) throw new Error(`Faltan ${miss.length} traducciones (${miss[0].slice(0, 40)}…); se reintenta`);
+  const patch: Record<string, unknown> = { retos: { ...(v.retos ?? {}), i18n: { lang, map } } };
+  if (v.title && map[v.title]) patch.title = map[v.title];
+  await sb.from("videos").update(patch).eq("id", v.id);
+  v.retos = patch.retos; if (patch.title) v.title = patch.title;
+  await log(job, `Retos traducidos al ${LANG_NAME[lang] ?? lang}: ${src.length} textos (${todo.length} nuevos con IA, el resto de la memoria)`);
+}
 // ---------- Paso: validar y asegurar los recursos reutilizables (solo se genera lo que falta) ----------
 async function stepRetosAssets(job: Job) {
   const v = await getVideo(job.video_id);
   if (v.engine !== "challenges") throw new UserError("Este vídeo no es de retos");
   const ch = v.channel;
+  // Canal en otro idioma: se traducen los textos del reto antes de montar (voz incluida)
+  if ((ch.language ?? "es") !== "es") await translateRetos(job, v);
   const project = retosProject(v);
   // Nunca se monta un reto cuya respuesta no esté comprobada
   const val = validateProject(project);
@@ -2391,7 +2430,16 @@ async function planChannel(job: Job, ch: any) {
       }
     }
   }
-  // 4) Shorts a partir de los vídeos largos ya aprobados
+  // 4) Canal en otro idioma: dobla los vídeos publicados del canal original (uno por pasada)
+  if (ch.mirror_of && ch.mirror_auto) {
+    const { data: srcV } = await sb.from("videos").select("id,derived").eq("channel_id", ch.mirror_of).in("status", ["publishing", "scheduled", "published"]).is("derived", null).order("created_at", { ascending: false }).limit(30);
+    const { data: done } = await sb.from("videos").select("parent_id").eq("channel_id", ch.id).eq("derived", "dub");
+    const have = new Set((done ?? []).map((x) => x.parent_id));
+    const { count: running } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "dub").eq("channel_id", ch.id).in("status", ["queued", "running"]);
+    const next = (srcV ?? []).find((x) => !have.has(x.id));
+    if (next && !running) { await enqueue("dub", { video_id: next.id, channel_id: ch.id }); await log(J, "Piloto automático: doblando un vídeo del canal original"); }
+  }
+  // 5) Shorts a partir de los vídeos largos ya aprobados
   if (ch.clips_per_long > 0) {
     for (const v of V.filter((x) => fmtOf(x) === "long" && !x.derived && ["publishing", "scheduled", "published"].includes(x.status) && !x.auto?.clips)) {
       await setAuto(v, { clips: { requested: new Date().toISOString() } });
@@ -2460,7 +2508,9 @@ async function clipsRetos(job: Job, v: any, ch: any, n: number, link: string) {
   for (const c of [...all].sort((a, b) => rank(b) - rank(a))) if (picked.length < n && !picked.some((x) => x.mechanic === c.mechanic)) picked.push(c);
   let made = 0;
   for (const c of picked) {
-    const project = { ...(v.retos ?? {}), format: "short", title: "¿Lo resuelves a tiempo?", challenges: [{ ...c, format: "short" }], report: undefined };
+    // El laberinto depende de la pantalla: en vertical se genera uno nuevo de la misma dificultad con proporciones de Short
+    const one = c.mechanic === "maze" ? makeChallenge({ category: c.category as string, mechanic: "maze", difficulty: c.difficulty, seed: `${c.id}-short`, format: "short", config: ch.retos_config }) : { ...c, format: "short" };
+    const project = { ...(v.retos ?? {}), format: "short", title: "¿Lo resuelves a tiempo?", challenges: [one], report: undefined };
     const auto = ch.autopilot !== "manual";
     const { data: cv, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: auto ? "producing" : "script_review", progress: 2, stage: auto ? "En cola de montaje" : null, format: "short", derived: "clip", parent_id: v.id, title: project.title, idea_title: project.title, description: link ? `¿Lo resuelves a tiempo? Más niveles en el vídeo completo: ${link}` : "", retos: project, usage: {}, auto: auto ? { script: { by: "auto", at: new Date().toISOString() } } : {} }).select("id").single();
     if (error) throw new Error(error.message);
@@ -2513,4 +2563,44 @@ async function stepMoney(job: Job) {
   } catch (e) { out.monetary = false; out.money_error = (e as Error).message.slice(0, 200); }
   await sb.from("channels").update({ yt_stats: out, yt_stats_at: out.at }).eq("id", chId);
   await log(job, `Panel de dinero actualizado: ${out.subs} suscriptores${out.monetary ? `, ${Number(out.revenue_30 ?? 0).toFixed(2)} € en 30 días` : ""}`);
+}
+
+// ======================================================================================================
+// Canales en otros idiomas: doblaje de un documental a su canal espejo (channels.mirror_of)
+// Se traduce el guion plano a plano y se reutilizan imágenes, efectos y música: solo se genera la voz nueva.
+// ======================================================================================================
+const LANG_NAME: Record<string, string> = { es: "español", en: "inglés", pt: "portugués (de Brasil)", fr: "francés", de: "alemán", it: "italiano", ca: "catalán" };
+async function stepDub(job: Job) {
+  const src = await getVideo(job.video_id);
+  const { data: tch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!tch) throw new UserError("Canal de destino no encontrado");
+  const { data: ex } = await sb.from("videos").select("id").eq("parent_id", src.id).eq("channel_id", tch.id).eq("derived", "dub").limit(1);
+  if ((ex ?? []).length) return;
+  if (src.engine === "challenges") throw new UserError("Los retos no se doblan: el canal en otro idioma genera los suyos");
+  const { data: scs } = await sb.from("scenes").select("*").eq("video_id", src.id).order("n");
+  const scenes = scs ?? [];
+  if (!scenes.length || scenes.some((x) => !x.media_url && !(x.shots ?? []).some((y: { media_url?: string }) => y.media_url))) throw new UserError("El vídeo original no tiene todas las imágenes producidas");
+  const linesOf = (x: { shots?: { line?: string }[]; narration?: string }) => (x.shots?.length ? x.shots.map((y) => String(y.line ?? "")) : [String(x.narration ?? "")]);
+  const input = { title: src.title, description: src.description ?? "", tags: src.tags ?? [], scenes: scenes.map((x) => ({ n: x.n, lines: linesOf(x) })) };
+  const lang = LANG_NAME[tch.language] ?? tch.language;
+  const tool = { name: "doblaje", description: "Guion traducido", input_schema: { type: "object", required: ["title", "description", "tags", "scenes"], properties: { title: { type: "string" }, description: { type: "string" }, tags: { type: "array", items: { type: "string" } }, scenes: { type: "array", items: { type: "object", required: ["n", "lines"], properties: { n: { type: "integer" }, lines: { type: "array", items: { type: "string" } } } } } } } };
+  const r = await claudeTool(MODEL_FAST, `Eres adaptador de guiones de documentales de YouTube al ${lang}. No traduces palabra por palabra: adaptas para que suene natural y nativo, con el mismo ritmo, gancho y datos (nada inventado ni omitido). Cada línea corresponde a un plano: mantén EXACTAMENTE el mismo número de escenas y de líneas por escena, con una longitud parecida a la original. El título debe funcionar en YouTube en ese idioma (menos de 60 caracteres). Las etiquetas (tags), en ${lang}.`, `Adapta al ${lang} este guion (JSON) y llama a doblaje:\n${JSON.stringify(input)}`, tool, 16000);
+  await bumpUsage(src.id, usageOf(r));
+  const out = r.input as { title: string; description: string; tags: string[]; scenes: { n: number; lines: string[] }[] };
+  const tr = new Map((out.scenes ?? []).map((x) => [x.n, x.lines]));
+  for (const x of scenes) { const l = tr.get(x.n); if (!l || l.length !== linesOf(x).length || l.some((t) => !String(t).trim())) throw new Error(`La traducción de la escena ${x.n} no conserva sus planos`); }
+  // deno-lint-ignore no-explicit-any
+  const shotsTr = (x: any) => { const l = tr.get(x.n)!; return (x.shots ?? []).map((sh: any, k: number) => ({ ...sh, line: l[k] })); };
+  const script = {
+    ...(src.script ?? {}), title: out.title, description: out.description, tags: out.tags,
+    // deno-lint-ignore no-explicit-any
+    scenes: scenes.map((x) => ({ narration: tr.get(x.n)!.join(" "), shots: shotsTr(x).map((sh: any) => ({ line: sh.line, visual_type: sh.visual_type, visual_prompt: sh.visual_prompt, stock_query: sh.stock_query, archive_query: sh.archive_query, reframe: sh.reframe })), sfx: x.sfx_prompt ?? "", keywords: [] })),
+  };
+  const { data: dv, error } = await sb.from("videos").insert({ channel_id: tch.id, engine: src.engine, status: "producing", stage: "Volviendo a montar", progress: 2, format: src.format, target_minutes: src.target_minutes, derived: "dub", parent_id: src.id, title: out.title.slice(0, 100), idea_title: out.title.slice(0, 100), description: out.description, tags: out.tags ?? [], sources: src.sources ?? [], script, music_url: src.music_url, ai_disclosure: src.ai_disclosure, usage: {} }).select("id").single();
+  if (error) throw new Error(error.message);
+  const rows = scenes.map((x) => { const { id: _i, video_id: _v, ...rest } = x; return { ...rest, video_id: dv.id, narration: tr.get(x.n)!.join(" "), shots: shotsTr(x), keywords: [], audio_url: null, audio_duration: null, words: null }; });
+  const { error: e2 } = await sb.from("scenes").insert(rows);
+  if (e2) throw new Error(e2.message);
+  await enqueue("voice", { video_id: dv.id, payload: { cont: true } });
+  await log({ ...job, video_id: dv.id }, `Doblaje al ${lang} de «${src.title}»: «${out.title}». Solo se genera la voz nueva.`);
 }

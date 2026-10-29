@@ -2414,7 +2414,14 @@ async function stepRetosGenerate(job: Job) {
     }
     // Un tema solo de preguntas sin preguntas todavía: se espera a que el banco se rellene
     const onlyQuiz = (theme?.categories ?? []).every((c) => (QUIZ_TOPICS as Record<string, unknown>)[c]);
-    if (!quiz.length && onlyQuiz) { await enqueue("retos_generate", { channel_id: ch.id, payload: { ...p, theme: theme?.key }, delaySec: 240 }); await log(job, `Retos de ${theme?.label}: preparando preguntas nuevas`); return; }
+    if (!quiz.length && onlyQuiz) {
+      // Se vuelve a intentar cuando el banco se haya rellenado (si la recarga espera al presupuesto, después de ella)
+      const { data: rq } = await sb.from("jobs").select("run_after").eq("step", "quiz_refill").in("status", ["queued", "running"]).order("run_after", { ascending: false }).limit(1);
+      const wait = Math.max(240, rq?.[0]?.run_after ? Math.round((new Date(rq[0].run_after).getTime() - Date.now()) / 1000) + 300 : 0);
+      await enqueue("retos_generate", { channel_id: ch.id, payload: { ...p, theme: theme?.key, waiting: true }, delaySec: wait });
+      if (!p.waiting) await log(job, `Retos de ${theme?.label}: preparando preguntas nuevas`);
+      return;
+    }
   }
   const { data: hist } = await sb.from("challenge_history").select("signature").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(1500);
   const gameStyle = theme?.game_style ?? (theme ? "classic" : (p.game_style ?? ch.retos_config?.game_style));

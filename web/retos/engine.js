@@ -105,6 +105,13 @@ export const CATEGORIES = {
   observation: { label: "Observación", emoji: "👁️", mechanics: ["count_shapes"] },
 };
 export const CATEGORY_ORDER = ["odd", "differences", "memory", "logic", "sequence", "culture", "hidden", "silhouette", "observation"];
+// Preguntas tipo test: el texto sale de un banco de preguntas comprobadas (lo rellena el motor); sin banco no se generan
+export const QUIZ_TOPICS = {
+  history: { label: "Historia", emoji: "🏛️", color: "#C7853A" }, geography: { label: "Geografía", emoji: "🗺️", color: "#2E9E6B" },
+  science: { label: "Ciencia", emoji: "🔬", color: "#3A7BD5" }, general: { label: "Cultura general", emoji: "💡", color: "#9B59B6" },
+  animals: { label: "Animales", emoji: "🐾", color: "#E07A2E" }, sports: { label: "Deportes", emoji: "⚽", color: "#D64545" },
+};
+for (const [k, t] of Object.entries(QUIZ_TOPICS)) CATEGORIES[k] = { label: t.label, emoji: t.emoji, mechanics: ["quiz"], quiz: true };
 // Playable World: pequeños videojuegos (laberintos, máquinas, escenas con un error…)
 Object.assign(CATEGORIES, WORLD_CATEGORIES);
 export { WORLD_ORDER };
@@ -273,6 +280,13 @@ const GEN = {
     const text = { rot: `Gira ${step}° cada vez`, rot2: "Gira 45°, luego 90°, luego 135°… cada vez más", color: "Los colores se repiten de tres en tres", colorrot: "Gira 90° y los colores se repiten de tres en tres", sides: "Cada figura tiene un lado más" }[kind];
     return { question: "¿Qué figura sigue?", instructions: "Descubre el patrón", data: { kind, step, spec, shown, options }, answer: { option: options.findIndex((o) => same(o, next)), label: "" }, explanation: text };
   },
+  // Pregunta tipo test (historia, geografía…): la pregunta viene del banco; aquí solo se barajan las opciones
+  quiz(r, d, opts = {}) {
+    const q = opts.quiz; if (!q || !q.q || !q.correct || !Array.isArray(q.wrong) || q.wrong.length < 3) throw new Error("Sin pregunta del banco");
+    const options = r.shuffle([String(q.correct), ...q.wrong.slice(0, 3).map(String)]);
+    const topic = QUIZ_TOPICS[q.topic] ? q.topic : "general";
+    return { question: String(q.q), instructions: "", data: { qid: q.id ?? null, topic, options }, answer: { option: options.indexOf(String(q.correct)), label: String(q.correct) }, explanation: String(q.explanation ?? "") };
+  },
   // ¿De qué país es esta bandera?
   flags(r, d) {
     const L = di(d);
@@ -425,6 +439,12 @@ const VAL = {
     return [shown.every((x, i) => sameShape(x, shapeTerm(spec, i))) || "Las figuras mostradas no siguen la regla", options.filter((o) => sameShape(o, next)).length === 1 || "Debe haber exactamente una opción correcta",
       sameShape(options[c.answer.option] || {}, next) || "La opción marcada no es la siguiente", new Set(options.map(k)).size === 4 || "Opciones repetidas"];
   },
+  quiz(c) {
+    const { options } = c.data; const norm = (x) => String(x).trim().toLowerCase();
+    return [String(c.question || "").trim().length >= 8 || "Pregunta vacía", String(c.question).length <= 110 || "Pregunta demasiado larga para la pantalla",
+      options.length === 4 && options.every((o) => String(o).trim()) || "Hacen falta 4 opciones", new Set(options.map(norm)).size === 4 || "Opciones repetidas",
+      options[c.answer.option] === c.answer.label || "La opción marcada no es la respuesta", options.every((o) => String(o).length <= 40) || "Opción demasiado larga"];
+  },
   flags(c) {
     const { country, options } = c.data; const sigs = options.map((x) => flagSig(FLAGS[x]));
     const bad = FLAG_SAME.some((g) => g.filter((x) => options.includes(x)).length > 1);
@@ -453,7 +473,7 @@ export function validateChallenge(c) {
 
 // ---------- Crear retos ----------
 let _n = 0;
-export function makeChallenge({ category, mechanic, difficulty, seed, config, format }) {
+export function makeChallenge({ category, mechanic, difficulty, seed, config, format, quiz = null }) {
   const cfg = mergeConfig(config);
   const r = rng(seed ?? `${Date.now()}-${_n++}-${Math.random()}`);
   const cat = category && CATEGORIES[category] ? category : r.pick(CATEGORY_ORDER);
@@ -461,8 +481,8 @@ export function makeChallenge({ category, mechanic, difficulty, seed, config, fo
   const d = DIFFS.includes(difficulty) ? difficulty : "medium";
   for (let attempt = 0; attempt < 25; attempt++) {
     const s = `${seed ?? Math.random()}#${attempt}`;
-    let g; try { g = GEN[mech](rng(s), d, { format }); } catch (_) { continue; } // generador sin solución con esta semilla: se prueba otra
-    const c = { ...(WORLD[mech] && format ? { format } : {}), id: `c${hashStr(s + mech).toString(36)}`, category: cat, mechanic: mech, difficulty: d, seed: s, time: WORLD[mech] ? WORLD[mech].time[DIFFS.indexOf(d)] : cfg.times[d] + (mech === "differences" ? 6 : mech === "hidden_object" || mech === "logic_equations" ? 3 : 0), points: cfg.points[d], layout_seed: 0, ...g };
+    let g; try { g = GEN[mech](rng(s), d, { format, quiz }); } catch (_) { continue; } // generador sin solución con esta semilla: se prueba otra
+    const c = { ...(WORLD[mech] && format ? { format } : {}), id: `c${hashStr(s + mech).toString(36)}`, category: cat, mechanic: mech, difficulty: d, seed: s, time: WORLD[mech] ? WORLD[mech].time[DIFFS.indexOf(d)] : mech === "quiz" ? Math.min(14, Math.max(8, Math.round(4 + String(g.question).length / 14 + g.data.options.join("").length / 30))) : cfg.times[d] + (mech === "differences" ? 6 : mech === "hidden_object" || mech === "logic_equations" ? 3 : 0), points: cfg.points[d], layout_seed: 0, ...g };
     c.signature = signature(c);
     const v = validateChallenge(c);
     if (v.ok) return { ...c, validation: { ok: true, errors: [], engine: ENGINE_VERSION } };
@@ -487,27 +507,35 @@ export function buildProject(opts) {
   // Cada vuelta por las categorías va en un orden nuevo, sin repetir juego en el cambio de vuelta
   const orders = [];
   const catAt = (k) => { const cyc = Math.floor(k / cats.length); while (orders.length <= cyc) { let o = r.shuffle(cats); const prev = orders[orders.length - 1]; if (prev && cats.length > 1 && o[0] === prev[prev.length - 1]) o = [...o.slice(1), o[0]]; orders.push(o); } return orders[cyc][k % cats.length]; };
+  // Banco de preguntas tipo test (cada pregunta se usa una sola vez por vídeo)
+  let pool = [...(opts.quiz || [])];
+  const takeQuiz = (topic, diff) => { let k = pool.findIndex((q) => q.topic === topic && q.difficulty === diff); if (k < 0) k = pool.findIndex((q) => q.topic === topic); return k < 0 ? null : pool.splice(k, 1)[0]; };
   const make = (diff, i) => {
     for (let t = 0; t < 8; t++) {
       const cat = catAt(i + t);
-      const c = makeChallenge({ category: cat, difficulty: diff, seed: `${opts.seed ?? "p"}-${i}-${t}-${r()}`, config: cfg, format });
+      let quiz = null;
+      if (CATEGORIES[cat]?.quiz) { quiz = takeQuiz(cat, diff); if (!quiz) continue; }
+      const c = makeChallenge({ category: cat, difficulty: diff, seed: `${opts.seed ?? "p"}-${i}-${t}-${r()}`, config: cfg, format, quiz });
       if (!recent.has(c.signature)) { recent.add(c.signature); return c; }
     }
-    return makeChallenge({ category: r.pick(cats), difficulty: diff, seed: `${r()}`, config: cfg, format });
+    const fb = cats.filter((x) => !CATEGORIES[x]?.quiz); const fc = fb.length ? r.pick(fb) : r.pick(CATEGORY_ORDER);
+    return makeChallenge({ category: fc, difficulty: diff, seed: `${r()}`, config: cfg, format });
   };
+  // Cada intento de plan empieza con el banco de preguntas completo
+  const buildAll = (k) => { pool = [...(opts.quiz || [])]; return plan(k).map(make); };
   let challenges = [];
-  if (n > 0) challenges = plan(n).map(make);
+  if (n > 0) challenges = buildAll(n);
   else {
     // Automático: se añaden retos hasta acercarse a la duración objetivo con el tiempo real de juego
     n = format === "short" ? 1 : 4;
     for (let guard = 0; guard < 80; guard++) {
-      challenges = plan(n).map(make);
+      challenges = buildAll(n);
       const dur = timeline({ format, challenges, config: cfg, title: opts.title, game_style: opts.game_style }).duration;
       if (dur >= target * (format === "short" ? 0.6 : 0.92) || (format === "short" && n >= 2)) break;
       n += format === "short" ? 1 : Math.max(1, Math.round((target - dur) / 16));
     }
     // Si se ha pasado más de un 5 %, se rehace con un reto menos (las dificultades quedan bien repartidas)
-    while (format !== "short" && n > 4 && timeline({ format, challenges, config: cfg, game_style: opts.game_style }).duration > target * 1.05) { n--; challenges = plan(n).map(make); }
+    while (format !== "short" && n > 4 && timeline({ format, challenges, config: cfg, game_style: opts.game_style }).duration > target * 1.05) { n--; challenges = buildAll(n); }
   }
   // Variedad: dos retos seguidos no repiten mecánica si se puede evitar
   for (let i = 1; i < challenges.length; i++) if (challenges[i].mechanic === challenges[i - 1].mechanic) { const j = challenges.findIndex((c, k) => k > i && c.difficulty === challenges[i].difficulty && c.mechanic !== challenges[i - 1].mechanic); if (j > 0) [challenges[i], challenges[j]] = [challenges[j], challenges[i]]; }

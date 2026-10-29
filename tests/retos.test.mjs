@@ -1,13 +1,16 @@
 // Pruebas del motor de retos: node tests/retos.test.mjs
 import * as E from "../web/retos/engine.js";
 let fail = 0; const ok = (c, m) => { if (!c) { fail++; console.log("✗", m); } };
-const mechs = Object.values(E.CATEGORIES).flatMap((c) => c.mechanics);
+const mechs = [...new Set(Object.values(E.CATEGORIES).flatMap((c) => c.mechanics))];
+// Preguntas tipo test de ejemplo (en producción salen del banco de preguntas)
+const MK = (o) => E.makeChallenge({ ...o, quiz: o.mechanic === "quiz" ? (o.quiz ?? QZ(Math.abs([...String(o.seed)].reduce((a, ch) => a * 31 + ch.charCodeAt(0), 7)) % 997)) : o.quiz });
+const QZ = (i) => ({ id: i, topic: "history", difficulty: "medium", q: `¿En qué año ocurrió el hecho histórico número ${i}?`, correct: String(1500 + i), wrong: [String(1400 + i), String(1600 + i), String(1700 + i)], explanation: `Ocurrió en ${1500 + i}.` });
 // 1) Cada mecánica y dificultad genera retos válidos y distintos
 for (const m of mechs) for (const d of E.DIFFS) {
   const sigs = new Set(); let n = 0;
   for (let i = 0; i < 300; i++) {
     const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m));
-    const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: d, seed: `t-${m}-${d}-${i}` });
+    const c = MK({ category: cat, mechanic: m, difficulty: d, seed: `t-${m}-${d}-${i}`, quiz: m === "quiz" ? QZ(i) : null });
     const v = E.validateChallenge(c); ok(v.ok, `${m}/${d}#${i}: ${v.errors.join(", ")}`); sigs.add(c.signature); n++;
     ok(c.question && c.question.length > 3, `${m} sin pregunta`);
   }
@@ -16,7 +19,7 @@ for (const m of mechs) for (const d of E.DIFFS) {
 // 2) La validación detecta respuestas incorrectas
 for (const m of mechs) {
   const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m));
-  const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: "medium", seed: `neg-${m}` });
+  const c = MK({ category: cat, mechanic: m, difficulty: "medium", seed: `neg-${m}`, quiz: m === "quiz" ? QZ(1) : null });
   const bad = JSON.parse(JSON.stringify(c));
   if ("option" in bad.answer) bad.answer.option = (bad.answer.option + 1) % 4;
   else if ("at" in bad.answer && "at" in bad.data) { bad.data.at = (bad.data.at + 1) % 5; }
@@ -46,7 +49,7 @@ ok(tl.events.every((e) => Math.abs(e.t * E.FPS - Math.round(e.t * E.FPS)) < 1e-6
 // Los tics terminan justo cuando acaba el temporizador
 for (const sg of tl.segments.filter((x) => x.type === "challenge").slice(0, 5)) { const ticks = tl.events.filter((e) => (e.code === "S03" || e.code === "S04") && e.t >= sg.play[0] - 1e-6 && e.t < sg.play[1]); const last = ticks[ticks.length - 1]; ok(Math.abs(last.t - (sg.play[1] - 1)) < 1e-6, "el último tic no cae a 1 s del final"); ok(tl.events.some((e) => e.code === "S06" && Math.abs(e.t - sg.play[1]) < 1e-6), "falta el tiempo agotado justo al final"); }
 // 5) Cambiar posiciones mantiene la solución correcta
-for (const m of mechs) { const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)); for (let i = 0; i < 40; i++) { const c = E.makeChallenge({ category: cat, mechanic: m, difficulty: E.DIFFS[i % 4], seed: `rs-${m}-${i}` }); const x = E.reshuffle(c, `s${i}`); ok(E.validateChallenge(x).ok, `${m}: tras cambiar posiciones la solución no es válida`); } }
+for (const m of mechs) { const cat = Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)); for (let i = 0; i < 40; i++) { const c = MK({ category: cat, mechanic: m, difficulty: E.DIFFS[i % 4], seed: `rs-${m}-${i}` }); const x = E.reshuffle(c, `s${i}`); ok(E.validateChallenge(x).ok, `${m}: tras cambiar posiciones la solución no es válida`); } }
 // 6) Diseño: las figuras repartidas caben en su caja y no se tocan
 const { gridLayout, frameLayout } = await import("../web/retos/draw.js");
 for (const n of [3, 4, 6, 9, 11, 12, 16, 20, 25, 30, 36]) for (const box of [{ x: 36, y: 452, w: 1008, h: 1138 }, { x: 0, y: 0, w: 486, h: 556 }, { x: 56, y: 172, w: 1808, h: 858 }]) for (const seed of ["a", "b", "c"]) {
@@ -61,7 +64,7 @@ let canvasMod = null; try { canvasMod = await import("canvas"); } catch (_) { co
 if (canvasMod) {
   const { drawFrame } = await import("../web/retos/draw.js");
   for (const style of ["light", "arcade", "dark", "custom"]) for (const format of ["short", "long"]) {
-    const challenges = mechs.map((m, i) => E.makeChallenge({ category: Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)), mechanic: m, difficulty: E.DIFFS[i % 4], seed: `dr-${m}` }));
+    const challenges = mechs.map((m, i) => MK({ category: Object.keys(E.CATEGORIES).find((k) => E.CATEGORIES[k].mechanics.includes(m)), mechanic: m, difficulty: E.DIFFS[i % 4], seed: `dr-${m}` }));
     const p = { format, challenges, config: {}, theme: { style, base: "dark", overrides: { timer: "#7C5CFF" } } }, t2 = E.timeline(p);
     const [W, H] = format === "short" ? [270, 480] : [480, 270], cv = canvasMod.createCanvas(W, H), ctx = cv.getContext("2d");
     let prev = null, same = 0, n = 0;
@@ -71,17 +74,17 @@ if (canvasMod) {
 }
 // 7b) Cada diferencia ilustrada tiene dónde marcarse
 { const W0 = await import("../web/retos/world.js"); for (const k of Object.keys(W0.SCENE_DIFFS)) ok(!!W0.DIFF_SPOT[k], `diferencia ${k} sin sitio`);
-  if (canvasMod) { const { drawFrame } = await import("../web/retos/draw.js"); for (let i = 0; i < 40; i++) { const c = E.makeChallenge({ category: "wdiff", mechanic: "scene_diff", difficulty: E.DIFFS[i % 4], seed: `sd${i}` }); for (const format of ["short", "long"]) { const p = { game_style: "world", format, challenges: [c], config: {} }, t2 = E.timeline(p), sg = t2.segments.find((x) => x.type === "challenge"); const cv = canvasMod.createCanvas(108, 192); try { drawFrame(cv.getContext("2d"), 108, 192, p, t2, sg.reveal[0] + 3); } catch (e) { ok(false, `diferencias ${c.answer.diffs}: ${e.message}`); } } } } }
+  if (canvasMod) { const { drawFrame } = await import("../web/retos/draw.js"); for (let i = 0; i < 40; i++) { const c = MK({ category: "wdiff", mechanic: "scene_diff", difficulty: E.DIFFS[i % 4], seed: `sd${i}` }); for (const format of ["short", "long"]) { const p = { game_style: "world", format, challenges: [c], config: {} }, t2 = E.timeline(p), sg = t2.segments.find((x) => x.type === "challenge"); const cv = canvasMod.createCanvas(108, 192); try { drawFrame(cv.getContext("2d"), 108, 192, p, t2, sg.reveal[0] + 3); } catch (e) { ok(false, `diferencias ${c.answer.diffs}: ${e.message}`); } } } } }
 // 8) Playable World: la animación sale de la misma simulación que la respuesta
 const W = await import("../web/retos/world.js");
 for (let i = 0; i < 60; i++) {
   const d = E.DIFFS[i % 4], f = i % 2 ? "long" : "short";
-  const m = E.makeChallenge({ category: "maze", mechanic: "maze", difficulty: d, seed: `wm${i}`, format: f }), ms = W.mazeScript(m), win = ms.s.runs[ms.s.winner];
+  const m = MK({ category: "maze", mechanic: "maze", difficulty: d, seed: `wm${i}`, format: f }), ms = W.mazeScript(m), win = ms.s.runs[ms.s.winner];
   ok(ms.s.winner === m.answer.entrance && win.path[0][0] === m.data.entrances[m.answer.entrance] && win.path[0][1] === 0 && win.path.at(-1)[0] === m.data.goal && win.path.at(-1)[1] === m.data.h - 1, "laberinto: la bola no recorre el camino de la respuesta");
-  const k = E.makeChallenge({ category: "machine", mechanic: "machine", difficulty: d, seed: `wk${i}` }), ks = W.machineScript(k);
+  const k = MK({ category: "machine", mechanic: "machine", difficulty: d, seed: `wk${i}` }), ks = W.machineScript(k);
   ok(ks.s.runs.length === k.data.balls && ks.s.runs.every((r) => r.hits.length === k.data.levels) && ks.s.last === k.answer.bucket, "máquina: la simulación no coincide con la respuesta");
   ok(ks.balls.every((b, j) => j === 0 || b.start >= ks.balls[j - 1].landAt), "máquina: las bolas se solapan");
-  const pr = { game_style: "world", format: f, challenges: [m, k, E.makeChallenge({ category: "error", mechanic: "room_error", difficulty: d, seed: `wr${i}` })], config: {} }, tw = E.timeline(pr);
+  const pr = { game_style: "world", format: f, challenges: [m, k, MK({ category: "error", mechanic: "room_error", difficulty: d, seed: `wr${i}` })], config: {} }, tw = E.timeline(pr);
   ok(tw.events.every((e) => e.t >= 0 && e.t <= tw.duration), "Playable World: sonido fuera del vídeo");
   ok(tw.segments.filter((x) => x.type === "map").length === 2 && tw.segments[0].type === "intro", "Playable World: faltan la portada o el mapa");
 }

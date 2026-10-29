@@ -3,7 +3,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
-import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, makeChallenge, projectStrings, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
+import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, makeChallenge, projectStrings, QUIZ_TOPICS, CATEGORY_ORDER as RETOS_CLASSIC, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 import { WORLD } from "../../../web/retos/world.js";
 const WORLD_MECH = new Set(Object.keys(WORLD));
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
@@ -187,6 +187,7 @@ async function runStep(job: Job) {
     case "retos_assets": return stepRetosAssets(job);
     case "audio_asset": return stepAudioAsset(job);
     case "retos_generate": return stepRetosGenerate(job);
+    case "quiz_refill": return stepQuizRefill(job);
     case "planner": return stepPlanner(job);
     case "money": return stepMoney(job);
     case "audience": return stepAudience(job);
@@ -2369,18 +2370,117 @@ async function stepAudioAsset(job: Job) {
 
 // ---------- Paso: generar un vídeo de retos sin pasar por la web (automatización y pruebas) ----------
 // payload: { format: "long"|"short", category?, difficulty?, count?, minutes?, seconds?, title? } → vídeo en «Retos por revisar»
+// Temas de Reto Imposible en automático: rotan para que el canal sea variado (los largos lo mezclan todo)
+const RETO_THEMES: { key: string; label: string; categories?: string[]; game_style?: string }[] = [
+  { key: "history", label: "Historia", categories: ["history"] },
+  { key: "pix", label: "Minijuegos de Pix", game_style: "world" },
+  { key: "geography", label: "Geografía", categories: ["geography", "culture"] },
+  { key: "visual", label: "Retos visuales", categories: RETOS_CLASSIC },
+  { key: "science", label: "Ciencia y animales", categories: ["science", "animals"] },
+  { key: "general", label: "Cultura general", categories: ["general", "sports"] },
+];
+const RETO_LONG_MIX: { key: string; label: string; categories?: string[]; game_style?: string } = { key: "mix", label: "Mezcla de todo", categories: ["history", "geography", "science", "general", "animals", "sports", ...RETOS_CLASSIC] };
 async function stepRetosGenerate(job: Job) {
   const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
   if (!ch || ch.production_type !== "challenges") throw new UserError("El canal no es de retos");
   const p = job.payload ?? {};
+  const format = p.format === "short" ? "short" : "long";
+  const lang = String(ch.language ?? "es").slice(0, 2);
+  // Tema: el pedido, o en automático el siguiente de la rotación (los largos, mezcla de todo)
+  let theme = p.theme ? (RETO_THEMES.find((t) => t.key === p.theme) ?? (p.theme === "mix" ? RETO_LONG_MIX : null)) : null;
+  if (!theme && p.auto) {
+    if (format === "long") theme = RETO_LONG_MIX;
+    else {
+      const { data: last } = await sb.from("videos").select("retos").eq("channel_id", ch.id).eq("engine", "challenges").eq("format", "short").order("created_at", { ascending: false }).limit(1);
+      const prevKey = last?.[0]?.retos?.theme;
+      const i = RETO_THEMES.findIndex((t) => t.key === prevKey);
+      theme = RETO_THEMES[(i + 1) % RETO_THEMES.length];
+    }
+  }
+  // Preguntas tipo test del banco (sin repetir en el canal)
+  const quizTopics = (theme?.categories ?? (p.category ? [p.category] : [])).filter((c) => (QUIZ_TOPICS as Record<string, unknown>)[c]);
+  // deno-lint-ignore no-explicit-any
+  let quiz: any[] = [];
+  if (quizTopics.length) {
+    const per = format === "short" ? 4 : 6;
+    for (const t of quizTopics) {
+      const { data: qs } = await sb.from("quiz_bank").select("id,topic,difficulty,q,correct,wrong,explanation,used_by").eq("lang", lang).eq("topic", t).not("used_by", "cs", `{${ch.id}}`).order("created_at").limit(per);
+      quiz.push(...(qs ?? []));
+      const { count } = await sb.from("quiz_bank").select("id", { count: "exact", head: true }).eq("lang", lang).eq("topic", t).not("used_by", "cs", `{${ch.id}}`);
+      if ((count ?? 0) < 12) {
+        const { count: pend } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "quiz_refill").in("status", ["queued", "running"]).contains("payload", { topic: t, lang });
+        if (!pend) await enqueue("quiz_refill", { channel_id: ch.id, payload: { topic: t, lang } });
+      }
+    }
+    // Un tema solo de preguntas sin preguntas todavía: se espera a que el banco se rellene
+    const onlyQuiz = (theme?.categories ?? []).every((c) => (QUIZ_TOPICS as Record<string, unknown>)[c]);
+    if (!quiz.length && onlyQuiz) { await enqueue("retos_generate", { channel_id: ch.id, payload: { ...p, theme: theme?.key }, delaySec: 240 }); await log(job, `Retos de ${theme?.label}: preparando preguntas nuevas`); return; }
+  }
   const { data: hist } = await sb.from("challenge_history").select("signature").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(1500);
-  const project = buildProject({ game_style: p.game_style ?? ch.retos_config?.game_style, format: p.format === "short" ? "short" : "long", category: p.category ?? "mixed", difficulty: p.difficulty ?? "progressive", count: Number(p.count) || 0, minutes: Number(p.minutes) || undefined, seconds: Number(p.seconds) || undefined, history: (hist ?? []).map((x) => x.signature), config: ch.retos_config, seed: `${ch.id}-${Date.now()}`, title: p.title });
+  const gameStyle = theme?.game_style ?? (theme ? "classic" : (p.game_style ?? ch.retos_config?.game_style));
+  const project = buildProject({ game_style: gameStyle, format, category: theme ? undefined : (p.category ?? "mixed"), categories: theme?.categories, difficulty: p.difficulty ?? "progressive", count: Number(p.count) || 0, minutes: Number(p.minutes) || undefined, seconds: Number(p.seconds) || undefined, history: (hist ?? []).map((x) => x.signature), config: ch.retos_config, seed: `${ch.id}-${Date.now()}`, title: p.title, quiz });
+  // deno-lint-ignore no-explicit-any
+  if (theme) (project as any).theme = theme.key;
   const val = validateProject(project);
   if (!val.ok) throw new Error(`Generación inválida: ${val.errors[0]}`);
-  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: project.format, title: project.title, idea_title: project.title, retos: project, usage: {}, target_minutes: project.format === "long" ? Number(p.minutes) || 8 : null }).select("id").single();
+  // Preguntas usadas: no se repiten en este canal
+  // deno-lint-ignore no-explicit-any
+  const usedQ = project.challenges.map((c: any) => c.data?.qid).filter(Boolean);
+  for (const id of usedQ) { const q = quiz.find((x) => x.id === id); await sb.from("quiz_bank").update({ used_by: [...(q?.used_by ?? []), ch.id] }).eq("id", id); }
+  // Título, texto de la portada y descripción llamativos (IA con el estudio de YouTube del canal)
+  let pack: { title: string; screen_title?: string; description: string; tags: string[] } | null = null;
+  if (!p.title) { try { pack = await packageRetos(ch, project, theme?.label ?? "Retos variados"); } catch (e) { await log(job, `Título de retos con IA no disponible: ${(e as Error).message}`, "warn"); } }
+  if (pack?.screen_title) project.title = pack.screen_title;
+  const title = pack?.title ?? project.title;
+  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: project.format, title, idea_title: title, description: pack?.description ?? null, tags: pack?.tags ?? [], retos: project, usage: {}, target_minutes: project.format === "long" ? Number(p.minutes) || 8 : null }).select("id").single();
   if (error) throw new Error(error.message);
   if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
-  await log({ ...job, video_id: v.id }, `Retos generados (${project.challenges.length}): «${project.title}». Revísalos antes de montar.`);
+  await log({ ...job, video_id: v.id }, `Retos generados (${project.challenges.length}${theme ? `, ${theme.label}` : ""}): «${title}»`);
+}
+
+// ---------- Banco de preguntas tipo test: Sonnet las escribe y Haiku las comprueba a ciegas (solo se guardan las que acierta) ----------
+const QUIZ_TOOL = { name: "preguntas", description: "Preguntas tipo test", input_schema: { type: "object", required: ["items"], properties: { items: { type: "array", items: { type: "object", required: ["q", "correct", "wrong", "explanation", "difficulty"], properties: {
+  q: { type: "string", description: "Pregunta, máximo 95 caracteres" }, correct: { type: "string", description: "Respuesta correcta, máximo 32 caracteres" },
+  wrong: { type: "array", items: { type: "string" }, description: "3 respuestas falsas pero creíbles, del mismo tipo que la correcta, máximo 32 caracteres" },
+  explanation: { type: "string", description: "Dato que lo explica, una frase de máximo 85 caracteres" }, difficulty: { type: "string", enum: ["easy", "medium", "hard", "extreme"] }, source: { type: "string", description: "Artículo de Wikipedia que lo documenta" },
+} } } } } };
+async function stepQuizRefill(job: Job) {
+  const topic = String(job.payload?.topic ?? "general"), lang = String(job.payload?.lang ?? "es");
+  // deno-lint-ignore no-explicit-any
+  const T = (QUIZ_TOPICS as any)[topic]; if (!T) throw new UserError(`Tema desconocido: ${topic}`);
+  const { data: prev } = await sb.from("quiz_bank").select("q").eq("lang", lang).eq("topic", topic).order("created_at", { ascending: false }).limit(200);
+  const r = await claudeTool(MODEL_FAST, `Eres guionista de un canal de YouTube de retos y trivia para todos los públicos (España y Latinoamérica). Escribes preguntas tipo test en ${LANG_NAME[lang] ?? lang} sobre ${T.label}. Solo hechos indiscutibles y verificables en Wikipedia, con UNA única respuesta correcta sin ambigüedad. Nada que cambie con el tiempo («actualmente», récords vigentes, población actual). Nada político, violento ni sensible. Preguntas que sorprendan y apetezca acertar.`,
+    `Escribe 30 preguntas de ${T.label}: 8 fáciles, 10 de dificultad media, 8 difíciles y 4 extremas. Las respuestas falsas tienen que ser del mismo tipo (si la correcta es un año, las falsas son años cercanos; si es un país, países de la misma zona). Varía mucho los temas.\n\nYa existen (no las repitas ni las parafrasees):\n${(prev ?? []).map((x) => `- ${x.q}`).join("\n") || "-"}`,
+    QUIZ_TOOL, 9000);
+  // deno-lint-ignore no-explicit-any
+  const items: any[] = (r.input?.items ?? []).filter((x: any) => x?.q && x.correct && Array.isArray(x.wrong) && x.wrong.length >= 3 && String(x.q).length <= 110 && [x.correct, ...x.wrong].every((o: string) => String(o).length <= 40) && new Set([x.correct, ...x.wrong.slice(0, 3)].map((o: string) => String(o).trim().toLowerCase())).size === 4);
+  if (!items.length) throw new Error("No salieron preguntas válidas");
+  // Comprobación a ciegas: Haiku responde sin saber cuál es la buena; solo se guardan las que coinciden
+  const lettered = items.map((x, i) => { const opts = [x.correct, ...x.wrong.slice(0, 3)].sort(() => Math.random() - 0.5); return { i, opts, ans: opts.indexOf(x.correct) }; });
+  const chk = await claudeTool(MODEL_CHEAP, "Respondes preguntas tipo test con la herramienta. Si no estás seguro o hay más de una respuesta válida, contesta -1.", lettered.map((l) => `${l.i}. ${items[l.i].q}\n${l.opts.map((o: string, k: number) => `   ${k}) ${o}`).join("\n")}`).join("\n"),
+    { name: "respuestas", description: "Respuestas", input_schema: { type: "object", required: ["answers"], properties: { answers: { type: "array", items: { type: "object", required: ["i", "a"], properties: { i: { type: "integer" }, a: { type: "integer" } } } } } } }, 3000);
+  const ok = new Set<number>();
+  for (const a of chk.input?.answers ?? []) { const l = lettered.find((x) => x.i === a.i); if (l && a.a === l.ans) ok.add(a.i); }
+  const rows = items.filter((_, i) => ok.has(i)).map((x) => ({ lang, topic, difficulty: ["easy", "medium", "hard", "extreme"].includes(x.difficulty) ? x.difficulty : "medium", q: String(x.q).trim(), correct: String(x.correct).trim(), wrong: x.wrong.slice(0, 3).map((o: string) => String(o).trim()), explanation: String(x.explanation ?? "").trim().slice(0, 100), source: x.source ?? null }));
+  if (rows.length) await sb.from("quiz_bank").insert(rows);
+  await log(job, `Banco de preguntas de ${T.label}: ${rows.length} nuevas (de ${items.length}; ${items.length - rows.length} descartadas en la comprobación)`);
+}
+
+// ---------- Título y descripción de un vídeo de retos (con el estudio de YouTube del canal si lo hay) ----------
+// deno-lint-ignore no-explicit-any
+async function packageRetos(ch: any, project: any, themeLabel: string) {
+  const P = ch.packaging;
+  const { data: prev } = await sb.from("videos").select("title").eq("channel_id", ch.id).not("title", "is", null).order("created_at", { ascending: false }).limit(20);
+  // deno-lint-ignore no-explicit-any
+  const sample = project.challenges.slice(0, 6).map((c: any) => `- ${c.question}${c.answer?.label ? ` (respuesta: ${c.answer.label})` : ""}`).join("\n");
+  const tool = { name: "empaquetado", description: "Título y descripción", input_schema: { type: "object", required: ["candidates", "title", "screen_title", "description", "tags"], properties: {
+    candidates: { type: "array", items: { type: "string" }, description: "8 títulos distintos" }, title: { type: "string", description: "El mejor, máximo 60 caracteres" },
+    screen_title: { type: "string", description: "Texto corto para la portada dentro del vídeo, máximo 34 caracteres" }, description: { type: "string" }, tags: { type: "array", items: { type: "string" }, maxItems: 15 } } } };
+  const r = await claudeTool(MODEL_FAST, `Escribes títulos y descripciones de YouTube ${project.format === "short" ? "Shorts" : ""} para «${ch.name}», un canal de retos y preguntas para todos los públicos (España y Latinoamérica) con la mascota Pix. Títulos que retan al espectador y dan ganas de jugar, concretos y distintos entre sí; nada de títulos genéricos tipo «¿Lo resuelves a tiempo?» o «¿Puedes superar los 3 niveles?». Nunca prometas algo que el vídeo no tiene.`,
+    `${P?.title_rules ? `ESTUDIO REAL DE YOUTUBE PARA ESTE NICHO:\n${P.summary}\nReglas:\n- ${(P.title_rules ?? []).join("\n- ")}\nTítulos con más visitas:\n${(P.sample ?? []).slice(0, 12).map((x: { title: string; views: number }) => `- «${x.title}» (${x.views.toLocaleString("es-ES")})`).join("\n")}\n\n` : ""}VÍDEO: ${project.format === "short" ? "Short" : "vídeo largo"} de ${themeLabel}, ${project.challenges.length} retos.\nRetos:\n${sample}\n\nTítulos recientes del canal (no repitas su estructura):\n${(prev ?? []).map((x) => `- ${x.title}`).join("\n") || "-"}\n\nEscribe 8 títulos candidatos (ideas: el dato de que poca gente acierta, comparar con un nivel o edad, «${themeLabel}» concreto, una pregunta del vídeo como gancho…), elige el mejor, un texto corto para la portada del vídeo y una descripción de 2-3 líneas que invite a jugar y a comentar cuántas acertó, con 3-5 hashtags al final (#shorts si es Short).`,
+    tool, 2000);
+  const t = String(r.input?.title ?? "").trim(); if (!t) return null;
+  return { title: t.slice(0, 100), screen_title: String(r.input?.screen_title ?? "").trim().slice(0, 40) || undefined, description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15) };
 }
 
 // ======================================================================================================
@@ -3029,7 +3129,7 @@ async function stepResearch(job: Job) {
   }
   for (const [i, c] of (chs ?? []).entries()) {
     await enqueue("advise", { channel_id: c.id, delaySec: 20 + i * 5 });
-    if (c.production_type !== "challenges") await enqueue("packaging_study", { channel_id: c.id, delaySec: 60 + i * 30 });
+    await enqueue("packaging_study", { channel_id: c.id, delaySec: 60 + i * 30 });
   }
   await log(job, done ? `Estudio global de horarios actualizado (${done} idioma${done > 1 ? "s" : ""})` : "Estudio global de horarios: al día");
 }

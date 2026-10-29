@@ -1,7 +1,7 @@
 // Motor B — dibujo 2D de los retos con la API Canvas (igual en el navegador y en el servidor con node-canvas).
 // Estética de videojuego casual: fondos claros por tipo de juego, tarjetas blancas con sombra suave,
 // figuras grandes, temporizador limpio y revelaciones progresivas. Nada de imágenes generadas.
-import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr, solvedAt } from "./engine.js";
+import { mergeTheme, mergeConfig, PALETTE, FLAGS, DIFF_LABEL, REVEAL_FIRST, REVEAL_STEP, hashStr, solvedAt, QUIZ_TOPICS } from "./engine.js";
 import { drawWorldScene, isWorldMechanic } from "./world-draw.js";
 import { drawPix } from "./pix.js";
 import { uiOf, tr } from "./i18n.js";
@@ -248,6 +248,24 @@ const TPL = {
   },
   seqNumbers(ctx, c, b, L, P, st) { seqTiles(ctx, c, b, L, P, st, [...c.data.shown.map(String), null], (v, w, h) => fitText(ctx, v, 0, 4, h * 0.46, w * 0.78, P.cardInk)); },
   seqShapes(ctx, c, b, L, P, st) { seqTiles(ctx, c, b, L, P, st, [...c.data.shown, null], (it, w, h) => item(ctx, it.icon, 0, 0, Math.min(w, h) * 0.32, it.color, it.rot)); },
+  // Pregunta tipo test: tarjeta del tema (color, «?» grande y nombre del tema); la pregunta va arriba y las opciones debajo
+  quiz(ctx, c, b, L, P, st) {
+    const s = eBack(st.appear), T = QUIZ_TOPICS[c.data.topic] || QUIZ_TOPICS.general;
+    const h = Math.min(b.h * 0.92, b.w * 0.62), w = Math.min(b.w * 0.9, h * 1.6);
+    ctx.save(); ctx.translate(b.x + b.w / 2, b.y + b.h / 2); zs(ctx, s, s);
+    card(ctx, P, -w / 2, -h / 2, w, h, 34, mix(P.card, T.color, 0.14));
+    const r0 = h * 0.26; ctx.beginPath(); ctx.arc(0, -h * 0.1, r0, 0, 7); ctx.fillStyle = T.color; ctx.fill();
+    const rv = revealK(st, 0);
+    if (rv > 0) check(ctx, 0, -h * 0.1, r0 * 0.7, "#FFFFFF"); else text(ctx, "?", 0, -h * 0.1 + r0 * 0.06, r0 * 1.25, "#FFFFFF");
+    const ex = TR(c.explanation || "");
+    if (rv > 0 && ex) {
+      // Al revelar: la explicación en lugar del nombre del tema
+      const fs = h * 0.075, ls = wrap(ctx, ex, w * 0.86, fs).slice(0, 3);
+      ctx.globalAlpha = clamp(rv * 2);
+      ls.forEach((ln, i) => fitText(ctx, ln, 0, h * 0.27 + (i - (ls.length - 1) / 2) * fs * 1.2, fs, w * 0.88, mix(T.color, "#000000", 0.35)));
+    } else fitText(ctx, TR(T.label).toUpperCase(), 0, h * 0.3, h * 0.13, w * 0.86, mix(T.color, "#000000", 0.25));
+    ctx.restore();
+  },
   // Cultura: bandera grande en su marco
   flag(ctx, c, b, L, P, st) {
     const s = eBack(st.appear); const fw = Math.min(b.w * 0.86, (b.h - 40) * 1.5), fh = fw / 1.5;
@@ -280,7 +298,7 @@ function seqTiles(ctx, c, b, L, P, st, items, drawOne) {
   });
 }
 function figure(ctx, parts, cx, cy, size, color) { const cell = size / 3; for (const p of parts) drawIcon(ctx, p.icon, cx + (p.x - 1) * cell, cy + (p.y - 1) * cell, cell * 0.48, color, p.rot); }
-const TPL_OF = { odd_symbol: "grid", odd_color: "grid", odd_rotation: "grid", differences: "differences", memory_missing: "memory", logic_equations: "equations", sequence_number: "seqNumbers", sequence_shape: "seqShapes", flags: "flag", hidden_object: "scatter", silhouette: "silhouette", count_shapes: "scatter" };
+const TPL_OF = { quiz: "quiz", odd_symbol: "grid", odd_color: "grid", odd_rotation: "grid", differences: "differences", memory_missing: "memory", logic_equations: "equations", sequence_number: "seqNumbers", sequence_shape: "seqShapes", flags: "flag", hidden_object: "scatter", silhouette: "silhouette", count_shapes: "scatter" };
 
 // Opciones A-D: tarjetas blancas; la correcta se vuelve verde con ✓ y las demás se atenúan
 function options(ctx, c, L, P, st) {

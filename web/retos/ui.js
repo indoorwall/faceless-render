@@ -456,6 +456,7 @@ function reportLine(v) {
 window.RetosUI = {
   isRetos, producerSection, refreshSoundStatus, setGen, generate, renderEditor, channelPanel, collect, mountChannel, previewTheme, reportLine, newChannel,
   pickStyle, customBase, touchCustom, edStyle, useStyle,
+  forChannel: (id) => { RS.gen.channel = id; }, // la vista de un canal fija el canal del generador sin redibujar
   setSample: (k) => { RS.sample = k; previewTheme(); }, setStyleFmt: (k) => { RS.styleFmt = k; const p = document.getElementById("retos-panel"); p?.querySelectorAll("[onclick^=\"RetosUI.setStyleFmt\"]").forEach((b) => { b.classList.toggle("pri", b.getAttribute("onclick").includes(`'${k}'`)); b.classList.toggle("ghost", !b.getAttribute("onclick").includes(`'${k}'`)); }); previewTheme(); },
   listen, regenAudio, genMissing, uploadAudio, setVolume, restore, demo,
   toggle: () => (RS.player?.playing ? RS.player.pause() : RS.player?.play()), step, jump, seekPct: (v) => RS.player?.seek((v / 1000) * (RS.player.tl?.duration || 0)),

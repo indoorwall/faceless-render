@@ -1587,7 +1587,7 @@ ${approved.length ? `Ideas que el autor APROBÓ (busca más de este estilo, sin 
 Ya usadas o en cola (no repetir ni parafrasear la misma historia):
 ${used.slice(0, 220).map((t) => `- ${t}`).join("\n") || "-"}
 
-${list5 ? `TAREA: piensa unos 30 temas candidatos y quédate con los 20 mejores, que cumplan TODO:
+${list5 ? `TAREA: piensa unos 20 temas candidatos y quédate con los 12 mejores, que cumplan TODO:
 1. Un tema concreto y popular (un animal, una parte del cuerpo o la mente, un personaje o evento de actualidad, un objeto cotidiano…), según el reparto de temas de la guía. Nada de temas ya usados.
 2. kind: compilation, y en stories EXACTAMENTE 5 curiosidades de ese tema (title: 2-5 palabras; hook: el dato en una frase), de menos a más sorprendente. Todas reales y poco conocidas.
 3. title: el título de YouTube según la guía (dato concreto o pregunta, o «No sabías esto de…», con 1-2 emojis), menos de 60 caracteres.
@@ -1601,7 +1601,7 @@ Todas con format: short. Varía los temas entre sí. Llama a guardar_ideas.` : `
 ${want === "compilation" ? "5. TODAS deben ser recopilatorios (kind: compilation): un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\") y cada historia con su dato sorprendente." : want === "single" ? "5. Todas deben ser de una sola historia (kind: single)." : "5. Mezcla: unas 2 de cada 3 de una sola historia y 1 de cada 3 recopilatorios con un hilo común potente (\"Los 3 animales que...\", \"4 errores que...\")."}
 Varía épocas, países y tipos de historia. Llama a guardar_ideas.`}`;
   // Pedidas desde la web (now): al momento. Las automáticas de cada mañana, por lotes (la mitad de precio, pueden tardar)
-  const r = await claudeTool(MODEL_FAST, system, user, IDEAS_TOOL, 20000, job.payload?.now ? undefined : { job, tag: "ideas" });
+  const r = await claudeTool(MODEL_FAST, system, user, IDEAS_TOOL, list5 ? 32000 : 20000, job.payload?.now ? undefined : { job, tag: "ideas" });
   // A veces el modelo entrega la lista como texto JSON en vez de como array
   // deno-lint-ignore no-explicit-any
   let ideas: any = r.input?.ideas ?? [];

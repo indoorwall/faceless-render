@@ -1082,6 +1082,26 @@ function learnHtml(c,L){
 
 // ---------- Ficha del canal: automatización, calendario y presupuesto ----------
 const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final."], semi:["Semiautomático","El estudio aprueba solo las ideas y los guiones que pasan los controles de calidad y de políticas. Tú solo ves el vídeo final."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
+// ---------- Elegir la voz del canal de oído (biblioteca de ElevenLabs) ----------
+function voicePicker(c){
+  const o=c.voice_options, vs=o?.voices||[];
+  return `<div class="card" style="gap:10px"><div class="spread"><div><h3 style="margin:0">Elegir voz</h3><div class="why">Voces nativas en ${esc(c.language||"es")} de la biblioteca de ElevenLabs. Escúchalas y elige la que más te guste.${c.voice_id?` Ahora: <span class="mono">${esc(c.voice_id)}</span>`:" Ahora: la voz por defecto (inglesa)."}</div></div>
+    <div class="row"><button class="btn sm" onclick="searchVoices('${c.id}','female')">Buscar voces de chica</button><button class="btn sm ghost" onclick="searchVoices('${c.id}','male')">De chico</button></div></div>
+    ${vs.length?`<div class="list">${vs.map((v,i)=>`<div class="spread" style="gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:8px"><div style="min-width:0;flex:1"><b>${esc(v.name)}</b> <span class="muted" style="font-size:12px">${esc([v.accent,v.age,v.use_case].filter(Boolean).join(" · "))}</span><div class="why" style="margin:2px 0 6px">${esc(v.description||"")}</div><audio controls preload="none" src="${esc(v.preview_url)}" style="width:100%;max-width:340px"></audio></div>${c.voice_id===v.voice_id?`<span class="chip st-ok">En uso</span>`:`<button class="btn sm pri" onclick="pickVoice('${c.id}',${i})">Usar esta voz</button>`}</div>`).join("")}</div>`:""}
+  </div>`;
+}
+async function waitChannel(id, test, tries=15){ for(let i=0;i<tries;i++){ await new Promise(r=>setTimeout(r,3000)); const {data}=await sb.from("channels").select("*").eq("id",id).single(); if(data&&test(data)){ const k=S.channels.findIndex(x=>x.id===id); if(k>=0) S.channels[k]=data; if(S.open?.c?.id===id){ Object.assign(S.open.c,{voice_options:data.voice_options,voice_id:data.voice_id}); const el=document.getElementById("voice-picker"); if(el) el.innerHTML=voicePicker(S.open.c); } return data; } } return null; }
+async function searchVoices(id, gender){
+  const prev=ch(id).voice_options?.at;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"voice_search",channel_id:id,payload:{gender}}); if(error) throw error; await kick(); }, "Buscando voces…");
+  if(!await waitChannel(id, d=>d.voice_options?.at && d.voice_options.at!==prev)) toast("Tarda más de lo normal: vuelve a abrir el canal en un minuto.");
+}
+async function pickVoice(id, i){
+  const v=(S.open?.c?.voice_options||ch(id).voice_options)?.voices?.[i]; if(!v) return;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"voice_pick",channel_id:id,payload:{voice_id:v.voice_id,owner:v.owner,name:v.name}}); if(error) throw error; await kick(); }, `Poniendo la voz «${v.name}»…`);
+  const d=await waitChannel(id, d=>d.voice_id && d.voice_id!==ch(id).voice_id);
+  if(d){ const inp=document.getElementById("c-voice"); if(inp) inp.value=d.voice_id; toast(`Voz «${v.name}» puesta en el canal`); } else toast("Tarda más de lo normal: revisa el canal en un minuto.");
+}
 // ---------- Calendario recomendado (público del canal + lo aprendido + estudio global) ----------
 const DAYS_SHORT=["dom","lun","mar","mié","jue","vie","sáb"];
 const COUNTRY={ES:"España",MX:"México",AR:"Argentina",CO:"Colombia",PE:"Perú",CL:"Chile",VE:"Venezuela",EC:"Ecuador",US:"EE. UU.",BR:"Brasil",PT:"Portugal",GB:"Reino Unido",CA:"Canadá",AU:"Australia",IN:"India",PH:"Filipinas",FR:"Francia",DE:"Alemania",IT:"Italia"};
@@ -1184,6 +1204,7 @@ function renderChannelSheet(first){
     <label class="f full">Tono y voz editorial <small>Tu sello: opiniones, estructura, muletillas, lo que nunca harías</small><textarea id="c-tone" rows="3">${esc(c.tone)}</textarea></label>
     <label class="f full">Estilo visual <small>En inglés funciona mejor</small><textarea id="c-style" rows="2" placeholder="cinematic documentary, muted colors, 35mm film grain">${esc(c.style_prompt)}</textarea></label>
     <label class="f">Voz de ElevenLabs <small>Voice ID de tu librería</small><input type="text" id="c-voice" value="${esc(c.voice_id)}" class="mono"></label>
+    ${c.id?`<div class="full" id="voice-picker">${voicePicker(c)}</div>`:""}
     <label class="f">Ideas por tanda<input type="number" id="c-ipr" min="1" max="10" value="${esc(c.ideas_per_run)}"></label>
     <label class="f" style="display:none">Exigencia del director <small>Interviene si el borrador saca menos</small><select id="c-dir">${[[7,"7/10 · interviene poco"],[8,"8/10 · equilibrado"],[9,"9/10 · casi siempre"],[11,"Siempre"]].map(([k,l])=>`<option value="${k}" ${Number(c.director_threshold??8)===k?"selected":""}>${l}</option>`).join("")}</select></label>
     <label class="f full">Canales de referencia <small>IDs de canal (empiezan por UC), separados por comas</small><input type="text" id="c-refs" value="${esc((c.reference_channels||[]).join(", "))}" class="mono"></label>

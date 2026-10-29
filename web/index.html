@@ -314,7 +314,7 @@ const STATUS = {
 const ICON = {
   hoy:'<path d="M4 13h4l2 3h4l2-3h4M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
   canales:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
-  descubrir:'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M11 8v6M8 11h6"/>',
+  dinero:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.6-1-1.7-1.5-3-1.5-1.7 0-3 .9-3 2.2 0 3 6 1.6 6 4.6 0 1.3-1.3 2.2-3 2.2-1.4 0-2.6-.6-3.1-1.6M12 6v2M12 16v2"/>',
   ajustes:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
 };
 
@@ -469,7 +469,7 @@ async function run(fn, ok){
 async function load(){
   const [c,v,p,a,k,pr,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
-    sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage,engine").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,published_at,error,created_at,updated_at,usage,engine,revenue,stats").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     Promise.resolve({data:[]}), // «Descubrir» retirado: ya no se consultan propuestas
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
@@ -486,7 +486,7 @@ function render(){
   if(!S.session){ $("#root").innerHTML = authView(); bindAuth(); return; }
   const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
   const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
-  const views = {hoy:["Revisar",reviewCount],canales:["Canales",0],ajustes:["Ajustes",missing]};
+  const views = {hoy:["Revisar",reviewCount],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
   const scrollY = window.scrollY;
   $("#root").innerHTML = `<div class="app">
     <nav class="rail">
@@ -494,7 +494,7 @@ function render(){
       ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
       <div class="foot">${esc(S.session.user.email)}</div>
     </nav>
-    <main><div class="wrap">${ ({hoy:viewHoy,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+    <main><div class="wrap">${ ({hoy:viewHoy,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
@@ -556,6 +556,24 @@ const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="ope
 const pubCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`;
 const upcoming = (cid) => S.videos.filter(v=>v.channel_id===cid&&["publishing","scheduled"].includes(v.status)&&v.publish_at&&new Date(v.publish_at)>Date.now()).sort((a,b)=>new Date(a.publish_at)-new Date(b.publish_at));
 const whenTxt = (d) => new Date(d).toLocaleString("es-ES",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Madrid"});
+// Salud del canal frente a las políticas de YouTube (contenido repetitivo, ritmo, transparencia)
+function healthCard(c){
+  const tw=(t)=>new Set(String(t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9ñ ]+/g," ").split(/\s+/).filter(w=>w.length>3));
+  const jac=(a,b)=>{ if(!a.size||!b.size) return 0; let i=0; for(const x of a) if(b.has(x)) i++; return i/(a.size+b.size-i); };
+  const recent=S.videos.filter(v=>v.channel_id===c.id&&["published","scheduled","publishing","final_review"].includes(v.status)&&!v.derived).slice(0,40);
+  let dups=0; for(let i=0;i<recent.length;i++) for(let j=i+1;j<recent.length;j++) if(jac(tw(recent[i].title),tw(recent[j].title))>=0.6) dups++;
+  const s={long_per_week:2,shorts_per_week:7,...(c.schedule||{})}, retos=isRetosCh(c);
+  const items=[
+    [!!c.youtube_connected, c.youtube_connected?"YouTube conectado":"Conecta el canal de YouTube para publicar y aprender de sus métricas"],
+    [dups===0, dups?`${dups} pareja${dups>1?"s":""} de títulos muy parecidos: YouTube penaliza el contenido repetitivo`:"Títulos variados"],
+    [s.shorts_per_week<=21&&s.long_per_week<=7, `Ritmo: ${s.long_per_week} largos y ${s.shorts_per_week} Shorts por semana${s.shorts_per_week>21?" (demasiados: parece spam)":""}`],
+    [retos||c.ai_disclosure_default!==false, retos?"Retos dibujados: no hace falta declarar IA":(c.ai_disclosure_default!==false?"Se declara el contenido sintético (IA)":"No se declara el contenido sintético: actívalo si usas imágenes realistas generadas")],
+    [retos||!!(c.style_guide||c.tone), retos?"Variedad: 6 tipos de juego y retos nunca repetidos":(c.style_guide||c.tone?"Voz editorial propia (guía o tono definidos)":"Define el tono o la guía: el contenido sin aportación propia no se monetiza")],
+  ];
+  const bad=items.filter(x=>!x[0]).length;
+  return `<details class="card" ${bad?"open":""}><summary class="spread" style="cursor:pointer;list-style:none"><div><h3 style="margin:0">Salud del canal</h3><div class="why">Políticas de monetización de YouTube</div></div><span class="chip ${bad?"st-warn":"st-ok"}">${bad?`${bad} aviso${bad>1?"s":""}`:"Todo en orden"}</span></summary>
+    <div class="list" style="gap:6px;margin-top:8px">${items.map(([ok,t])=>`<div class="row" style="gap:8px;align-items:flex-start"><span class="chip ${ok?"st-ok":"st-warn"}">${ok?"✓":"!"}</span><span style="font-size:14px">${esc(t)}</span></div>`).join("")}</div></details>`;
+}
 function viewHoy(){
   if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal para empezar.</p></div></div>
     <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button></div>
@@ -611,6 +629,7 @@ function viewChannelReview(c){
       <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
     </div>
     ${(()=>{ const u=upcoming(c.id); return `<section><div class="sec-h"><h2>Próximas publicaciones</h2><span class="mono">${u.length}</span><span class="chip">${({manual:"Manual",semi:"Semiautomático",auto:"Automático"})[c.autopilot||"manual"]}</span></div>${u.length?`<div class="ilist">${u.slice(0,10).map(v=>`<button class="irow" onclick="openVideo('${v.id}')"><span>${esc(v.title||v.idea_title)}</span><span class="muted">${v.format==="short"?"Short":"Largo"} · ${whenTxt(v.publish_at)}</span></button>`).join("")}</div>`:`<div class="empty" style="padding:14px">No hay nada programado. Los vídeos que apruebes sin fecha irán al siguiente hueco del calendario${c.autopilot&&c.autopilot!=="manual"?"; en este modo el estudio también mantiene la cola llena":""}.</div>`}</section>`; })()}
+    ${healthCard(c)}
     ${retos&&window.RetosUI?RetosUI.producerSection():""}
     ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div></section>`:""}
     <section><div class="sec-h"><h2>Vídeos por aprobar</h2><span class="mono">${finals.length}</span></div>
@@ -700,6 +719,36 @@ function viewCanales(){
     </div>`;}).join("")}</div>`:`<div class="empty">Aún no hay canales. Crea uno para empezar.</div>`}`;
 }
 
+// --- Vista: Dinero (ingresos de YouTube, coste real, beneficio y camino a la monetización)
+function viewDinero(){
+  const D30=Date.now()-30*86400000;
+  const rows=S.channels.map(c=>{
+    const vs=S.videos.filter(v=>v.channel_id===c.id), y=c.yt_stats||{};
+    const cost30=vs.filter(v=>new Date(v.created_at)>D30).reduce((a,v)=>a+(costOf(v.usage)?.total||0),0);
+    const costAll=vs.reduce((a,v)=>a+(costOf(v.usage)?.total||0),0);
+    const rev30=Number(y.revenue_30||0), rev365=Number(y.revenue_365||0);
+    const topV=vs.filter(v=>v.revenue?.eur!=null||v.youtube_video_id).map(v=>({v,rev:Number(v.revenue?.eur||0),cost:costOf(v.usage)?.total||0})).sort((a,b)=>(b.rev-b.cost)-(a.rev-a.cost)).slice(0,5);
+    return {c,y,cost30,costAll,rev30,rev365,topV,pub:vs.filter(v=>["published","scheduled"].includes(v.status)).length};
+  });
+  const T=rows.reduce((a,r)=>({rev30:a.rev30+r.rev30,cost30:a.cost30+r.cost30,rev365:a.rev365+r.rev365,costAll:a.costAll+r.costAll}),{rev30:0,cost30:0,rev365:0,costAll:0});
+  const prog=(n,goal,label,fmt)=>{ const k=Math.min(1,(Number(n)||0)/goal); return `<div><div class="spread" style="font-size:13px"><span>${label}</span><span class="mono">${fmt(Number(n)||0)} / ${fmt(goal)}</span></div><div class="bar"><i style="width:${Math.round(k*100)}%;${k>=1?"background:var(--ok)":""}"></i></div></div>`; };
+  const n0=(x)=>Math.round(x).toLocaleString("es-ES");
+  const tile=(v,l,col)=>`<div class="tile"><b style="${col?`color:${col}`:""}">${v}</b><span>${l}</span></div>`;
+  return `<div class="head"><div><h1>Dinero</h1><p>Lo que ingresa cada canal, lo que cuesta producirlo y cuánto le falta para monetizar. Los ingresos llegan de YouTube cada mañana.</p></div></div>
+    <div class="card"><div class="tiles">${tile(eur(T.rev30),"Ingresos · 30 días")}${tile(eur(T.cost30),"Coste · 30 días")}${tile(eur(T.rev30-T.cost30),"Beneficio · 30 días",T.rev30-T.cost30>=0?"var(--ok)":"var(--bad)")}${tile(eur(T.rev365),"Ingresos · 12 meses")}${tile(eur(T.costAll),"Coste total producido")}</div></div>
+    ${rows.map(({c,y,cost30,costAll,rev30,rev365,topV,pub})=>{
+      const mon=y.monetary===true, noPerm=y.monetary===false;
+      const ypp=(y.subs||0)>=1000&&((y.long_hours_365||0)>=4000||(y.shorts_views_90||0)>=1e7);
+      return `<section class="chblock" style="--c:${esc(c.color||"#888")}">
+        <div class="chblock-h"><div class="chname"><span class="dot"></span><h2>${esc(c.name)}</h2></div><div class="row">${ypp?`<span class="chip st-ok">Cumple los requisitos de monetización</span>`:`<span class="chip">Camino a la monetización</span>`}<span class="muted" style="font-size:12px">${c.yt_stats_at?`Datos de ${ago(c.yt_stats_at)}`:c.youtube_connected?"Llegan mañana":"Sin YouTube conectado"}</span></div></div>
+        <div class="tiles">${tile(mon?eur(rev30):"—","Ingresos · 30 días")}${tile(eur(cost30),"Coste · 30 días")}${tile(mon?eur(rev30-cost30):"—","Beneficio · 30 días",mon?(rev30-cost30>=0?"var(--ok)":"var(--bad)"):"")}${tile(y.rpm!=null?eur(y.rpm):"—","RPM (por 1.000 vistas)")}${tile(n0(y.subs||0),"Suscriptores")}${tile(String(pub),"Vídeos publicados")}</div>
+        ${noPerm?`<div class="why">Sin datos de ingresos: ${c.youtube_connected?"pulsa «Reconectar YouTube» en el canal para dar el permiso de ingresos (o el canal aún no está monetizado).":"conecta el canal de YouTube."}</div>`:""}
+        <div class="fgrid">
+          <div class="list" style="gap:8px">${prog(y.subs,1000,"Suscriptores",n0)}${prog(y.long_hours_365,4000,"Horas de vídeos largos (12 meses)",n0)}<div class="muted" style="font-size:12px">o bien</div>${prog(y.shorts_views_90,1e7,"Vistas de Shorts (90 días)",(x)=>x>=1e6?(x/1e6).toLocaleString("es-ES",{maximumFractionDigits:1})+" M":n0(x))}</div>
+          <div>${topV.length?`<div class="label" style="margin-bottom:6px">Vídeos más rentables</div><div class="ilist">${topV.map(({v,rev,cost})=>`<button class="irow" onclick="openVideo('${v.id}')"><span>${esc(v.title||v.idea_title)}</span><span class="muted">${mon?`${eur(rev)} − ${eur(cost)} = <b style="color:${rev-cost>=0?"var(--ok)":"var(--bad)"}">${eur(rev-cost)}</b>`:`coste ${eur(cost)}`}</span></button>`).join("")}</div>`:`<div class="empty" style="padding:12px">Aún no hay vídeos publicados con datos.</div>`}</div>
+        </div>
+      </section>`; }).join("")}`;
+}
 // --- Vista: Ajustes
 function viewAjustes(){
   return `<div class="head"><div><h1>Ajustes</h1><p>Las claves se guardan cifradas en tu base de datos. Desde aquí solo se pueden escribir, nunca leer.</p></div></div>
@@ -799,7 +848,7 @@ function renderSheet(first){
       ${autoBanner(v)}
       <div class="fgrid"><label class="f">Programar publicación <small>Vacío = siguiente hueco del calendario del canal</small><input type="datetime-local" id="f-at" value="${pa}"></label>
       <label class="check" style="align-self:end"><input type="checkbox" id="f-now"> Publicar ya, sin esperar al calendario</label>
-      <label class="check" style="align-self:end"><input type="checkbox" id="f-ai" ${v.ai_disclosure?"checked":""}> Declarar contenido sintético (IA)</label></div>
+      <label class="check" style="align-self:end"><input type="checkbox" id="f-ai" ${(v.ai_disclosure ?? (v.engine!=="challenges" && c.ai_disclosure_default!==false))?"checked":""}> Declarar contenido sintético (IA) <small class="muted">YouTube lo exige si las imágenes realistas son generadas</small></label></div>
       <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span> Descárgalo, súbelo a mano y márcalo como publicado.`}</p>
       ${c.youtube_connected?"":`<label class="f">Enlace del vídeo en YouTube <small>Opcional: con él la IA aprende de sus visitas</small><input type="url" id="f-yt" placeholder="https://youtu.be/…"></label>`}
       <label class="f">Si no te convence <small>Describe qué cambiar y se reescribe el guion</small><textarea id="f-fb" rows="2"></textarea></label>`;
@@ -1208,14 +1257,14 @@ async function saveKey(name){
 async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
 
 // ---------- arranque ----------
-function route(){ const h=location.hash.slice(1); S.view=["hoy","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+function route(){ const h=location.hash.slice(1); S.view=["hoy","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{
   const was=!!S.session; S.session=session;
   if(session && !was){
-    const h=location.hash.slice(1); S.view=["hoy","canales","ajustes"].includes(h)?h:"hoy";
+    const h=location.hash.slice(1); S.view=["hoy","dinero","canales","ajustes"].includes(h)?h:"hoy";
     load();
     channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)

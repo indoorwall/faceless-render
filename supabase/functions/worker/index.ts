@@ -188,6 +188,7 @@ async function runStep(job: Job) {
     case "audio_asset": return stepAudioAsset(job);
     case "retos_generate": return stepRetosGenerate(job);
     case "planner": return stepPlanner(job);
+    case "money": return stepMoney(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
   }
@@ -1658,7 +1659,7 @@ async function stepMetrics(job: Job) {
   // Canales conectados con su cuenta de YouTube: analíticas completas (retención, fuentes de tráfico…) y aprenden de ellas
   const { data: conn } = await sb.from("youtube_tokens").select("channel_id");
   const connected = new Set((conn ?? []).map((x) => x.channel_id));
-  for (const id of connected) await enqueue("analytics", { channel_id: id });
+  for (const id of connected) { await enqueue("analytics", { channel_id: id }); await enqueue("money", { channel_id: id, delaySec: 60 }); }
   // El resto, una vez por semana y canal, aprende solo de las métricas públicas
   const byCh = new Map<string, typeof list>();
   for (const v of list) { if (!byCh.has(v.channel_id)) byCh.set(v.channel_id, []); byCh.get(v.channel_id)!.push(v); }
@@ -2420,7 +2421,7 @@ async function stepClips(job: Job) {
   const tool = { name: "cortes", description: "Tramos elegidos para Shorts", input_schema: { type: "object", required: ["clips"], properties: { clips: { type: "array", maxItems: 5, items: { type: "object", required: ["first", "last", "title", "hook"], properties: { first: { type: "integer" }, last: { type: "integer" }, title: { type: "string", description: "Título del Short, < 55 caracteres, concreto y con curiosidad" }, hook: { type: "string", description: "Primera línea de la descripción" } } } } } } };
   let picks: { first: number; last: number; title: string; hook: string }[] = [];
   try {
-    const r = await claudeTool(MODEL_CHEAP, `Eres editor de Shorts de YouTube. De un vídeo largo eliges tramos de escenas seguidas que funcionan solos como Short: empiezan con una frase que engancha sin contexto previo, cuentan algo completo y terminan con un remate. Escribe en ${ch.language === "en" ? "inglés" : "español"}.`, `Vídeo: «${v.title}»\nEscenas (número, duración y narración):\n${list}\n\nElige ${n} tramos distintos, sin solaparse, de 25 a 58 segundos cada uno (suma las duraciones). Llama a cortes.`, tool, 2000);
+    const r = await claudeTool(MODEL_CHEAP, `Eres editor de Shorts de YouTube. De un vídeo largo eliges los tramos MÁS sorprendentes (el dato insólito que da título al vídeo va primero) de escenas seguidas que funcionan solos como Short: empiezan con una frase que engancha sin contexto previo, cuentan algo completo y terminan con un remate. El título del Short promete lo más llamativo del tramo. Escribe en ${ch.language === "en" ? "inglés" : "español"}.`, `Vídeo: «${v.title}»\nEscenas (número, duración y narración):\n${list}\n\nElige ${n} tramos distintos, sin solaparse, de 25 a 58 segundos cada uno (suma las duraciones). Llama a cortes.`, tool, 2000);
     await bumpUsage(v.id, usageOf(r));
     picks = (r.input.clips ?? []) as typeof picks;
   } catch (e) { if (e instanceof OverBudget) throw e; }
@@ -2439,7 +2440,7 @@ async function stepClips(job: Job) {
   let made = 0;
   for (const p of chosen) {
     const part = scenes.filter((x) => x.n >= p.first && x.n <= p.last);
-    const desc = [p.hook, link ? `Historia completa: ${link}` : "", (v.description ?? "").split("\n").slice(0, 1).join("")].filter(Boolean).join("\n\n");
+    const desc = [p.hook, link ? `Historia completa: ${link}` : ""].filter(Boolean).join("\n\n");
     const { data: cv, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: v.engine, status: "producing", stage: "Volviendo a montar", progress: 80, format: "short", derived: "clip", parent_id: v.id, clip: { first: p.first, last: p.last }, title: p.title.slice(0, 100), idea_title: p.title.slice(0, 100), description: desc, tags: v.tags ?? [], sources: v.sources ?? [], music_url: v.music_url, ai_disclosure: v.ai_disclosure, script: { title: p.title, scenes: (v.script?.scenes ?? []).filter((_: unknown, i: number) => i + 1 >= p.first && i + 1 <= p.last) }, usage: {} }).select("id").single();
     if (error) throw new Error(error.message);
     const rows = part.map((x, i) => { const { id: _id, video_id: _v, ...rest } = x; return { ...rest, video_id: cv.id, n: i + 1 }; });
@@ -2468,4 +2469,41 @@ async function clipsRetos(job: Job, v: any, ch: any, n: number, link: string) {
   }
   await sb.from("videos").update({ auto: { ...(v.auto ?? {}), clips: { made, at: new Date().toISOString() } } }).eq("id", v.id);
   await log(job, `${made} Short${made === 1 ? "" : "s"} de retos sacados de «${v.title}»`);
+}
+
+// ======================================================================================================
+// Panel de dinero: suscriptores, progreso hacia el Programa de Socios, ingresos estimados (EUR) por día y por vídeo
+// ======================================================================================================
+async function stepMoney(job: Job) {
+  const chId = job.channel_id; const token = await ytAccess(chId); if (!token) return;
+  const day = (d: number) => new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+  const out: Record<string, unknown> = { at: new Date().toISOString() };
+  const me = await ytGet(token, "https://www.googleapis.com/youtube/v3/channels", { part: "statistics", mine: "true" });
+  const st = me.items?.[0]?.statistics ?? {};
+  Object.assign(out, { subs: Number(st.subscriberCount ?? 0), views: Number(st.viewCount ?? 0), videos: Number(st.videoCount ?? 0) });
+  // Requisitos de monetización: 1.000 suscriptores y 4.000 h de vídeos largos en 12 meses, o 10 M de vistas de Shorts en 90 días
+  // deno-lint-ignore no-explicit-any
+  const rows = async (params: Record<string, string>): Promise<any[]> => (await ytGet(token, YTA, { ids: "channel==MINE", ...params })).rows ?? [];
+  try {
+    for (const r of await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedMinutesWatched,views", dimensions: "creatorContentType" })) {
+      if (r[0] === "VIDEO_ON_DEMAND" || r[0] === "LIVE_STREAM") out.long_hours_365 = Number(out.long_hours_365 ?? 0) + Math.round(Number(r[1]) / 60);
+    }
+    for (const r of await rows({ startDate: day(90), endDate: day(1), metrics: "views", dimensions: "creatorContentType" })) if (r[0] === "SHORTS") out.shorts_views_90 = Number(r[1]);
+  } catch (e) { out.ypp_error = (e as Error).message.slice(0, 160); }
+  // Ingresos (solo si el canal está monetizado y se dio el permiso de ingresos)
+  try {
+    const daily = await rows({ startDate: day(30), endDate: day(1), metrics: "estimatedRevenue,views", dimensions: "day", sort: "day", currency: "EUR" });
+    out.revenue_by_day = daily.map((r) => ({ d: r[0], eur: Number(r[1]), views: Number(r[2]) }));
+    out.revenue_30 = daily.reduce((a, r) => a + Number(r[1]), 0);
+    const tot = await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedRevenue,views", currency: "EUR" });
+    out.revenue_365 = Number(tot[0]?.[0] ?? 0);
+    out.rpm = tot[0]?.[1] ? (Number(tot[0][0]) / Number(tot[0][1])) * 1000 : null;
+    const byV = await rows({ startDate: day(365), endDate: day(1), metrics: "estimatedRevenue,views", dimensions: "video", sort: "-estimatedRevenue", maxResults: "200", currency: "EUR" });
+    const { data: vids } = await sb.from("videos").select("id,youtube_video_id").eq("channel_id", chId).not("youtube_video_id", "is", null);
+    const map = new Map((vids ?? []).map((v) => [v.youtube_video_id, v.id]));
+    for (const r of byV) { const id = map.get(r[0]); if (id) await sb.from("videos").update({ revenue: { eur: Number(r[1]), views: Number(r[2]), at: out.at } }).eq("id", id); }
+    out.monetary = true;
+  } catch (e) { out.monetary = false; out.money_error = (e as Error).message.slice(0, 200); }
+  await sb.from("channels").update({ yt_stats: out, yt_stats_at: out.at }).eq("id", chId);
+  await log(job, `Panel de dinero actualizado: ${out.subs} suscriptores${out.monetary ? `, ${Number(out.revenue_30 ?? 0).toFixed(2)} € en 30 días` : ""}`);
 }

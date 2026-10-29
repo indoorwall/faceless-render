@@ -9,6 +9,8 @@ const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/yt-analytics.readonly",
+  // Ingresos estimados (panel de dinero). Si el canal aún no está monetizado, simplemente no hay datos
+  "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 ].join(" ");
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });

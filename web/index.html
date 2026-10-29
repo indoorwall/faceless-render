@@ -680,7 +680,7 @@ async function budgetMsg(){
 async function genIdeas(){
   const id=$("#g-ch").value, focus=$("#g-focus").value.trim(), kind=$("#g-kind").value, format=$("#g-fmt").value||null;
   // Sin tema concreto: salen al instante de la reserva del canal (y la reserva se rellena sola por detrás)
-  if(!focus && kind==="mix" && !format){
+  if(!focus){
     try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:5}); if(error) throw error;
       if(data>0){ await kick(); await load(); return toast(`${data} ideas nuevas en Revisar`); } }
     catch(e){ return toast(e.message||String(e)); }
@@ -1270,8 +1270,10 @@ async function resetTheme(){ await run(async()=>{ const {error}=await sb.from("c
 async function archiveChannel(){ await run(async()=>{ const {error}=await sb.from("channels").update({status:"archived"}).eq("id",S.open.c.id); if(error) throw error; closeSheet(); await load(); }, "Canal archivado"); }
 async function askIdeas(id){
   const c=ch(id);
-  if(ideaJobs(id).length){ const w=ideasWaitUntil(id); return toast(w?`Ya hay ideas pedidas para este canal: llegarán a las ${hhmm(w)} (tope de gasto de hoy alcanzado).`:"Ya se están buscando ideas para este canal."); }
-  try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:c?.ideas_per_run||5}); if(error) throw error; await kick(); await load();
+  // Primero la reserva (gratis); solo si está vacía importa que haya una recarga pendiente o el tope de gasto
+  try{ const {data,error}=await sb.rpc("draw_ideas",{p_channel:id,p_n:c?.ideas_per_run||5}); if(error) throw error;
+    if(!data && ideaJobs(id).length){ const w=ideasWaitUntil(id); await load(); return toast(w?`La reserva de ideas está vacía y hoy ya se llegó al tope de gasto: llegarán nuevas a las ${hhmm(w)}.`:"La reserva está vacía: ya se están creando ideas nuevas."); }
+    await kick(); await load();
     // Con ideas en el banco salen al momento y gratis; si el banco está vacío hay que crearlas con IA (y eso depende del presupuesto)
     toast(data>0?`${data} ideas nuevas en Revisar`:(await budgetMsg())||"El banco de ideas del canal estaba vacío: creando ideas nuevas. Llegarán en un minuto."); }
   catch(e){ toast(e.message||String(e)); }

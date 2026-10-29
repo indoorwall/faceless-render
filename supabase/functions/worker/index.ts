@@ -1590,7 +1590,7 @@ ${used.slice(0, 220).map((t) => `- ${t}`).join("\n") || "-"}
 ${list5 ? `TAREA: elige mentalmente (sin escribirlos) unos 20 temas y entrega directamente con guardar_ideas los 12 mejores, que cumplan TODO:
 1. Un tema concreto y popular (un animal, una parte del cuerpo o la mente, un personaje o evento de actualidad, un objeto cotidiano…), según el reparto de temas de la guía. Nada de temas ya usados.
 2. kind: compilation, y en stories EXACTAMENTE 5 curiosidades de ese tema (title: 2-5 palabras; hook: el dato en una frase), de menos a más sorprendente. Todas reales y poco conocidas.
-3. title: el título de YouTube según la guía (dato concreto o pregunta, o «No sabías esto de…», con 1-2 emojis), menos de 60 caracteres.
+3. title: el título de YouTube según la guía (dato concreto o pregunta, o «No sabías esto de…»), menos de 60 caracteres. Emoji opcional: como mucho en 1 de cada 3 títulos, uno solo, relacionado con el tema y distinto en cada idea; nunca 😱.
 4. hook: la primera frase, dirigida al espectador y a su relación con el tema («¿Tienes gatos? Esto te va a sorprender»).
 5. source_hint: el artículo de Wikipedia del tema. fit: 8 o más solo si encaja de lleno con la guía.
 Todas con format: short. Varía los temas entre sí. Llama a guardar_ideas.` : `TAREA: piensa unas 30 candidatas y quédate solo con las 20 mejores, que cumplan TODO:

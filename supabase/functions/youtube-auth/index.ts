@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
     const { channel_id } = await req.json();
     const state = `${channel_id}.${await hmac(channel_id)}`;
     const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    u.search = new URLSearchParams({ client_id: K.GOOGLE_CLIENT_ID, redirect_uri: REDIRECT, response_type: "code", access_type: "offline", prompt: "consent", include_granted_scopes: "true", scope: SCOPES, state }).toString();
+    u.search = new URLSearchParams({ client_id: K.GOOGLE_CLIENT_ID, redirect_uri: REDIRECT, response_type: "code", access_type: "offline", prompt: "select_account consent", include_granted_scopes: "true", scope: SCOPES, state }).toString();
     return json({ url: u.toString() });
   }
   // Callback de Google
@@ -61,11 +61,21 @@ Deno.serve(async (req) => {
   const yc = me.items?.[0];
   const meErr = String(me.error?.message ?? "");
   const aviso = /has not been used|disabled|accessNotConfigured/i.test(meErr) ? "Falta activar la «YouTube Data API v3» en Google Cloud." : !yc ? "Esta cuenta de Google no tiene canal de YouTube: si el canal es de una cuenta de marca, vuelve a conectar y elígela en la lista." : "";
+  // El mismo canal de YouTube no puede estar conectado a dos canales del estudio
+  if (yc?.id) {
+    const { data: dup } = await sb.from("channels").select("id,name").eq("youtube_channel_id", yc.id).neq("id", channelId).neq("status", "archived").maybeSingle();
+    if (dup) return done({ error: `El canal de YouTube «${yc.snippet?.title}» ya está conectado a «${dup.name}». Vuelve a conectar y elige otro canal (si no aparece, mira la ayuda de la ficha del canal).` });
+  }
+  // Aviso si el nombre del canal de YouTube no se parece al del estudio (suele ser el canal personal por error)
+  const { data: mine } = await sb.from("channels").select("name").eq("id", channelId).single();
+  const norm = (x: unknown) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+  const a = norm(mine?.name), b = norm(yc?.snippet?.title);
+  const otro = yc && a && b && !a.includes(b) && !b.includes(a) ? `Has conectado «${yc.snippet?.title}», que no se llama como el canal «${mine?.name}». Si no es el correcto, vuelve a conectar y elige el bueno.` : "";
   await sb.from("youtube_tokens").upsert({ channel_id: channelId, refresh_token: tk.refresh_token, youtube_channel_title: yc?.snippet?.title ?? null, updated_at: new Date().toISOString() });
-  await sb.from("channels").update({ youtube_connected: true, youtube_channel_id: yc?.id ?? null }).eq("id", channelId);
+  await sb.from("channels").update({ youtube_connected: true, youtube_channel_id: yc?.id ?? null, youtube_channel_title: yc?.snippet?.title ?? null }).eq("id", channelId);
   const noAnalytics = !granted.includes("yt-analytics");
   await sb.from("activity").insert({ channel_id: channelId, message: `YouTube conectado: ${yc?.snippet?.title ?? "canal"}${noAnalytics ? " (sin permiso de analíticas: vuelve a conectar y marca todas las casillas)" : ""}${aviso ? ` · ${aviso}` : ""}`, level: noAnalytics || aviso ? "warn" : "info" });
   // Primeras analíticas en cuanto se conecta
   await sb.from("jobs").insert({ step: "analytics", channel_id: channelId, payload: {} });
-  return done({ ok: "1", canal: yc?.snippet?.title ?? "YouTube", ...(aviso ? { aviso } : {}) });
+  return done({ ok: "1", canal: yc?.snippet?.title ?? "YouTube", ...(aviso || otro ? { aviso: [aviso, otro].filter(Boolean).join(" ") } : {}) });
 });

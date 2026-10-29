@@ -469,7 +469,7 @@ async function run(fn, ok){
 async function load(){
   const [c,v,p,a,k,pr,j] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
-    sb.from("videos").select("id,channel_id,status,stage,progress,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage,engine").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
+    sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,error,created_at,updated_at,usage,engine").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     Promise.resolve({data:[]}), // «Descubrir» retirado: ya no se consultan propuestas
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
@@ -542,16 +542,20 @@ function chTabs(){
 }
 // Tarjetas (con el color del canal en el borde izquierdo)
 const bl = (v) => `style="border-left:4px solid ${esc(chColor(v.channel_id))}"`;
+const autoChip = (v) => { const a=v.auto||{}; const held=a.final?.held||a.script?.held; return held?`<span class="chip st-warn" title="${esc(held)}">Te espera: ${esc(String(held).slice(0,40))}</span>`:(a.final?.by==="auto"||a.script?.by==="auto")?`<span class="chip st-acc">Automático</span>`:""; };
+const derivedChip = (v) => v.derived==="clip"?`<span class="chip">Short del largo</span>`:v.derived==="dub"?`<span class="chip">Doblaje</span>`:"";
 const finalCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')">
   ${v.thumbnail_url?`<img src="${esc(v.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px">`:""}
-  <div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span><span class="mono muted">${dur(v.duration_sec)}</span>${costTag(v)}</div>
+  <div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span>${derivedChip(v)}${autoChip(v)}<span class="mono muted">${dur(v.duration_sec)}</span>${costTag(v)}</div>
   <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`;
-const scriptCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span></div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`;
+const scriptCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span>${derivedChip(v)}${autoChip(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`;
 const failedCard = (v, tag=true) => `<div class="card" ${bl(v)}><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
   <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`;
-const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
+const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${derivedChip(v)}${autoChip(v)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
   ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`;
 const pubCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`;
+const upcoming = (cid) => S.videos.filter(v=>v.channel_id===cid&&["publishing","scheduled"].includes(v.status)&&v.publish_at&&new Date(v.publish_at)>Date.now()).sort((a,b)=>new Date(a.publish_at)-new Date(b.publish_at));
+const whenTxt = (d) => new Date(d).toLocaleString("es-ES",{weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit",timeZone:"Europe/Madrid"});
 function viewHoy(){
   if(!S.channels.length) return `<div class="head"><div><h1>Empieza por un canal</h1><p>Crea tu primer canal para empezar.</p></div></div>
     <div class="row"><button class="btn pri" onclick="openChannel()">Crear canal</button></div>
@@ -569,6 +573,7 @@ function viewAllChannels(){
     const cell=(n,l,warn)=>`<div class="${n&&warn?"hot":""}"><b>${n}</b><span>${l}</span></div>`;
     return `<button class="card click chcard" style="--c:${esc(c.color||"#888")}" onclick="setFilterCh('${c.id}')">
       <div class="spread"><div style="min-width:0;text-align:left"><div class="chname"><span class="dot"></span>${esc(c.name)}</div><div class="muted" style="font-size:12px">${isRetosCh(c)?"Retos":"Documental"} · ${chFormats(c).map(f=>f==="short"?"Shorts":"Largos").join(" + ")}</div></div>${t?`<span class="chip st-acc">${t} pendiente${t>1?"s":""}</span>`:`<span class="chip st-ok">Al día</span>`}</div>
+      <div class="muted" style="font-size:12px;text-align:left">${(()=>{ const u=upcoming(c.id); return u.length?`Próxima publicación: <b>${whenTxt(u[0].publish_at)}</b> · ${u.length} programada${u.length>1?"s":""}`:"Nada programado"; })()} · ${({manual:"Manual",semi:"Semiautomático",auto:"Automático"})[c.autopilot||"manual"]}</div>
       <div class="mini">${isRetosCh(c)?"":cell(p.ideas,"ideas",1)}${cell(p.scripts,isRetosCh(c)?"retos":"guiones",1)}${cell(p.prod,"en producción")}${cell(p.finals,"vídeos",1)}${p.failed?cell(p.failed,"con error",1):""}</div>
     </button>`; }).join("")}</div>`;
   const blocks = chs.map(c=>{
@@ -605,6 +610,7 @@ function viewChannelReview(c){
       <div class="you"><span class="label">3 · Vídeos</span><b>${finals.length}</b><span class="muted" style="font-size:12px">por aprobar</span></div>
       <div><span class="label">Publicados</span><b>${vs.filter(v=>["published","scheduled"].includes(v.status)).length}</b><span class="muted" style="font-size:12px">en total</span></div>
     </div>
+    ${(()=>{ const u=upcoming(c.id); return `<section><div class="sec-h"><h2>Próximas publicaciones</h2><span class="mono">${u.length}</span><span class="chip">${({manual:"Manual",semi:"Semiautomático",auto:"Automático"})[c.autopilot||"manual"]}</span></div>${u.length?`<div class="ilist">${u.slice(0,10).map(v=>`<button class="irow" onclick="openVideo('${v.id}')"><span>${esc(v.title||v.idea_title)}</span><span class="muted">${v.format==="short"?"Short":"Largo"} · ${whenTxt(v.publish_at)}</span></button>`).join("")}</div>`:`<div class="empty" style="padding:14px">No hay nada programado. Los vídeos que apruebes sin fecha irán al siguiente hueco del calendario${c.autopilot&&c.autopilot!=="manual"?"; en este modo el estudio también mantiene la cola llena":""}.</div>`}</section>`; })()}
     ${retos&&window.RetosUI?RetosUI.producerSection():""}
     ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div></section>`:""}
     <section><div class="sec-h"><h2>Vídeos por aprobar</h2><span class="mono">${finals.length}</span></div>
@@ -790,7 +796,9 @@ function renderSheet(first){
       <label class="f">Título<input type="text" id="f-title" value="${esc(v.title)}" maxlength="100"></label>
       <label class="f">Descripción<textarea id="f-desc" rows="6">${esc(v.description)}</textarea></label>
       <label class="f">Etiquetas <small>Separadas por comas</small><input type="text" id="f-tags" value="${esc((v.tags||[]).join(", "))}"></label>
-      <div class="fgrid"><label class="f">Programar publicación <small>Vacío = publicar ahora</small><input type="datetime-local" id="f-at" value="${pa}"></label>
+      ${autoBanner(v)}
+      <div class="fgrid"><label class="f">Programar publicación <small>Vacío = siguiente hueco del calendario del canal</small><input type="datetime-local" id="f-at" value="${pa}"></label>
+      <label class="check" style="align-self:end"><input type="checkbox" id="f-now"> Publicar ya, sin esperar al calendario</label>
       <label class="check" style="align-self:end"><input type="checkbox" id="f-ai" ${v.ai_disclosure?"checked":""}> Declarar contenido sintético (IA)</label></div>
       <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span> Descárgalo, súbelo a mano y márcalo como publicado.`}</p>
       ${c.youtube_connected?"":`<label class="f">Enlace del vídeo en YouTube <small>Opcional: con él la IA aprende de sus visitas</small><input type="url" id="f-yt" placeholder="https://youtu.be/…"></label>`}
@@ -960,9 +968,18 @@ async function moreThumbs(){
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"thumbs",video_id:v.id,payload:{batch,...(text?{text}:{})}}); if(error) throw error; await kick(); await refreshOpenVideo(); }, "Generando miniaturas…");
 }
 async function publish(){
-  const at=$("#f-at").value;
-  const patch={ title:$("#f-title").value.trim(), description:$("#f-desc").value, tags:$("#f-tags").value.split(",").map(t=>t.trim()).filter(Boolean), ai_disclosure:$("#f-ai").checked, publish_at: at?new Date(at).toISOString():null, status:"publishing", stage:"Subiendo a YouTube" };
-  await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); }, at?"Programando en YouTube…":"Publicando en YouTube…");
+  const at=$("#f-at").value, now=$("#f-now")?.checked, v=S.open.v;
+  const patch={ title:$("#f-title").value.trim(), description:$("#f-desc").value, tags:$("#f-tags").value.split(",").map(t=>t.trim()).filter(Boolean), ai_disclosure:$("#f-ai").checked, publish_at: at&&!now?new Date(at).toISOString():null, status:"publishing", stage:"Subiendo a YouTube", auto:{...(v.auto||{}), publish_now:!!now, final:{...(v.auto?.final||{}), by:"tú", at:new Date().toISOString()}} };
+  // Lo que cambias antes de publicar también enseña al canal (títulos y descripciones)
+  const edits=[]; if(v.title&&patch.title!==v.title) edits.push(`Título: «${v.title}» → «${patch.title}»`); if((v.description||"").trim()!==patch.description.trim()) edits.push(`Descripción cambiada:\n${patch.description.slice(0,800)}`);
+  if(edits.length) sb.from("jobs").insert({step:"learn",channel_id:v.channel_id,video_id:v.id,payload:{source:"edicion",material:`Antes de publicar «${v.title}», el autor cambió los metadatos:\n${edits.join("\n")}`}}).then(()=>{});
+  await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",v.id); if(error) throw error; await kick(); closeSheet(); }, now?"Publicando en YouTube…":at?"Programando en YouTube…":"Se programará en el siguiente hueco del calendario");
+}
+// Motivo por el que el piloto automático dejó algo esperándote
+function autoBanner(v){
+  const a=v.auto||{}, held=a.final?.held||a.script?.held, warn=[...(a.final?.warn||[]),...(a.script?.warn||[])];
+  if(!held&&!warn.length) return "";
+  return `<div class="card" style="border-left:4px solid var(--warn);gap:6px"><div class="label" style="color:var(--warn)">Piloto automático</div>${held?`<div>Te espera porque: <b>${esc(held)}</b></div>`:""}${warn.length?`<div class="why">Avisos: ${warn.map(esc).join(" · ")}</div>`:""}</div>`;
 }
 async function discardVideo(){ await run(async()=>{ const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",S.open.v.id); if(error) throw error; closeSheet(); }, "Descartado"); }
 async function rerender(id){ await run(async()=>{ const {error}=await sb.rpc("rerender_video",{p_id:id}); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Volviendo a montar el vídeo…"); }
@@ -991,11 +1008,44 @@ function learnHtml(c,L){
     ${L&&L.lessons.length?`<div style="margin-top:10px">${L.lessons.map(x=>`<div class="issue" style="grid-template-columns:auto 1fr"><span class="chip" style="height:fit-content">${SRC[x.source]||esc(x.source)}</span><div>${esc(x.lesson)} <span class="muted mono" style="font-size:11px">${ago(x.created_at)}</span></div></div>`).join("")}</div>`:""}
     ${pb?`<details style="margin-top:10px"><summary class="label" style="cursor:pointer">Ver todo lo aprendido</summary><textarea id="c-playbook" rows="12" style="margin-top:8px;width:100%">${esc(pb)}</textarea><small class="muted">Puedes corregirlo: se guarda con el canal.</small></details>`:""}`;
 }
+
+// ---------- Ficha del canal: automatización, calendario y presupuesto ----------
+const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final."], semi:["Semiautomático","El estudio aprueba solo las ideas y los guiones que pasan los controles de calidad y de políticas. Tú solo ves el vídeo final."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
+function autoSection(c){
+  const s={ long_per_week:2, shorts_per_week:7, long_time:"18:30", short_times:["13:00","20:30"], buffer_days:5, ...(c.schedule||{}) };
+  const ap=c.autopilot||"manual", retos=c.production_type==="challenges";
+  return `<div class="full card" style="gap:12px;border-left:4px solid var(--accent)">
+    <div><h3 style="margin:0">Automatización y publicación</h3><div class="why">Cuánto trabaja el canal sin ti y cuándo publica.</div></div>
+    <div class="fgrid">
+      <label class="f full">Piloto automático<select id="c-ap" onchange="document.getElementById('c-ap-why').textContent=AUTOPILOT[this.value][1]">${Object.entries(AUTOPILOT).map(([k,[l]])=>`<option value="${k}" ${ap===k?"selected":""}>${l}</option>`).join("")}</select><small id="c-ap-why">${AUTOPILOT[ap][1]}</small></label>
+      <label class="f">Nota mínima para aprobar solo<select id="c-q">${[7,7.5,8,8.5,9].map(n=>`<option value="${n}" ${Number(c.quality_min??8)===n?"selected":""}>${String(n).replace(".",",")}/10${n===8?" (recomendado)":""}</option>`).join("")}</select></label>
+      <label class="f">Tope de gasto diario del canal (€) <small>Vacío = comparte el total</small><input type="number" id="c-budget" min="0" step="0.1" value="${c.daily_budget_eur??""}" placeholder="Sin tope propio"></label>
+      <label class="f">Vídeos largos por semana<input type="number" id="c-lpw" min="0" max="14" value="${s.long_per_week}"></label>
+      <label class="f">Hora de los largos<input type="time" id="c-ltime" value="${esc(s.long_time)}"></label>
+      <label class="f">Shorts por semana<input type="number" id="c-spw" min="0" max="21" value="${s.shorts_per_week}"></label>
+      <label class="f">Horas de los Shorts <small>Separadas por comas</small><input type="text" id="c-stimes" value="${esc((s.short_times||[]).join(", "))}"></label>
+      <label class="f">Días de reserva <small>Vídeos listos por adelantado</small><input type="number" id="c-buf" min="1" max="14" value="${s.buffer_days}"></label>
+      <label class="f">Shorts sacados de cada largo <small>0 = no sacar</small><input type="number" id="c-clips" min="0" max="5" value="${c.clips_per_long??0}"></label>
+      ${retos?`<label class="f">Estilo de juego automático<select id="c-gstyle"><option value="world" ${(c.retos_config?.game_style||"world")==="world"?"selected":""}>Playable World</option><option value="classic" ${c.retos_config?.game_style==="classic"?"selected":""}>Clásico</option></select></label>`:`<label class="check"><input type="checkbox" id="c-aid" ${c.ai_disclosure_default!==false?"checked":""}> Declarar contenido sintético (IA) por defecto</label>`}
+    </div>
+    <div class="why">Horario de Madrid. Los vídeos aprobados sin fecha se programan en el siguiente hueco libre. Se respeta la cuota diaria de YouTube (unas 6 subidas al día entre todos los canales).</div>
+  </div>`;
+}
+function collectAuto(c){
+  const num=(id,d)=>{ const v=document.getElementById(id)?.value; return v===""||v==null?d:Number(v); };
+  const times=($("#c-stimes")?.value||"").split(",").map(x=>x.trim()).filter(x=>/^\d{1,2}:\d{2}$/.test(x));
+  const row={ autopilot:$("#c-ap").value, quality_min:num("c-q",8), daily_budget_eur:$("#c-budget").value===""?null:Math.max(0,num("c-budget",0)), clips_per_long:Math.max(0,Math.min(5,num("c-clips",0))),
+    schedule:{ long_per_week:num("c-lpw",2), shorts_per_week:num("c-spw",7), long_time:$("#c-ltime").value||"18:30", short_times:times.length?times:["13:00"], buffer_days:num("c-buf",5) } };
+  if($("#c-aid")) row.ai_disclosure_default=$("#c-aid").checked;
+  if($("#c-gstyle")) row.retos_config={...(c.retos_config||{}), game_style:$("#c-gstyle").value};
+  return row;
+}
 function renderChannelSheet(first){
   if(!first) return;
   const c=S.open.c;
   const body=`${c.id?`<div class="card guide-cta"><div class="spread"><div><h3>Guía del canal</h3><div class="why">${c.style_guide?`${c.style_guide.split(/\s+/).length} palabras${c.guide_updated_at?` · actualizada ${ago(c.guide_updated_at)}`:""}. El guionista la sigue en cada vídeo.`:"Aún no tiene guía. Define de qué va, el estilo y las reglas que debe seguir cada vídeo."}</div></div><button class="btn sm" type="button" onclick="openGuide('${c.id}')">${c.style_guide?"Abrir guía":"Crear guía"}</button></div></div><div class="card" id="learn-box" style="margin-top:10px">${learnHtml(c,S.open.learn)}</div>`:""}<div class="fgrid">
     <label class="f full">Tipo de producción <small>Cada canal usa siempre su motor</small><select id="c-ptype"><option value="documentary" ${c.production_type!=="challenges"?"selected":""}>Documental / Narrativo</option><option value="challenges" ${c.production_type==="challenges"?"selected":""}>Retos / Juegos visuales</option></select></label>
+    ${autoSection(c)}
     <label class="f">Nombre<input type="text" id="c-name" value="${esc(c.name)}" required></label>
     <label class="f">Color<input type="text" id="c-color" value="${esc(c.color)}"></label>
     <label class="f full">Nicho <small>Cuanto más concreto, mejores ideas</small><input type="text" id="c-niche" value="${esc(c.niche)}"></label>
@@ -1043,8 +1093,9 @@ async function saveChannel(){
     music_url:$("#c-music").value.trim()||null, music_volume:+$("#c-mvol").value||0, music_mode:$("#c-mmode").value, music_style:$("#c-mstyle").value.trim()||null,
     sfx_enabled:$("#c-sfx").checked, sfx_volume:+$("#c-sfxvol").value||0, publish_privacy:$("#c-priv").value, status:$("#c-status").value, auto_ideas:$("#c-auto").checked,
     topics:$("#c-topics").value.trim()||null, director_threshold:+$("#c-dir").value||8, ...($("#c-playbook")?{playbook:$("#c-playbook").value.trim()||null}:{}) };
+  Object.assign(row, collectAuto(c));
   row.production_type = $("#c-ptype").value;
-  if(row.production_type==="challenges"){ if(!row.niche) row.niche="Retos visuales y acertijos"; Object.assign(row, { auto_ideas:false, music_mode:"off", sfx_enabled:false }); const x=window.RetosUI&&RetosUI.collect(); if(x) Object.assign(row, x); }
+  if(row.production_type==="challenges"){ if(!row.niche) row.niche="Retos visuales y acertijos"; Object.assign(row, { auto_ideas:false, music_mode:"off", sfx_enabled:false }); const x=window.RetosUI&&RetosUI.collect(); if(x){ const gs=row.retos_config?.game_style; Object.assign(row, x); if(gs) row.retos_config={...(row.retos_config||{}), game_style:gs}; } }
   if(!row.name||!row.niche) return toast("El canal necesita nombre y nicho");
   await run(async()=>{
     if(c.id){ const {error}=await sb.from("channels").update(row).eq("id",c.id); if(error) throw error; }

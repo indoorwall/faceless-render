@@ -125,14 +125,14 @@ async function runLoop() {
     } catch (e) {
       if (e instanceof OverBudget) {
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: nextMadridDay() }).eq("id", job.id);
-        if (job.video_id) await sb.from("videos").update({ stage: "Esperando al presupuesto de mañana" }).eq("id", job.video_id);
+        if (job.video_id && MAIN_STEPS.has(job.step)) await sb.from("videos").update({ stage: "Esperando al presupuesto de mañana" }).eq("id", job.video_id);
         if (!budgetLogged) { budgetLogged = true; await log(job, `Presupuesto diario agotado (${e.message}): ${job.step} y lo que venga detrás siguen mañana`, "warn"); }
         continue;
       }
       if (e instanceof QuotaWait) {
         const pt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })); const ms = ((24 - pt.getHours()) * 60 - pt.getMinutes() + 10) * 60000;
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), run_after: new Date(Date.now() + ms).toISOString() }).eq("id", job.id);
-        if (job.video_id) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (mañana)" }).eq("id", job.video_id);
+        if (job.video_id) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
         await log(job, "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
         continue;
       }
@@ -162,6 +162,9 @@ async function runLoop() {
 
 // deno-lint-ignore no-explicit-any
 type Job = any;
+// Pasos que hacen avanzar el vídeo: solo estos cambian su estado al quedarse sin presupuesto.
+const MAIN_STEPS = new Set(["script", "revise", "voice", "audio", "visuals", "fix_visuals", "render", "render_check", "publish", "direct", "dub", "clips"]);
+
 async function runStep(job: Job) {
   switch (job.step) {
     case "ideas": return stepIdeas(job);

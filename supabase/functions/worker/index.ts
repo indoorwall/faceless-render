@@ -266,6 +266,10 @@ async function batched(job: Job, tag: string, body: any): Promise<any> {
   if (st?.message) return st.message;
   if (!st) {
     await claudeGuard(String(body.model));
+    // Lo que costará el lote se aparta ya (si no, varios lotes a la vez se saltaban el tope al cobrarse al terminar)
+    const hold = String(body.model).includes("opus") ? 0.3 : 0.1;
+    await reserve("hold_eur", hold);
+    job.payload = { ...(job.payload ?? {}), hold_eur: (Number(job.payload?.hold_eur ?? 0) + hold) };
     const r = await fetch("https://api.anthropic.com/v1/messages/batches", { method: "POST", headers: AH(), body: JSON.stringify({ requests: [{ custom_id: tag.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60), params: body }] }) });
     if (!r.ok) throw new Error(`Claude lotes ${r.status}: ${(await r.text()).slice(0, 300)}`);
     const d = await r.json();
@@ -284,10 +288,12 @@ async function batched(job: Job, tag: string, body: any): Promise<any> {
   // Si el lote falla o caduca, se olvida para volver a pedirlo en el siguiente intento; si va bien, se guarda la respuesta
   if (res?.type !== "succeeded") {
     delete job.payload.batches[tag];
+    if (Number(job.payload?.hold_eur ?? 0) > 0) { await unreserve("hold_eur", Number(job.payload.hold_eur)); job.payload.hold_eur = 0; }
     await sb.from("jobs").update({ payload: job.payload }).eq("id", job.id);
     throw new Error(`Claude lotes: ${res?.type ?? "sin resultado"} ${JSON.stringify(res?.error ?? "").slice(0, 200)}`);
   }
   await claudeSpent(String(body.model), res.message, true);
+  if (Number(job.payload?.hold_eur ?? 0) > 0) { await unreserve("hold_eur", Number(job.payload.hold_eur)); job.payload.hold_eur = 0; }
   job.payload.batches[tag] = { ...st, message: res.message };
   await sb.from("jobs").update({ payload: job.payload }).eq("id", job.id);
   return res.message;
@@ -1163,7 +1169,12 @@ async function stepVisuals(job: Job) {
           await log(job, `${viaFlux ? "FLUX" : "OpenAI"} rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
         }
       }
-      if (!media) throw new UserError(`No se encontró imagen para el plano «${String(sh.line).slice(0, 60)}». Revisa las claves de Pexels u OpenAI.`);
+      // Último recurso: otra imagen del mismo vídeo con menos de 2 usos (mejor un acercamiento que parar el vídeo)
+      if (!media) {
+        const spare = [...reuse.entries()].filter(([, n]) => n < 2).map(([u]) => u).pop() ?? prev?.media_url;
+        if (spare) media = { url: spare, kind: /\.mp4|video/i.test(spare) ? "video" : "image", fit: "cover", reframe: { x: 0.4 + Math.random() * 0.2, y: 0.4, zoom: 1.6 } };
+      }
+      if (!media) throw new UserError(`No se encontró imagen para el plano «${String(sh.line).slice(0, 60)}». Añade la clave de Pexels o Pixabay en Ajustes.`);
       Object.assign(sh, { media_url: media.url, media_kind: media.kind, fit: media.fit ?? "cover", reframe: media.reframe ?? null, credit: media.credit ?? null, gen: media.gen ?? null, provider: media.provider ?? null });
       used.add(media.url); reuse.set(media.url, (reuse.get(media.url) ?? 0) + 1); prev = sh;
     }
@@ -2392,10 +2403,12 @@ async function stepRetosGenerate(job: Job) {
   if (!theme && p.auto) {
     if (format === "long") theme = RETO_LONG_MIX;
     else {
-      const { data: last } = await sb.from("videos").select("retos").eq("channel_id", ch.id).eq("engine", "challenges").eq("format", "short").order("created_at", { ascending: false }).limit(1);
-      const prevKey = last?.[0]?.retos?.theme;
-      const i = RETO_THEMES.findIndex((t) => t.key === prevKey);
-      theme = RETO_THEMES[(i + 1) % RETO_THEMES.length];
+      // El tema menos usado en los últimos 12 Shorts (y nunca el mismo que el anterior)
+      const { data: last } = await sb.from("videos").select("retos").eq("channel_id", ch.id).eq("engine", "challenges").eq("format", "short").order("created_at", { ascending: false }).limit(12);
+      const keys = (last ?? []).map((x) => x.retos?.theme).filter(Boolean) as string[];
+      const uses = (k: string) => keys.filter((x) => x === k).length;
+      const order = RETO_THEMES.map((t, i) => ({ t, i })).filter((x) => x.t.key !== keys[0]).sort((a, b) => uses(a.t.key) - uses(b.t.key) || a.i - b.i);
+      theme = order[0]?.t ?? RETO_THEMES[0];
     }
   }
   // Preguntas tipo test del banco (sin repetir en el canal)
@@ -2419,7 +2432,7 @@ async function stepRetosGenerate(job: Job) {
       // Se vuelve a intentar cuando el banco se haya rellenado (si la recarga espera al presupuesto, después de ella)
       const { data: rq } = await sb.from("jobs").select("run_after").eq("step", "quiz_refill").in("status", ["queued", "running"]).order("run_after", { ascending: false }).limit(1);
       const wait = Math.max(240, rq?.[0]?.run_after ? Math.round((new Date(rq[0].run_after).getTime() - Date.now()) / 1000) + 300 : 0);
-      await enqueue("retos_generate", { channel_id: ch.id, payload: { ...p, theme: theme?.key, waiting: true }, delaySec: wait });
+      await enqueue("retos_generate", { channel_id: ch.id, payload: { ...p, theme: p.auto ? undefined : theme?.key, waiting: true }, delaySec: wait });
       if (!p.waiting) await log(job, `Retos de ${theme?.label}: preparando preguntas nuevas`);
       return;
     }
@@ -2663,8 +2676,12 @@ async function planChannel(job: Job, ch: any) {
     const s = scheduleOf(ch), horizon = Date.now() + (s.buffer_days ?? 5) * 86400000;
     for (const f of ["long", "short"]) {
       const slots = slotsFor(ch, f, s.buffer_days ?? 5).filter((t) => t.getTime() <= horizon).length; if (!slots) continue;
-      const inFlight = V.filter((v) => fmtOf(v) === f && (["scripting", "script_review", "producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now()))).length;
-      let need = Math.min(slots - inFlight, f === "long" ? 1 : 2); // como mucho 1 largo y 2 Shorts nuevos por hora y canal
+      // Lo programado más allá del horizonte no tapa los huecos de los próximos días
+      const inFlight = V.filter((v) => fmtOf(v) === f && (["scripting", "script_review", "producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now() && new Date(v.publish_at).getTime() <= horizon))).length;
+      // También cuentan los encargos que aún esperan (presupuesto o banco de preguntas): si no, cada hora se encargaban más
+      const { data: pendJobs } = await sb.from("jobs").select("payload").eq("channel_id", ch.id).eq("step", "retos_generate").in("status", ["queued", "running"]);
+      const pend = (pendJobs ?? []).filter((j) => ((j.payload as { format?: string })?.format === "short" ? "short" : "long") === f).length;
+      let need = Math.min(slots - inFlight - pend, f === "long" ? 1 : 2); // como mucho 1 largo y 2 Shorts nuevos por hora y canal
       if (need <= 0) continue;
       if (f === "short" && ch.clips_per_long > 0 && ch.production_type !== "challenges" && !(ch.formats ?? []).includes("short")) continue; // los Shorts salen de los largos
       if (ch.production_type === "challenges") {

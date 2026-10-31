@@ -74,6 +74,24 @@ async function claudeSpent(model: string, d: any, batch = false) {
   const ws = d?.usage?.server_tool_use?.web_search_requests ?? 0;
   if (ws) await sb.rpc("record_spend", { p_key: "web_searches", p_n: ws, p_channel: CUR_CH });
 }
+// Llamada directa a Claude que respeta el tope: reserva antes lo que puede costar y luego apunta lo real
+const CL_PRICE: Record<string, [number, number]> = { opus: [0.0000037, 0.0000186], sonnet: [0.00000186, 0.0000093], haiku: [0.000000093, 0.000000465] };
+// deno-lint-ignore no-explicit-any
+async function claudeCall(body: any, headers: Record<string, string> = AH()) {
+  const model = String(body.model);
+  await claudeGuard(model);
+  const tier = model.includes("opus") ? "opus" : model.includes("haiku") ? "haiku" : "sonnet";
+  const inEst = JSON.stringify(body.messages ?? "").length / 3.5 + String(body.system ?? "").length / 3.5;
+  const hold = Math.round((inEst * CL_PRICE[tier][0] + Math.min(Number(body.max_tokens ?? 8000), 8000) * CL_PRICE[tier][1]) * 1000) / 1000;
+  if (hold > 0.001) await reserve("hold_eur", hold);
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
+    const d = await r.json();
+    await claudeSpent(model, d);
+    return d;
+  } finally { if (hold > 0.001) await unreserve("hold_eur", hold); }
+}
 // Mañana a las 00:05, hora de Madrid
 function nextMadridDay() {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -202,6 +220,7 @@ async function runStep(job: Job) {
     case "voice_pick": return stepVoicePick(job);
     case "research": return stepResearch(job);
     case "advise": return stepAdvise(job);
+    case "daily_report": return stepDailyReport(job);
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
@@ -314,11 +333,7 @@ async function claude(model: string, system: string, user: string, opts: { searc
     let d: any;
     if (opts.batch) d = await batched(opts.batch.job, `${opts.batch.tag}_${i}`, body);
     else {
-      await claudeGuard(model);
-      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: AH(), body: JSON.stringify(body) });
-      if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
-      d = await r.json();
-      await claudeSpent(model, d);
+      d = await claudeCall(body);
     }
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0; searches += d.usage?.server_tool_use?.web_search_requests ?? 0;
     // deno-lint-ignore no-explicit-any
@@ -452,15 +467,7 @@ async function claudeWithTool(model: string, system: string, user: string, tool:
   const messages: any[] = [{ role: "user", content: user }];
   let inTok = 0; let outTok = 0;
   for (let i = 0; i < 4; i++) {
-    await claudeGuard(model);
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 12000, system, messages, tools: search > 0 ? [{ type: "web_search_20250305", name: "web_search", max_uses: search }, tool] : [tool] }),
-    });
-    if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
-    const d = await r.json();
-    await claudeSpent(model, d);
+    const d = await claudeCall({ model, max_tokens: 12000, system, messages, tools: search > 0 ? [{ type: "web_search_20250305", name: "web_search", max_uses: search }, tool] : [tool] }, { "x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01", "content-type": "application/json" });
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0;
     // deno-lint-ignore no-explicit-any
     const call = (d.content ?? []).find((b: any) => b.type === "tool_use" && b.name === tool.name);
@@ -608,7 +615,7 @@ async function stepScript(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel;
   const short = ch.format === "short";
-  const words = short ? 125 : Math.round(ch.target_minutes * 150);
+  const words = short ? 120 : Math.round(ch.target_minutes * 150);
   const scenes = short ? "4-7" : `${Math.round(ch.target_minutes * 3)}-${Math.round(ch.target_minutes * 4)}`;
   const allowed = ch.image_source === "ai" ? `"ai" y "reframe"` : ch.image_source === "stock" ? `"archive", "stock_photo", "stock_video" y "reframe"` : `"ai", "archive", "stock_photo", "stock_video" y "reframe"`;
   const visualRule = `PLANOS: cada escena es un bloque de locución y se divide en planos (shots). Cada plano es un fragmento literal de la narración (line) con su visual; la unión de las line de una escena es su narración completa, sin cambiar ni una palabra. Duración de cada plano: ${short ? "1,5-3,5 s (4-9 palabras)" : "3-6 s (8-15 palabras)"}. Los cambios de plano acompañan lo que se cuenta, nunca cortes sin sentido. Tipos de visual permitidos en este canal: ${allowed}.
@@ -622,17 +629,18 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   const musicRule = ch.music_mode === "video" ? `music_prompt: prompt en inglés para una banda sonora instrumental de fondo hecha a medida de este vídeo (género, mood, tempo en BPM, instrumentos, evolución), discreta para no tapar la voz${ch.music_style ? `, coherente con el sello sonoro del canal: ${ch.music_style}` : ""}.` : `music_prompt: deja "".`;
   // Guionista y director en uno: escribe, se revisa con ojo de director y entrega solo la versión final (una sola llamada a Opus)
   const system = `Eres a la vez el guionista senior y el director de contenidos de un canal de YouTube faceless que se hace viral. Escribes con voz propia, datos verificados y estructura variada (no uses siempre la misma plantilla). Prioridad absoluta: retención, rebote y compartidos. La afirmación más sorprendente va en la primera frase, sin contexto previo; bucles de curiosidad abiertos y cerrados a lo largo del vídeo; cada frase se gana su sitio; cierre con emoción o giro final. Básate en la DOCUMENTACIÓN que se te da (artículos de Wikipedia) y en hechos que conozcas con seguridad; cita como fuentes solo esos artículos. Si un dato no está documentado o es dudoso, cuéntalo como testimonio o no lo uses. Nunca inventes cifras. Antes de entregar, repasa tu propio guion con ojo de director implacable contra los criterios de viralidad, la guía y los aprendizajes del canal, y corrige todo lo que falle, pero haz esa revisión en silencio: no escribas borradores, notas ni explicaciones; tu respuesta empieza directamente por <json> y contiene solo la versión final, lista para producir. Si el canal tiene guía, es obligatoria y prevalece sobre cualquier regla general de este mensaje (duración de escenas, estructura, gancho, cierre, estilo visual). Responde SOLO con JSON dentro de <json></json>.`;
-  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}Canal: ${ch.name} — ${ch.niche}\nIdioma de la narración: ${ch.language}\nTono: ${ch.tone ?? "divulgativo, cercano, con criterio"}\nAudiencia: ${ch.audience ?? "-"}\nFormato: ${short ? "Short vertical 45-60 s" : `vídeo largo de ~${ch.target_minutes} min`} (~${words} palabras de narración en total, ${scenes} escenas)\n\nIdea aprobada: ${v.idea_title}\nÁngulo: ${v.idea_angle ?? "-"}\n${v.idea_hook ? `Gancho propuesto (úsalo o mejóralo): ${v.idea_hook}\n` : ""}${v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? `VÍDEO RECOPILATORIO: cuenta estas ${(v.idea_stories ?? []).length} historias, de menos a más impactante, unidas por el hilo del título. El gancho anuncia el hilo y promete la más fuerte sin destriparla. Cada historia arranca con su propio mini-gancho, transiciones rápidas sin relleno, y la mejor al final.\n${(v.idea_stories ?? []).map((x: { title: string; hook: string }, k: number) => `${k + 1}. ${x.title}: ${x.hook}`).join("\n")}\n` : ""}${v.script_notes ? `Indicaciones del autor (obligatorias): ${v.script_notes}\n` : ""}${v.review_feedback && v.script ? `\nVersión anterior rechazada. Corrige según este feedback: ${v.review_feedback}\nGuion anterior: ${JSON.stringify(v.script).slice(0, 12000)}\n` : ""}\n${VIRAL_RULES(short)}\n\nReglas de escenas: cada escena dura 6-15 s de locución. ${visualRule}\nEstilo visual del canal para las imágenes IA: ${ch.style_prompt ?? "cinematic documentary, realistic lighting"}. ${sfxRule} Para ElevenLabs v3 puedes usar etiquetas de emoción puntuales como [pause] o [excited] dentro de narration, con moderación.\n${musicRule}\n\n${short ? `Los Shorts no llevan miniatura: deja thumbnail_concepts, thumbnail_texts y thumbnail_prompt vacíos.` : `Miniaturas: 3 conceptos distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de 2-4 palabras que complementan el título sin repetirlo.`}\nDeja stock_query, archive_query o visual_prompt vacíos cuando no correspondan al tipo de plano, y reframe en null salvo en los planos reframe.\nself_score: tu nota honesta de 0 a 10 del potencial viral del guion final. self_check: 2-4 frases cortas con lo que has corregido al revisarlo.\n\nDevuelve:\n<json>{"title":"título final <55 caracteres","title_options":["",""],"thumbnail_text":"","thumbnail_concepts":["","",""],"thumbnail_texts":["","",""],"thumbnail_prompt":"","self_score":0,"self_check":[""],"music_prompt":"","sources":[{"title":"","url":""}],"scenes":[{"n":1,"sfx":"","keywords":[""],"shots":[{"line":"","visual_type":"ai","visual_prompt":"","stock_query":"","archive_query":"","reframe":null}]}]}</json>`;
+  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}Canal: ${ch.name} — ${ch.niche}\nIdioma de la narración: ${ch.language}\nTono: ${ch.tone ?? "divulgativo, cercano, con criterio"}\nAudiencia: ${ch.audience ?? "-"}\nFormato: ${short ? "Short vertical de 45-58 s: MÁXIMO 135 palabras de narración en total (con más se pasa del minuto y la gente se va)" : `vídeo largo de ~${ch.target_minutes} min`} (~${words} palabras de narración en total, ${scenes} escenas)\n\nIdea aprobada: ${v.idea_title}\nÁngulo: ${v.idea_angle ?? "-"}\n${v.idea_hook ? `Gancho propuesto (úsalo o mejóralo): ${v.idea_hook}\n` : ""}${v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? `VÍDEO RECOPILATORIO: cuenta estas ${(v.idea_stories ?? []).length} historias, de menos a más impactante, unidas por el hilo del título. El gancho anuncia el hilo y promete la más fuerte sin destriparla. Cada historia arranca con su propio mini-gancho, transiciones rápidas sin relleno, y la mejor al final.\n${(v.idea_stories ?? []).map((x: { title: string; hook: string }, k: number) => `${k + 1}. ${x.title}: ${x.hook}`).join("\n")}\n` : ""}${v.script_notes ? `Indicaciones del autor (obligatorias): ${v.script_notes}\n` : ""}${v.review_feedback && v.script ? `\nVersión anterior rechazada. Corrige según este feedback: ${v.review_feedback}\nGuion anterior: ${JSON.stringify(v.script).slice(0, 12000)}\n` : ""}\n${VIRAL_RULES(short)}\n\nReglas de escenas: cada escena dura 6-15 s de locución. ${visualRule}\nEstilo visual del canal para las imágenes IA: ${ch.style_prompt ?? "cinematic documentary, realistic lighting"}. ${sfxRule} Para ElevenLabs v3 puedes usar etiquetas de emoción puntuales como [pause] o [excited] dentro de narration, con moderación.\n${musicRule}\n\n${short ? `Los Shorts no llevan miniatura: deja thumbnail_concepts, thumbnail_texts y thumbnail_prompt vacíos.` : `Miniaturas: 3 conceptos distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de 2-4 palabras que complementan el título sin repetirlo.`}\nDeja stock_query, archive_query o visual_prompt vacíos cuando no correspondan al tipo de plano, y reframe en null salvo en los planos reframe.\nself_score: tu nota honesta de 0 a 10 del potencial viral del guion final. self_check: 2-4 frases cortas con lo que has corregido al revisarlo.\n\nDevuelve:\n<json>{"title":"título final <55 caracteres","title_options":["",""],"thumbnail_text":"","thumbnail_concepts":["","",""],"thumbnail_texts":["","",""],"thumbnail_prompt":"","self_score":0,"self_check":[""],"music_prompt":"","sources":[{"title":"","url":""}],"scenes":[{"n":1,"sfx":"","keywords":[""],"shots":[{"line":"","visual_type":"ai","visual_prompt":"","stock_query":"","archive_query":"","reframe":null}]}]}</json>`;
   // Opus por la API de lotes (mitad de precio) y con la documentación de Wikipedia en vez de búsquedas web de pago
   const redo = !!(v.review_feedback && v.script);
   let docs: { title: string; url: string; text: string }[] = [];
   if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
   const docBlock = docs.length ? `\n\nDOCUMENTACIÓN (Wikipedia):\n${docs.map((d, k) => `[${k + 1}] ${d.title} — ${d.url}\n${d.text}`).join("\n\n")}` : "";
-  const r = await claude(MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: { job, tag: "script" }, stop: ["</json>"] });
+  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: { job, tag: "script" }, stop: ["</json>"] });
   if (r.stop === "max_tokens") throw new Error("El guion salió cortado; se reintenta");
   // deno-lint-ignore no-explicit-any
   const s = parseJson<any>(r.text);
   if (!Array.isArray(s.scenes) || !s.scenes.length) throw new Error("Guion sin escenas");
+  if (short && scriptWords(s) > 155 && job.attempts < 2) throw new Error(`Guion demasiado largo para un Short (${scriptWords(s)} palabras, máximo 135); se reintenta`);
   if (scriptWords(s) < words * 0.55) throw new Error(`Guion demasiado corto (${scriptWords(s)} palabras de ~${words}); se reintenta`);
   // deno-lint-ignore no-explicit-any
   s.scenes = s.scenes.map((sc: any, i: number) => normalizeScene({ ...sc, n: i + 1, sfx: ch.sfx_enabled ? (sc.sfx ?? "") : "" }));
@@ -970,10 +978,11 @@ async function aiImage(prompt: string, short: boolean, quality = "medium") {
     headers: { Authorization: `Bearer ${key("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "gpt-image-2", prompt, size: short ? "1024x1536" : "1536x1024", quality, n: 1, output_format: "jpeg", output_compression: 90 }),
   });
-  if (!r.ok) { await unreserve(uk, 1); const t = (await r.text()).slice(0, 200); if (/insufficient_quota|billing|exceeded your current quota/i.test(t)) throw new UserError("OpenAI se ha quedado sin crédito. Recárgalo y vuelve a lanzar el vídeo."); throw new Error(`OpenAI ${r.status}: ${t}`); }
+  if (!r.ok) { await unreserve(uk, 1); const t = (await r.text()).slice(0, 200); if (/insufficient_quota|billing|exceeded your current quota|no credits/i.test(t)) throw new UserError("OpenAI se ha quedado sin crédito. Recárgalo y vuelve a lanzar el vídeo."); throw new Error(`OpenAI ${r.status}: ${t}`); }
   const d = await r.json();
   return b64ToBytes(d.data[0].b64_json);
 }
+let OPENAI_DOWN = false;
 // Si el filtro de OpenAI rechaza el prompt, se reintenta una vez con una versión suavizada
 const SOFTEN = /\b(half-starved|starv\w*|gaunt|emaciated|wounded|injur\w*|blood\w*|corpse\w*|dead|dying|kill\w*|gun\w*|rifle\w*|weapon\w*|ammunition|ammo|artillery|shell\w*|bomb\w*|explosi\w*|battle\w*|combat|smoking ridge|war-torn|warfare|trooper\w*|military)\b/gi;
 // Escenas en calidad baja (casi igual en el móvil, unas 3 veces más barata); las miniaturas siguen en media
@@ -1070,7 +1079,19 @@ async function commons(query: string, used: Set<string>) {
     }
   }
   const need = keyWords(query).filter((w) => !/^\d+s?$/.test(w)).length <= 2 ? 1 : 0.5;
-  return best && bestScore >= need ? best : null;
+  if (!best || bestScore < need) return null;
+  // Copia propia: Wikimedia corta las descargas masivas (429) y el montaje fallaba
+  try {
+    const r2 = await fetch(best.url, { headers: { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" } });
+    if (r2.ok) {
+      const bytes = new Uint8Array(await r2.arrayBuffer());
+      const h = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-1", new TextEncoder().encode(best.url)))).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const png = /\.png/i.test(best.url);
+      best.src = best.url;
+      best.url = await upload(`commons/${h}.${png ? "png" : "jpg"}`, bytes, png ? "image/png" : "image/jpeg");
+    }
+  } catch (_) { /* se usa el enlace original */ }
+  return best;
 }
 // Prompt de imagen siempre con contexto: nunca se genera a partir de la frase suelta (salían imágenes sin relación)
 // deno-lint-ignore no-explicit-any
@@ -1084,11 +1105,11 @@ async function stepVisuals(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
   // FLUX (fal.ai) para los planos IA; OpenAI solo para el primero del vídeo (el gancho)
-  const fluxOn = ch.image_provider === "flux" && !!KEYS["FAL_KEY"];
+  const fluxOn = (ch.image_provider === "flux" || OPENAI_DOWN || !KEYS["OPENAI_API_KEY"]) && !!KEYS["FAL_KEY"];
   await sb.from("videos").update({ stage: "Generando imágenes" }).eq("id", v.id);
   const { data: allScenes } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
   const used = new Set<string>();
-  for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) if (sh.media_url) used.add(sh.media_url);
+  for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) { if (sh.media_url) used.add(sh.media_url); if (sh.src) used.add(sh.src); }
   // Tope de imágenes IA por vídeo: el resto, archivo, stock gratis o acercamientos
   const aiCap = fluxOn ? (short ? 10 : 40) : (short ? 4 : 12);
   // deno-lint-ignore no-explicit-any
@@ -1154,9 +1175,20 @@ async function stepVisuals(job: Job) {
       }
       if (!media && ch.image_source !== "stock" && (KEYS["OPENAI_API_KEY"] || fluxOn)) {
         if (aiBudget <= 0) break;
-        const viaFlux = fluxOn && !(sc.n === 1 && shots.indexOf(sh) === 0 && KEYS["OPENAI_API_KEY"]);
+        let viaFlux = fluxOn && (OPENAI_DOWN || !(sc.n === 1 && shots.indexOf(sh) === 0 && KEYS["OPENAI_API_KEY"]));
         let bytes: Uint8Array | null;
-        try { bytes = viaFlux ? await fluxImage(ctxPrompt(sh, v, ch), short) : await safeImage(ctxPrompt(sh, v, ch), short, SCENE_QUALITY); } catch (e) {
+        try {
+          if (viaFlux) bytes = await fluxImage(ctxPrompt(sh, v, ch), short);
+          else {
+            try { bytes = await safeImage(ctxPrompt(sh, v, ch), short, SCENE_QUALITY); } catch (e) {
+              // OpenAI sin crédito o caído: si hay FLUX, se usa FLUX y no se vuelve a probar OpenAI en esta ejecución
+              if (e instanceof OverBudget || !KEYS["FAL_KEY"]) throw e;
+              OPENAI_DOWN = true; viaFlux = true;
+              await log(job, `OpenAI no responde (${String((e as Error).message).slice(0, 80)}); se usa FLUX`, "warn");
+              bytes = await fluxImage(ctxPrompt(sh, v, ch), short);
+            }
+          }
+        } catch (e) {
           // Sin presupuesto a mitad de escena: se guarda lo ya generado para no pagarlo otra vez
           if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN }); }
           throw e;
@@ -1179,6 +1211,7 @@ async function stepVisuals(job: Job) {
       }
       if (!media) throw new UserError(`No se encontró imagen para el plano «${String(sh.line).slice(0, 60)}». Añade la clave de Pexels o Pixabay en Ajustes.`);
       Object.assign(sh, { media_url: media.url, media_kind: media.kind, fit: media.fit ?? "cover", reframe: media.reframe ?? null, credit: media.credit ?? null, gen: media.gen ?? null, provider: media.provider ?? null });
+      if (media.src) { sh.src = media.src; used.add(media.src); }
       used.add(media.url); reuse.set(media.url, (reuse.get(media.url) ?? 0) + 1); prev = sh;
     }
     const done = shots.every((x) => x.media_url);
@@ -1366,11 +1399,11 @@ async function stepPublish(job: Job) {
 
 // ================= Viralidad: director, análisis del vídeo y miniaturas =================
 const VIRAL_RULES = (short: boolean) => `CRITERIOS DE VIRALIDAD (${short ? "Shorts" : "vídeo largo"}):
-- Gancho: ${short ? "en el segundo 0-3" : "en los primeros 15-30 s"} va la afirmación más sorprendente o la imagen más potente, sin año, lugar ni contexto previo. Abre una pregunta que el espectador necesite resolver. Nunca anuncies una sorpresa que la imagen ya ha desvelado.
+- Gancho: ${short ? "en el segundo 0-3" : "en los primeros 15-30 s"} va la afirmación más sorprendente o la imagen más potente, sin año, lugar ni contexto previo. La segunda frase sigue en plena acción: nada de "Cuentan que…", "Era 1932, en…" ni presentaciones (ahí se va la gente, lo dicen los datos de retención); el año y el lugar, si hacen falta, van dentro de una frase de acción y más tarde. Abre una pregunta que el espectador necesite resolver. Nunca anuncies una sorpresa que la imagen ya ha desvelado.
 - Bucles de curiosidad: ${short ? "cada 8-10 s" : "cada 60-90 s"} algo nuevo (giro, cifra, conflicto, revelación) que justifique seguir mirando. Escala la intensidad hacia el clímax.
 - Cero relleno: elimina toda frase que no sorprenda, no emocione o no haga avanzar la historia. Mejor 45 s apretados que 60 s flojos.
 - Ritmo visual: cambio de plano cada ${short ? "1,5-3,5 s" : "3-6 s"}, siempre ligado a lo que se dice; alterna recreación, foto real y reencuadre. Una foto real tras una recreación provoca el "¿esto pasó de verdad?".
-- Cierre: ${short ? "frase final memorable que conecte con la primera para invitar al rebote (bucle), o un giro emocional" : "remate emocional y un avance que invite a ver otro vídeo del canal"}. Sin "suscríbete" ni preguntas sobre nombres que el público no conoce.
+- Cierre: ${short ? "frase final memorable que conecte con la primera para invitar al rebote (bucle), o un giro emocional; justo antes o después, una invitación a seguir el canal de 4-8 palabras, concreta y ligada al tema (ej. «Sígueme: mañana, otra historia así»)" : "remate emocional, una invitación breve y concreta a seguir el canal y un avance que invite a ver otro vídeo del canal"}. Nunca un "suscríbete" genérico ni preguntas sobre nombres que el público no conoce.
 - Compartible: la premisa se puede contar en una frase a un amigo ("¿sabías que...?").
 - Empaquetado: título de menos de 55 caracteres, concreto y con curiosidad, sin clickbait falso; texto de miniatura de 2-4 palabras que complementa al título, no lo repite.
 - Rigor: lo dudoso se cuenta como testimonio ("cuentan que", "según testigos"), nunca como hecho. Nada inventado.`;
@@ -1386,11 +1419,7 @@ async function claudeTool(model: string, system: string, content: any, tool: any
     let d: any;
     if (batch) d = await batched(batch.job, `${batch.tag}_${i}`, body);
     else {
-      await claudeGuard(model);
-      const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: AH(), body: JSON.stringify(body) });
-      if (!r.ok) throw new Error(`Claude ${r.status}: ${(await r.text()).slice(0, 300)}`);
-      d = await r.json();
-      await claudeSpent(model, d);
+      d = await claudeCall(body);
     }
     inTok += d.usage?.input_tokens ?? 0; outTok += d.usage?.output_tokens ?? 0;
     // deno-lint-ignore no-explicit-any
@@ -1430,7 +1459,7 @@ async function stepDirect(job: Job) {
   const system = `Eres el director de contenidos de canales de YouTube que se hacen virales. Revisas el borrador del guionista con ojo implacable y lo reescribes para maximizar retención, rebote y compartidos, sin perder rigor. Respetas la guía del canal (es obligatoria). Mantienes el formato JSON exacto del borrador. Responde SOLO con JSON dentro de <json></json>.`;
   const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}${VIRAL_RULES(short)}\n${weak.length ? `\nPuntos débiles detectados en una primera lectura: ${weak.join(" · ")}\n` : ""}\nCanal: ${ch.name} — ${ch.niche}. Idioma: ${ch.language}. Formato: ${short ? "Short vertical" : `vídeo largo de ~${ch.target_minutes} min`}.\nTipos de plano permitidos: ${ch.image_source === "ai" ? "ai y reframe" : ch.image_source === "stock" ? "archive, stock_photo, stock_video y reframe" : "ai, archive, stock_photo, stock_video y reframe"}.\n${v.review_feedback ? `Feedback del autor que el guion debe cumplir: ${v.review_feedback}\n` : ""}\nBORRADOR DEL GUIONISTA:\n${JSON.stringify(original)}\n\nTareas:\n1. Puntúa el borrador de 0 a 10 en potencial viral.\n2. Reescribe lo necesario (gancho, orden, frases sobrantes, planos, keywords, cierre, título, texto de miniatura). No inventes datos nuevos: usa solo los hechos del borrador y sus fuentes.\n3. Propón 3 conceptos de miniatura distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de miniatura alternativos.\nDevuelve: <json>{"review":{"score_before":0,"score_after":0,"changes":["qué has cambiado y por qué, frases cortas"],"title_options":["","",""]},"script":{...mismo formato del borrador, completo...,"thumbnail_concepts":["","",""],"thumbnail_texts":["","",""]}}</json>`;
   try {
-    const r = await claude(MODEL_SCRIPT, system, user, { maxTokens: 20000 });
+    const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user, { maxTokens: 20000 });
     await bumpUsage(v.id, usageOf(r));
     // Nunca aceptar una versión cortada o mucho más corta que el borrador
     if (r.stop === "max_tokens") throw new Error("la respuesta salió cortada");
@@ -1581,8 +1610,13 @@ async function stepThumbs(job: Job) {
   if (done >= 2) return;
   const concept = batch === 0 ? concepts[done % concepts.length] : `${concepts[done % concepts.length]}. Fresh composition and camera angle, different from previous versions (variation ${batch}-${done})`;
   const prompt = `YouTube thumbnail background, 16:9. ${concept}. One clear subject with a strong emotional expression, placed in the right half; the left 45% is simple and uncluttered so large text can go there. Bold contrast, vivid but natural colors, sharp focus, dramatic lighting. Style: ${ch.style_prompt ?? "cinematic"}. Absolutely no text, letters, logos or watermarks.`;
-  const bytes = await safeImage(prompt, false);
-  if (!bytes) throw new UserError("OpenAI rechazó la imagen de la miniatura. Prueba «Otras 3».");
+  let bytes: Uint8Array | null;
+  try { bytes = OPENAI_DOWN && KEYS["FAL_KEY"] ? await fluxImage(prompt, false) : await safeImage(prompt, false); } catch (e) {
+    // OpenAI sin crédito: la miniatura se hace con FLUX
+    if (e instanceof OverBudget || !KEYS["FAL_KEY"]) throw e;
+    OPENAI_DOWN = true; bytes = await fluxImage(prompt, false);
+  }
+  if (!bytes) throw new UserError("No se pudo generar la imagen de la miniatura. Prueba «Otras 3».");
   const id = `${batch}_${done}`;
   const bg = await upload(`${v.id}/thumbbg_${id}.jpg`, bytes, "image/jpeg");
   const url = KEYS["RENDER_URL"] ? await composeThumb(v, bg, text, id) : bg;
@@ -2386,7 +2420,9 @@ async function stepAudioAsset(job: Job) {
 // ---------- Paso: generar un vídeo de retos sin pasar por la web (automatización y pruebas) ----------
 // payload: { format: "long"|"short", category?, difficulty?, count?, minutes?, seconds?, title? } → vídeo en «Retos por revisar»
 // Temas de Reto Imposible en automático: rotan para que el canal sea variado (los largos lo mezclan todo)
-const RETO_THEMES: { key: string; label: string; categories?: string[]; game_style?: string }[] = [
+// weight: cuántas veces más sale en la rotación (memoria es lo que mejor funciona en el canal)
+const RETO_THEMES: { key: string; label: string; categories?: string[]; game_style?: string; weight?: number }[] = [
+  { key: "memory", label: "Memoria y observación", categories: ["memory", "odd", "differences", "hidden"], weight: 2 },
   { key: "history", label: "Historia", categories: ["history"] },
   { key: "pix", label: "Minijuegos de Pix", game_style: "world" },
   { key: "geography", label: "Geografía", categories: ["geography", "culture"] },
@@ -2410,7 +2446,9 @@ async function stepRetosGenerate(job: Job) {
       const { data: last } = await sb.from("videos").select("retos").eq("channel_id", ch.id).eq("engine", "challenges").eq("format", "short").order("created_at", { ascending: false }).limit(12);
       const keys = (last ?? []).map((x) => x.retos?.theme).filter(Boolean) as string[];
       const uses = (k: string) => keys.filter((x) => x === k).length;
-      const order = RETO_THEMES.map((t, i) => ({ t, i })).filter((x) => x.t.key !== keys[0]).sort((a, b) => uses(a.t.key) - uses(b.t.key) || a.i - b.i);
+      // Peso de cada tema: el que fija el informe diario según los resultados, o el de serie
+      const w = (t: { key: string; weight?: number }) => Math.max(0.2, Number(ch.schedule?.theme_weights?.[t.key] ?? t.weight ?? 1));
+      const order = RETO_THEMES.map((t, i) => ({ t, i })).filter((x) => x.t.key !== keys[0]).sort((a, b) => uses(a.t.key) / w(a.t) - uses(b.t.key) / w(b.t) || a.i - b.i);
       theme = order[0]?.t ?? RETO_THEMES[0];
     }
   }
@@ -2504,7 +2542,7 @@ async function packageRetos(ch: any, project: any, themeLabel: string) {
     candidates: { type: "array", items: { type: "string" }, description: "8 títulos distintos" }, title: { type: "string", description: "El mejor, máximo 60 caracteres" },
     screen_title: { type: "string", description: "Texto corto para la portada dentro del vídeo, máximo 34 caracteres" }, description: { type: "string" }, tags: { type: "array", items: { type: "string" }, maxItems: 15 } } } };
   const r = await claudeTool(MODEL_FAST, `Escribes títulos y descripciones de YouTube ${project.format === "short" ? "Shorts" : ""} para «${ch.name}», un canal de retos y preguntas para todos los públicos (España y Latinoamérica) con la mascota Pix. Títulos que retan al espectador y dan ganas de jugar, concretos y distintos entre sí; nada de títulos genéricos tipo «¿Lo resuelves a tiempo?» o «¿Puedes superar los 3 niveles?». Nunca prometas algo que el vídeo no tiene.`,
-    `${P?.title_rules ? `ESTUDIO REAL DE YOUTUBE PARA ESTE NICHO:\n${P.summary}\nReglas:\n- ${(P.title_rules ?? []).join("\n- ")}\nTítulos con más visitas:\n${(P.sample ?? []).slice(0, 12).map((x: { title: string; views: number }) => `- «${x.title}» (${x.views.toLocaleString("es-ES")})`).join("\n")}\n\n` : ""}VÍDEO: ${project.format === "short" ? "Short" : "vídeo largo"} de ${themeLabel}, ${project.challenges.length} retos.\nRetos:\n${sample}\n\nTítulos recientes del canal (no repitas su estructura):\n${(prev ?? []).map((x) => `- ${x.title}`).join("\n") || "-"}\n\nEscribe 8 títulos candidatos (ideas: el dato de que poca gente acierta, comparar con un nivel o edad, «${themeLabel}» concreto, una pregunta del vídeo como gancho…), elige el mejor, un texto corto para la portada del vídeo y una descripción de 2-3 líneas que invite a jugar y a comentar cuántas acertó, con 3-5 hashtags al final (#shorts si es Short).`,
+    `${playbookBlock(ch)}${P?.title_rules ? `ESTUDIO REAL DE YOUTUBE PARA ESTE NICHO:\n${P.summary}\nReglas:\n- ${(P.title_rules ?? []).join("\n- ")}\nTítulos con más visitas:\n${(P.sample ?? []).slice(0, 12).map((x: { title: string; views: number }) => `- «${x.title}» (${x.views.toLocaleString("es-ES")})`).join("\n")}\n\n` : ""}VÍDEO: ${project.format === "short" ? "Short" : "vídeo largo"} de ${themeLabel}, ${project.challenges.length} retos.\nRetos:\n${sample}\n\nTítulos recientes del canal (no repitas su estructura):\n${(prev ?? []).map((x) => `- ${x.title}`).join("\n") || "-"}\n\nEscribe 8 títulos candidatos (ideas: el dato de que poca gente acierta, comparar con un nivel o edad, «${themeLabel}» concreto, una pregunta del vídeo como gancho…), elige el mejor, un texto corto para la portada del vídeo y una descripción de 2-3 líneas que invite a jugar y a comentar cuántas acertó, con 3-5 hashtags al final (#shorts si es Short).`,
     tool, 2000);
   const t = String(r.input?.title ?? "").trim(); if (!t) return null;
   return { title: t.slice(0, 100), screen_title: String(r.input?.screen_title ?? "").trim().slice(0, 40) || undefined, description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15) };
@@ -3206,6 +3244,96 @@ async function stepResearch(job: Job) {
 }
 
 // ---------- Paso: calendario recomendado de un canal (sin IA, se recalcula cada día) ----------
+// ---------- Paso: informe diario del canal (analiza resultados, decide mejoras y las aplica) ----------
+const REPORT_TOOL = { name: "informe", description: "Informe diario del canal", input_schema: { type: "object", required: ["headline", "summary", "evolution", "wins", "problems", "changes", "watch"], properties: {
+  headline: { type: "string", description: "Una frase con lo más importante de hoy (máx. 120 caracteres)" },
+  summary: { type: "string", description: "3-5 frases: cómo va el canal con cifras concretas" },
+  evolution: { type: "string", description: "Cómo evoluciona frente a días anteriores y si los cambios del último informe están funcionando (con datos)" },
+  wins: { type: "array", items: { type: "string" }, maxItems: 4, description: "Lo que funciona, con el dato que lo demuestra" },
+  problems: { type: "array", items: { type: "string" }, maxItems: 4, description: "Lo que falla, con el dato que lo demuestra" },
+  changes: { type: "array", maxItems: 5, items: { type: "object", required: ["area", "change", "reason", "auto"], properties: {
+    area: { type: "string", enum: ["guion", "ideas", "titulos", "ritmo", "retos", "calendario", "produccion"] },
+    change: { type: "string", description: "Qué se cambia, concreto y aplicable" },
+    reason: { type: "string", description: "El dato que lo justifica" },
+    auto: { type: "boolean", description: "true si se aplica solo (reglas de guion, ideas, títulos, ritmo, temas de retos); false si necesita la decisión del dueño (calendario, frecuencia, presupuesto, parar o crear formatos)" } } } },
+  theme_weights: { type: "object", description: "Solo canales de retos: peso de cada tema en la rotación (0.3-3) según sus resultados. Claves posibles: memory, history, pix, geography, visual, science, general", additionalProperties: { type: "number" } },
+  watch: { type: "array", items: { type: "string" }, maxItems: 3, description: "Qué mirar en los próximos días" } } } };
+function madridDate(d = new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
+async function stepDailyReport(job: Job) {
+  // Sin canal: un informe por cada canal activo
+  if (!job.channel_id) {
+    const { data: chs } = await sb.from("channels").select("id").neq("status", "archived");
+    for (const [i, c] of (chs ?? []).entries()) await enqueue("daily_report", { channel_id: c.id, delaySec: i * 20 });
+    return;
+  }
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch) return;
+  const day = madridDate();
+  const { data: done } = await sb.from("channel_reports").select("id").eq("channel_id", ch.id).eq("day", day).maybeSingle();
+  if (done && !job.payload?.force) return;
+  const since = new Date(Date.now() - 28 * 864e5).toISOString();
+  const { data: vids } = await sb.from("videos").select("id,title,format,engine,published_at,duration_sec,stats,retos,script").eq("channel_id", ch.id).not("youtube_video_id", "is", null).gte("published_at", since).lte("published_at", new Date().toISOString()).order("published_at", { ascending: false }).limit(40);
+  const list = vids ?? [];
+  // Visitas ganadas cada día (suma de lo que crece cada vídeo entre lecturas)
+  const gain = new Map<string, number>();
+  for (const v of list) {
+    const h = (v.stats?.history ?? []) as { d: string; views: number }[];
+    for (let i = 0; i < h.length; i++) { const prev = i ? h[i - 1].views : 0; gain.set(h[i].d, (gain.get(h[i].d) ?? 0) + Math.max(0, Number(h[i].views) - Number(prev))); }
+  }
+  const days = [...gain.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-14);
+  const sum = (a: [string, number][]) => a.reduce((s2, x) => s2 + x[1], 0);
+  const last7 = sum(days.slice(-7)), prev7 = sum(days.slice(-14, -7));
+  const pct = (x: unknown) => x == null ? "?" : `${Math.round(Number(x))} %`;
+  const rows = list.map((v) => {
+    const a = v.stats?.analytics ?? {};
+    const age = Math.round((Date.now() - new Date(v.published_at!).getTime()) / 36e5);
+    const views = Number(v.stats?.views ?? a.views ?? 0), likes = Number(v.stats?.likes ?? a.likes ?? 0);
+    const first = v.script?.scenes?.[0]?.shots?.[0]?.line ?? v.script?.scenes?.[0]?.narration ?? "";
+    const shorts = (a.traffic ?? []).find((x: [string, number]) => x[0] === "SHORTS")?.[1];
+    return `- «${v.title}» · ${v.format === "short" ? "Short" : "Largo"} ${Math.round(Number(v.duration_sec ?? 0))} s · hace ${age < 48 ? `${age} h` : `${Math.round(age / 24)} días`}${v.retos?.theme ? ` · tema ${v.retos.theme}` : ""}
+  visitas ${views} · likes ${likes} (${views ? Math.round((likes / views) * 1000) / 10 : 0} %) · subs ${a.subs ?? "?"} · visto de media ${pct(a.avg_pct)}${a.hold_3s != null ? ` · retención a los 3 s ${Math.round(a.hold_3s * 100)} % · al final ${Math.round(a.hold_end * 100)} %` : ""}${shorts != null ? ` · feed de Shorts ${shorts} %` : ""}
+  primera frase: «${String(first).slice(0, 120)}»${(a.drops ?? []).length ? `\n  caídas: ${(a.drops ?? []).map((d: { sec: number; from: number; to: number; line?: string }) => `s${d.sec} (${Math.round(d.from * 100)}→${Math.round(d.to * 100)} %) «${String(d.line ?? "").slice(0, 60)}»`).join(" · ")}` : ""}`;
+  }).join("\n");
+  const { data: spend } = await sb.from("spend_daily").select("day,n").eq("k", `eur:${ch.id}`).gte("day", madridDate(new Date(Date.now() - 7 * 864e5)));
+  const eur7 = (spend ?? []).reduce((s2, x) => s2 + Number(x.n), 0);
+  const { data: prevRep } = await sb.from("channel_reports").select("day,headline,changes,metrics").eq("channel_id", ch.id).lt("day", day).order("day", { ascending: false }).limit(3);
+  const subs = Number(ch.yt_stats?.subs ?? 0);
+  const metrics = { views_7d: last7, views_prev_7d: prev7, daily: days, subs, eur_7d: Math.round(eur7 * 100) / 100, videos: list.length,
+    best: list.slice().sort((a, b) => Number(b.stats?.views ?? 0) - Number(a.stats?.views ?? 0))[0]?.title ?? null };
+  if (!list.length) {
+    await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: "Todavía no hay vídeos publicados con datos", summary: "Cuando haya vídeos publicados, aquí verás cada día cómo van y qué se mejora.", metrics }, { onConflict: "channel_id,day" });
+    return;
+  }
+  const challenges = ch.production_type === "challenges";
+  const system = `Eres el analista de un canal de YouTube faceless. Cada mañana revisas los datos reales y decides qué se cambia para crecer. Reglas: cada conclusión cita el dato que la apoya; no saques conclusiones de vídeos con menos de 24 h ni de un solo vídeo (dilo si la muestra es pequeña); las analíticas de retención tardan ~2 días; compara con los informes anteriores para ver si sus cambios funcionaron; los cambios automáticos son reglas concretas para guion, ideas, títulos o ritmo (se añaden al manual del canal); calendario, frecuencia, presupuesto o parar/crear formatos siempre los decide el dueño (auto=false). Si no hay nada nuevo que cambiar, no inventes cambios. Español claro, sin jerga.`;
+  const user = `Canal: ${ch.name} — ${ch.niche ?? ""}${challenges ? " (canal de retos y preguntas; los temas rotan y se pueden ponderar con theme_weights)" : ""}
+Hoy: ${day} · Suscriptores: ${subs || "?"} · Gasto de los últimos 7 días: ${eur7.toFixed(2)} €
+Calendario: ${ch.schedule?.shorts_per_week ?? 0} Shorts/semana a las ${(ch.schedule?.short_times ?? []).join(", ")}${ch.schedule?.long_per_week ? ` y ${ch.schedule.long_per_week} largo/semana` : ""}${challenges && ch.schedule?.theme_weights ? `\nPesos actuales de los temas: ${JSON.stringify(ch.schedule.theme_weights)}` : ""}
+
+VISITAS GANADAS POR DÍA (todos los vídeos de las 4 últimas semanas): ${days.map(([d, n]) => `${d.slice(5)} ${n}`).join(" · ") || "sin datos"}
+Últimos 7 días: ${last7} · 7 anteriores: ${prev7}
+
+VÍDEOS (más reciente primero):
+${rows}
+
+${playbookBlock(ch)}INFORMES ANTERIORES:
+${(prevRep ?? []).map((r) => `${r.day}: ${r.headline}\n  cambios: ${(r.changes ?? []).map((c: { change: string }) => c.change).join(" | ") || "ninguno"}`).join("\n") || "(es el primero)"}`;
+  const r = await claudeTool(MODEL_FAST, system, user, REPORT_TOOL, 4000);
+  const o = r.input ?? {};
+  // deno-lint-ignore no-explicit-any
+  const changes = (o.changes ?? []).map((c: any) => ({ area: String(c.area ?? ""), change: clean(c.change), reason: clean(c.reason), auto: !!c.auto && !["calendario", "produccion"].includes(String(c.area)) }));
+  await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: clean(o.headline).slice(0, 200), summary: clean(o.summary), evolution: clean(o.evolution), wins: (o.wins ?? []).map(clean), problems: (o.problems ?? []).map(clean), changes, watch: (o.watch ?? []).map(clean), metrics, read_at: null }, { onConflict: "channel_id,day" });
+  // Se aplican solos: las reglas al manual del canal (lo leen guion, ideas y títulos) y los pesos de los temas de retos
+  const auto = changes.filter((c: { auto: boolean }) => c.auto);
+  if (auto.length) await enqueue("learn", { channel_id: ch.id, payload: { source: "informe", material: `Informe del ${day}. Cambios decididos a partir de los datos:\n${auto.map((c: { area: string; change: string; reason: string }) => `- [${c.area}] ${c.change} (por qué: ${c.reason})`).join("\n")}` } });
+  if (challenges && o.theme_weights && typeof o.theme_weights === "object") {
+    const tw: Record<string, number> = {};
+    for (const [k, val] of Object.entries(o.theme_weights)) if (RETO_THEMES.some((t) => t.key === k)) tw[k] = Math.min(3, Math.max(0.3, Number(val) || 1));
+    if (Object.keys(tw).length) await sb.from("channels").update({ schedule: { ...(ch.schedule ?? {}), theme_weights: tw } }).eq("id", ch.id);
+  }
+  await log(job, `Informe del día listo para ${ch.name}: ${clean(o.headline).slice(0, 100)}${auto.length ? ` · ${auto.length} mejoras aplicadas` : ""}`);
+}
+
 async function stepAdvise(job: Job) {
   const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
   if (!ch || ch.status === "archived") return;

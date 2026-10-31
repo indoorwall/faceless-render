@@ -314,6 +314,7 @@ const STATUS = {
 };
 const ICON = {
   hoy:'<path d="M4 13h4l2 3h4l2-3h4M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
+  informes:'<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>',
   canales:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
   dinero:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.6-1-1.7-1.5-3-1.5-1.7 0-3 .9-3 2.2 0 3 6 1.6 6 4.6 0 1.3-1.3 2.2-3 2.2-1.4 0-2.6-.6-3.1-1.6M12 6v2M12 16v2"/>',
   ajustes:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -468,7 +469,7 @@ async function run(fn, ok){
 
 // ---------- datos ----------
 async function load(){
-  const [c,v,p,a,k,pr,j] = await Promise.all([
+  const [c,v,p,a,k,pr,j,rp] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
     sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,published_at,error,created_at,updated_at,usage,engine,revenue,stats").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("schedule_research").select("lang,data,updated_at"), // estudio global de horarios (por idioma)
@@ -476,8 +477,9 @@ async function load(){
     sb.rpc("api_key_status"),
     sb.rpc("get_prices"),
     sb.from("jobs").select("id,step,status,channel_id,video_id,run_after").in("status",["queued","running"]),
+    sb.from("channel_reports").select("*").order("day",{ascending:false}).limit(60),
   ]);
-  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[];
+  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[];
   render();
 }
 let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
@@ -487,7 +489,8 @@ function render(){
   if(!S.session){ $("#root").innerHTML = authView(); bindAuth(); return; }
   const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
   const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
-  const views = {hoy:["Revisar",reviewCount],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
+  const unread = (S.reports||[]).filter(r=>!r.read_at).length;
+  const views = {hoy:["Revisar",reviewCount],informes:["Informes",unread],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
   const scrollY = window.scrollY;
   $("#root").innerHTML = `<div class="app">
     <nav class="rail">
@@ -495,7 +498,7 @@ function render(){
       ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
       <div class="foot">${esc(S.session.user.email)}</div>
     </nav>
-    <main><div class="wrap">${ ({hoy:viewHoy,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+    <main><div class="wrap">${ ({hoy:viewHoy,informes:viewInformes,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
@@ -757,6 +760,36 @@ function viewDinero(){
         </div>
       </section>`; }).join("")}`;
 }
+// --- Vista: Informes (cada mañana la IA de cada canal analiza los resultados y decide las mejoras)
+const AREA_TXT={guion:"Guion",ideas:"Ideas",titulos:"Títulos",ritmo:"Ritmo",retos:"Retos",calendario:"Calendario",produccion:"Producción"};
+function viewInformes(){
+  const reps=S.reports||[];
+  const days=[...new Set(reps.map(r=>r.day))];
+  const dayTxt=(d)=>new Date(d+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"});
+  const n0=(x)=>Math.round(Number(x)||0).toLocaleString("es-ES");
+  const trend=(m)=>{ const a=Number(m?.views_7d||0), b=Number(m?.views_prev_7d||0); if(!b) return ""; const k=Math.round((a-b)/b*100); return `<span class="chip ${k>=0?"st-ok":"st-bad"}">${k>=0?"▲":"▼"} ${Math.abs(k)} % vs semana anterior</span>`; };
+  const li=(arr)=>arr?.length?`<ul style="margin:4px 0 0;padding-left:18px">${arr.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`:"";
+  const card=(r)=>{ const c=ch(r.channel_id)||{}; const m=r.metrics||{};
+    return `<section class="chblock" style="--c:${esc(c.color||"#888")}">
+      <div class="chblock-h"><div class="chname"><span class="dot"></span><h2>${esc(c.name||"Canal")}</h2></div><div class="row">${!r.read_at?`<span class="chip st-acc">Nuevo</span>`:""}${trend(m)}</div></div>
+      <div class="idea-t" style="margin-bottom:6px">${esc(r.headline||"")}</div>
+      <div class="row" style="margin-bottom:8px"><span class="chip">${n0(m.views_7d)} visitas en 7 días</span>${m.subs?`<span class="chip">${n0(m.subs)} suscriptores</span>`:""}${m.eur_7d!=null?`<span class="chip">${eur(m.eur_7d)} gastados en 7 días</span>`:""}</div>
+      ${r.summary?`<p style="margin:0 0 8px">${esc(r.summary)}</p>`:""}
+      ${r.evolution?`<p class="muted" style="margin:0 0 8px"><b>Evolución:</b> ${esc(r.evolution)}</p>`:""}
+      <div class="fgrid">
+        ${r.wins?.length?`<div><div class="label">Lo que funciona</div>${li(r.wins)}</div>`:""}
+        ${r.problems?.length?`<div><div class="label">Lo que falla</div>${li(r.problems)}</div>`:""}
+      </div>
+      ${(r.changes||[]).length?`<div class="label" style="margin-top:10px">Mejoras</div><div class="list" style="gap:6px;margin-top:4px">${r.changes.map(x=>`<div class="card" style="padding:10px 12px"><div class="row"><span class="chip">${esc(AREA_TXT[x.area]||x.area)}</span><span class="chip ${x.auto?"st-ok":"st-warn"}">${x.auto?"Se aplica sola":"Decides tú"}</span></div><div style="margin-top:4px">${esc(x.change)}</div><div class="muted" style="font-size:13px">${esc(x.reason)}</div></div>`).join("")}</div>`:`<p class="muted" style="margin:8px 0 0">Hoy no hace falta cambiar nada.</p>`}
+      ${r.watch?.length?`<div class="label" style="margin-top:10px">A vigilar</div>${li(r.watch)}`:""}
+    </section>`; };
+  // Al abrir la vista, los informes nuevos quedan leídos
+  const unread=reps.filter(r=>!r.read_at).map(r=>r.id);
+  if(unread.length) setTimeout(async()=>{ await sb.from("channel_reports").update({read_at:new Date().toISOString()}).in("id",unread); reps.forEach(r=>{ if(unread.includes(r.id)) r.read_at=r.read_at||new Date().toISOString(); }); },1500);
+  return `<div class="head"><div><h1>Informes</h1><p>Cada mañana (sobre las 8:45) la IA de cada canal revisa visitas, retención y suscriptores, lo compara con días anteriores y decide qué mejorar. Las mejoras de guion, ideas y títulos se aplican solas; las de calendario o presupuesto las decides tú.</p></div><button class="btn" onclick="genReports()">Generar ahora</button></div>
+    ${days.length?days.slice(0,7).map(d=>`<div class="label" style="margin:18px 0 8px;text-transform:capitalize">${esc(dayTxt(d))}</div>${reps.filter(r=>r.day===d).map(card).join("")}`).join(""):`<div class="card"><p class="muted" style="margin:0">El primer informe llega mañana por la mañana. También puedes generarlo ahora.</p></div>`}`;
+}
+async function genReports(){ await run(async()=>{ const { error } = await sb.from("jobs").insert(S.channels.map(c=>({ step:"daily_report", channel_id:c.id, payload:{force:true} }))); if(error) throw error; kick(); setTimeout(load,60000); },"Preparando los informes: tardan un minuto"); }
 // --- Vista: Ajustes
 function viewAjustes(){
   return `<div class="head"><div><h1>Ajustes</h1><p>Las claves se guardan cifradas en tu base de datos. Desde aquí solo se pueden escribir, nunca leer.</p></div></div>
@@ -1372,14 +1405,14 @@ async function saveKey(name){
 async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
 
 // ---------- arranque ----------
-function route(){ const h=location.hash.slice(1); S.view=["hoy","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+function route(){ const h=location.hash.slice(1); S.view=["hoy","informes","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{
   const was=!!S.session; S.session=session;
   if(session && !was){
-    const h=location.hash.slice(1); S.view=["hoy","dinero","canales","ajustes"].includes(h)?h:"hoy";
+    const h=location.hash.slice(1); S.view=["hoy","informes","dinero","canales","ajustes"].includes(h)?h:"hoy";
     load();
     channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)

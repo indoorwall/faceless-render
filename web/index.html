@@ -824,10 +824,30 @@ function sheetShell(title, sub, body, foot){
   el.innerHTML = `<div class="sheet-h"><div style="min-width:0"><div class="row">${sub}</div><h2 style="margin-top:6px">${esc(title)}</h2></div><button class="btn ghost" onclick="closeSheet()" aria-label="Cerrar">✕</button></div>
     <div class="sheet-b">${body}</div>${foot?`<div class="sheet-f">${foot}</div>`:""}`;
 }
+// Shorts dibujados con código del canal de retos («¿Quién ganaría?», «¿Cuánto costaba?», «Piensa un número», «Piano fácil»)
+const FORMAT_NAME={ganaria:"¿Quién ganaría?",precios:"¿Cuánto costaba?",numero:"Piensa un número",piano:"Piano fácil"};
+function formatDetail(r){ const d=r.data||{};
+  if(r.format==="ganaria") return `<div class="label">${esc(d.a?.emoji||"")} ${esc(d.a?.name||"")} contra ${esc(d.b?.emoji||"")} ${esc(d.b?.name||"")}</div><div class="ilist">${(d.stats||[]).map(x=>`<div class="irow"><span>${esc(x.label)}${x.higher===false?" (gana el menor)":""}</span><span class="mono">${esc(String(x.a))} · ${esc(String(x.b))} ${esc(x.unit||"")}</span></div>`).join("")}</div>${d.note?`<p class="muted" style="margin:6px 0 0">${esc(d.note)}</p>`:""}`;
+  if(r.format==="precios") return `<div class="label">Año ${esc(String(d.year))}</div><div class="ilist">${(d.items||[]).map(x=>`<div class="irow"><span>${esc(x.emoji)} ${esc(x.name)}</span><span class="mono">${esc(String(x.ptas))} pts · hoy ${esc(String(x.today))} €</span></div>`).join("")}</div>`;
+  if(r.format==="numero") return `<div class="ilist">${(d.steps||[]).map((x,i)=>`<div class="irow"><span>${i+1}. ${esc(x.a)} ${esc(x.b)}</span><span>${esc(x.e)}</span></div>`).join("")}</div><p style="margin:6px 0 0">Resultado: <b>${esc(String(d.result))}</b></p>`;
+  if(r.format==="piano") return `<p style="margin:0">Canción: <b>${esc(d.song||"")}</b></p>`;
+  return "";
+}
+function renderFormatSheet(first){ if(!first) return;
+  const v=S.open.v, r=v.retos||{};
+  const body=`<div class="row" style="margin-bottom:8px">${chTag(v.channel_id)}<span class="chip">${esc(FORMAT_NAME[r.format]||r.format)}</span>${autoChip(v)}</div>
+    <label class="f">Título<input id="fm-title" value="${esc(v.title||"")}" maxlength="100"></label>
+    <div class="card" style="margin-top:10px">${formatDetail(r)}</div>
+    <p class="muted" style="font-size:13px">Se dibuja con código y el sonido se sintetiza: no tiene coste. Al aprobarlo se monta y queda listo para revisar.</p>`;
+  const foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn pri" onclick="approveFormat()">Aprobar y montar</button>`;
+  sheetShell(v.title||FORMAT_NAME[r.format]||"Short", `<span class="chip">${esc(FORMAT_NAME[r.format]||"")}</span>`, body, foot);
+}
+async function approveFormat(){ const t=$("#fm-title").value.trim(); await run(async()=>{ const {error}=await sb.from("videos").update({title:t||S.open.v.title,status:"producing",progress:0,stage:"En cola"}).eq("id",S.open.v.id); if(error) throw error; await kick(); closeSheet(); },"Aprobado: se está montando"); }
 function renderSheet(first){
   const o=S.open; if(!o) return;
   if(o.kind==="channel") return renderChannelSheet(first);
   if(o.kind==="guide") return renderGuideSheet(first);
+  if(o.v?.retos?.kind==="formato" && o.v.status==="script_review") return renderFormatSheet(first);
   if(o.v?.engine==="challenges" && o.v.status==="script_review" && window.RetosUI) return RetosUI.renderEditor(first);
   // refrescar estado si cambió por realtime
   const live=S.videos.find(v=>v.id===o.v.id);

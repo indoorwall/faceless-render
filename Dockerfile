@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 # node-canvas (dibujo 2D del Motor B) trae sus binarios precompilados
 RUN npm ci --omit=dev && node -e "require('canvas')"
-COPY server.js render.js tools.js render-retos.js ./
+COPY server.js render.js tools.js render-retos.js render-formats.js ./
 COPY web/retos/ ./web/retos/
 ENV NODE_ENV=production
 EXPOSE 8080

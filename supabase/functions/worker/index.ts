@@ -5,6 +5,7 @@ import { jsonrepair } from "npm:jsonrepair@3.13.1";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
 import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, makeChallenge, projectStrings, QUIZ_TOPICS, CATEGORY_ORDER as RETOS_CLASSIC, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 import { WORLD } from "../../../web/retos/world.js";
+import { validateFormat, makeNumero, makePiano, SONGS as PIANO_SONGS } from "../../../web/retos/formats.js";
 const WORLD_MECH = new Set(Object.keys(WORLD));
 declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
 
@@ -2322,6 +2323,8 @@ async function stepRetosAssets(job: Job) {
   const v = await getVideo(job.video_id);
   if (v.engine !== "challenges") throw new UserError("Este vídeo no es de retos");
   const ch = v.channel;
+  // Formatos dibujados con código: el sonido se sintetiza en el servidor, no hace falta preparar nada
+  if (v.retos?.kind === "formato") { await enqueue("render", { video_id: v.id }); return; }
   // Canal en otro idioma: se traducen los textos del reto antes de montar (voz incluida)
   if ((ch.language ?? "es") !== "es") await translateRetos(job, v);
   const project = retosProject(v);
@@ -2353,11 +2356,80 @@ async function stepRetosAssets(job: Job) {
   await enqueue("render", { video_id: v.id });
 }
 
+
+// ---------- Formatos dibujados con código dentro del canal de retos ----------
+const GANARIA_TOOL = { name: "duelo", description: "Duelo de ¿Quién ganaría?", input_schema: { type: "object", required: ["a", "b", "stats", "note"], properties: {
+  a: { type: "object", required: ["emoji", "name"], properties: { emoji: { type: "string", description: "Un solo emoji que lo represente" }, name: { type: "string", description: "Nombre corto, máximo 18 caracteres" } } },
+  b: { type: "object", required: ["emoji", "name"], properties: { emoji: { type: "string" }, name: { type: "string" } } },
+  stats: { type: "array", minItems: 5, maxItems: 5, items: { type: "object", required: ["label", "a", "b", "unit", "higher"], properties: {
+    label: { type: "string", description: "Qué se compara, máximo 14 caracteres (Peso, Mordida, Velocidad…)" }, a: { type: "number" }, b: { type: "number" },
+    unit: { type: "string", description: "Unidad corta (kg, km/h, m, PSI…) o vacío" }, dec: { type: "integer", description: "Decimales a mostrar (0 o 1)" }, higher: { type: "boolean", description: "true si gana el valor más alto" } } } },
+  note: { type: "string", description: "Aclaración de los datos, máximo 50 caracteres (p. ej. «Datos medios de machos adultos»)" } } } };
+const PRECIOS_TOOL = { name: "precios", description: "Precios en pesetas y hoy", input_schema: { type: "object", required: ["items"], properties: {
+  items: { type: "array", minItems: 5, maxItems: 5, items: { type: "object", required: ["emoji", "name", "ptas", "today"], properties: {
+    emoji: { type: "string" }, name: { type: "string", description: "Producto, máximo 24 caracteres" }, ptas: { type: "number", description: "Precio aproximado en pesetas ese año en España" },
+    today: { type: "number", description: "Precio aproximado hoy en euros en España" }, word: { type: "string", description: "Solo si no es un precio (p. ej. un sueldo): «más alto»" } } } } } } };
+// deno-lint-ignore no-explicit-any
+async function generateFormatShort(job: Job, ch: any, theme: { key: string; label: string; format: string }) {
+  const { data: prevV } = await sb.from("videos").select("retos").eq("channel_id", ch.id).eq("engine", "challenges").contains("retos", { kind: "formato", format: theme.format }).order("created_at", { ascending: false }).limit(60);
+  // deno-lint-ignore no-explicit-any
+  const prev = (prevV ?? []).map((x: any) => x.retos?.data ?? {});
+  // deno-lint-ignore no-explicit-any
+  let data: any; let summary = "";
+  if (theme.format === "numero") {
+    const last = new Set(prev.slice(0, 6).map((d: { steps?: { b: string }[]; result?: number }) => JSON.stringify([d.steps?.map((x) => x.b), d.result])));
+    for (let i = 0; i < 20; i++) { data = makeNumero(Date.now() + i * 7919); if (!last.has(JSON.stringify([data.steps.map((x: { b: string }) => x.b), data.result]))) break; }
+    summary = `Truco de magia matemática: ${data.steps.map((x: { a: string; b: string }) => `${x.a} ${x.b}`).join(" → ")} → siempre sale ${data.result}`;
+  } else if (theme.format === "piano") {
+    const used = prev.map((d: { song?: string }) => d.song);
+    const keys = Object.keys(PIANO_SONGS).sort((a, b) => (used.indexOf(a) === -1 ? -1 : used.indexOf(a)) - (used.indexOf(b) === -1 ? -1 : used.indexOf(b)));
+    // La que no ha salido nunca o la que hace más tiempo
+    const fresh = keys.filter((k) => !used.includes(k));
+    data = makePiano(fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : keys[keys.length - 1]);
+    const song = (PIANO_SONGS as Record<string, { title: string; by: string }>)[data.song];
+    summary = `Tutorial de piano fácil para principiantes: «${song.title}» (${song.by}) con las notas DO RE MI cayendo sobre el teclado`;
+  } else if (theme.format === "ganaria") {
+    const done = prev.map((d: { a?: { name: string }; b?: { name: string } }) => `${d.a?.name} vs ${d.b?.name}`).slice(0, 40);
+    const r = await claudeTool(MODEL_FAST, "Preparas duelos «¿Quién ganaría?» para Shorts de YouTube en español (todos los públicos). Solo datos reales y aproximados de fuentes fiables (Wikipedia, National Geographic); nunca inventes cifras. Rivales que generen debate: animales, dinosaurios, vehículos, máquinas, fenómenos naturales o superlativos del mundo real. Nada de personas reales ni marcas.",
+      `Propón un duelo nuevo y emocionante con 5 rondas comparables y equilibradas (que no gane uno 5 a 0). ${done.length ? `Ya hechos (no repitas ni uses la misma pareja):\n${done.join("\n")}` : ""}`, GANARIA_TOOL, 2500);
+    data = r.input;
+    summary = `Duelo ¿Quién ganaría?: ${data?.a?.name} contra ${data?.b?.name} en ${(data?.stats ?? []).map((x: { label: string }) => x.label).join(", ")}`;
+  } else if (theme.format === "precios") {
+    const years = prev.map((d: { year?: number }) => d.year).filter(Boolean);
+    const pool = [1975, 1978, 1980, 1982, 1985, 1988, 1990, 1992, 1995, 1998].filter((y) => !years.slice(0, 6).includes(y));
+    const year = pool[Math.floor(Math.random() * pool.length)] ?? 1985;
+    const items = prev.filter((d: { year?: number }) => d.year === year).flatMap((d: { items?: { name: string }[] }) => (d.items ?? []).map((x) => x.name));
+    const r = await claudeTool(MODEL_FAST, "Recopilas precios históricos de España en pesetas para Shorts de YouTube. Solo cifras bien documentadas (INE, prensa de la época, BOE); redondea a cifras realistas y conservadoras. Si no estás seguro de un precio, elige otro producto.",
+      `Año ${year}. Elige 5 productos o servicios cotidianos y muy reconocibles (con 1 sueldo o vivienda como máximo) y da su precio aproximado en pesetas en ${year} y su precio aproximado hoy en euros. ${items.length ? `Ya usados para este año: ${items.join(", ")}.` : ""}`, PRECIOS_TOOL, 2500);
+    data = { year, items: r.input?.items ?? [], note: "Cifras aproximadas · 1 € = 166,386 pesetas" };
+    summary = `¿Cuánto costaba en ${year}? ${(data.items ?? []).map((x: { name: string; ptas: number; today: number }) => `${x.name}: ${x.ptas} pesetas, hoy ${x.today} €`).join(" · ")}`;
+  }
+  const val = validateFormat(theme.format, data);
+  if (!val.ok) throw new Error(`${theme.label}: datos no válidos (${val.errors[0]}); se reintenta`);
+  let pack: { title: string; description: string; tags: string[] } | null = null;
+  try { pack = await packageRetos(ch, { format: "short", challenges: [{ question: summary }] }, theme.label); } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Título con IA no disponible: ${(e as Error).message}`, "warn"); }
+  const title = pack?.title ?? theme.label;
+  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: "short", title, idea_title: title, description: pack?.description ?? summary, tags: pack?.tags ?? [], retos: { kind: "formato", format: theme.format, theme: theme.key, data, summary } }).select("id").single();
+  if (error) throw new Error(error.message);
+  if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
+  await log({ ...job, video_id: v.id }, `${theme.label} preparado: «${title}»`);
+}
+// deno-lint-ignore no-explicit-any
+async function renderFormatShort(job: Job, v: any) {
+  const sign = async (path: string) => { const { data, error } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true }); if (error || !data) throw new Error(`No se pudo preparar la subida: ${error?.message}`); return data.signedUrl; };
+  const spec = { kind: "formato", id: v.id, width: 1080, height: 1920, fps: 30, scenes: [], upload_url: await sign(`${v.id}/final.mp4`), format: v.retos.format, data: v.retos.data, brand: v.channel?.name ?? "" };
+  const base = KEYS["RENDER_URL"].replace(/\/+$/, "");
+  const r = await fetch(`${base}/jobs`, { method: "POST", headers: { Authorization: `Bearer ${KEYS["RENDER_SECRET"]}`, "Content-Type": "application/json" }, body: JSON.stringify(spec) });
+  if (!r.ok && r.status !== 409) throw new Error(`Servidor de render ${r.status}: ${(await r.text()).slice(0, 300)}`);
+  await sb.from("videos").update({ render_id: `own:${v.id}`, stage: "Dibujando y montando", progress: 30 }).eq("id", v.id);
+  await enqueue("render_check", { video_id: v.id, delaySec: 20 });
+}
 // ---------- Paso: montaje de retos en el servidor propio ----------
 // deno-lint-ignore no-explicit-any
 async function stepRenderRetos(job: Job, v: any) {
   if (!KEYS["RENDER_URL"] || !KEYS["RENDER_SECRET"]) throw new UserError("Los retos necesitan el servidor de montaje propio (RENDER_URL en Ajustes)");
   const ch = v.channel; const short = v.format === "short";
+  if (v.retos?.kind === "formato") return renderFormatShort(job, v);
   const project = retosProject(v);
   const tl = retosTimeline(project);
   const { data: lib } = await sb.from("channel_audio").select("kind,code,url,volume,status").eq("channel_id", ch.id).eq("status", "ready");
@@ -2421,7 +2493,12 @@ async function stepAudioAsset(job: Job) {
 // payload: { format: "long"|"short", category?, difficulty?, count?, minutes?, seconds?, title? } → vídeo en «Retos por revisar»
 // Temas de Reto Imposible en automático: rotan para que el canal sea variado (los largos lo mezclan todo)
 // weight: cuántas veces más sale en la rotación (memoria es lo que mejor funciona en el canal)
-const RETO_THEMES: { key: string; label: string; categories?: string[]; game_style?: string; weight?: number }[] = [
+// format: Short dibujado con código de otro tipo (web/retos/formats.js) en vez de una ronda de retos
+const RETO_THEMES: { key: string; label: string; categories?: string[]; game_style?: string; weight?: number; format?: string }[] = [
+  { key: "ganaria", label: "¿Quién ganaría?", format: "ganaria", weight: 1.5 },
+  { key: "precios", label: "¿Cuánto costaba?", format: "precios" },
+  { key: "numero", label: "Piensa un número", format: "numero" },
+  { key: "piano", label: "Piano fácil", format: "piano" },
   { key: "memory", label: "Memoria y observación", categories: ["memory", "odd", "differences", "hidden"], weight: 2 },
   { key: "history", label: "Historia", categories: ["history"] },
   { key: "pix", label: "Minijuegos de Pix", game_style: "world" },
@@ -2452,6 +2529,7 @@ async function stepRetosGenerate(job: Job) {
       theme = order[0]?.t ?? RETO_THEMES[0];
     }
   }
+  if (theme && "format" in theme && theme.format) return generateFormatShort(job, ch, theme as { key: string; label: string; format: string });
   // Preguntas tipo test del banco (sin repetir en el canal)
   const quizTopics = (theme?.categories ?? (p.category ? [p.category] : [])).filter((c) => (QUIZ_TOPICS as Record<string, unknown>)[c]);
   // deno-lint-ignore no-explicit-any
@@ -2678,7 +2756,7 @@ async function planChannel(job: Job, ch: any) {
     // 1) Guiones (y retos) por revisar: se aprueban solos si pasan los controles
     for (const v of V.filter((x) => x.status === "script_review" && !x.auto?.script)) {
       let score: number | null = null, why = "";
-      if (v.engine === "challenges") { const val = validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
+      if (v.engine === "challenges") { const val = v.retos?.kind === "formato" ? validateFormat(v.retos.format, v.retos.data) : validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
       else { score = Number(v.script?.director?.score_after ?? v.script?.director?.score_before ?? NaN); if (!isFinite(score)) { score = null; why = "el guion no tiene nota del director"; } else if (score < minQ) why = `nota del guion ${score}/10 (mínimo ${minQ})`; }
       const pol = await policyCheck(v, ch);
       if (!pol.ok) why = pol.block.join(" · ");
@@ -3256,7 +3334,7 @@ const REPORT_TOOL = { name: "informe", description: "Informe diario del canal", 
     change: { type: "string", description: "Qué se cambia, concreto y aplicable" },
     reason: { type: "string", description: "El dato que lo justifica" },
     auto: { type: "boolean", description: "true si se aplica solo (reglas de guion, ideas, títulos, ritmo, temas de retos); false si necesita la decisión del dueño (calendario, frecuencia, presupuesto, parar o crear formatos)" } } } },
-  theme_weights: { type: "object", description: "Solo canales de retos: peso de cada tema en la rotación (0.3-3) según sus resultados. Claves posibles: memory, history, pix, geography, visual, science, general", additionalProperties: { type: "number" } },
+  theme_weights: { type: "object", description: "Solo canales de retos: peso de cada tema en la rotación (0.3-3) según sus resultados. Claves posibles: memory, history, pix, geography, visual, science, general, ganaria (¿Quién ganaría?), precios (¿Cuánto costaba?), numero (Piensa un número), piano (Piano fácil)", additionalProperties: { type: "number" } },
   watch: { type: "array", items: { type: "string" }, maxItems: 3, description: "Qué mirar en los próximos días" } } } };
 function madridDate(d = new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
 async function stepDailyReport(job: Job) {

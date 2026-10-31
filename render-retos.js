@@ -86,7 +86,7 @@ function measureI(wavFile, af) {
     let err = ""; p.stderr.on("data", (d) => (err += d)); p.on("close", () => { const m = err.slice(err.lastIndexOf("Summary")).match(/I:\s+(-?[\d.]+) LUFS/); resolve(m && isFinite(Number(m[1])) ? Number(m[1]) : null); });
   });
 }
-async function loudnessFilter(wavFile) {
+export async function loudnessFilter(wavFile) {
   const i0 = await measureI(wavFile, PRE);
   if (i0 == null) return { af: `${PRE},loudnorm=I=-14:TP=-1.5:LRA=11,alimiter=limit=0.84:level=false`, passes: 1 };
   // Secante: el limitador hace que cada dB de ganancia suba menos de 1 dB de sonoridad; se estima esa pendiente con las dos últimas medidas
@@ -101,7 +101,7 @@ async function loudnessFilter(wavFile) {
   return { af: chain(gain), passes, gain };
 }
 // Comprobación final del sonido del vídeo exportado
-async function audioCheck(file) {
+export async function audioCheck(file) {
   return new Promise((resolve) => {
     const p = spawn("ffmpeg", ["-v", "info", "-nostats", "-i", file, "-filter_complex", "ebur128=peak=true", "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
     let err = ""; p.stderr.on("data", (d) => (err += d));

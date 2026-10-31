@@ -2,7 +2,7 @@
 // Mismo dibujo que web/retos/formats.js, sonido sintetizado (sin recursos externos) y emojis de Noto (Google, licencia OFL).
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdir, writeFile, readFile, stat, rename } from "node:fs/promises";
 import path from "node:path";
 import { createCanvas, registerFont, loadImage } from "canvas";
 import { planFormat, validateFormat, emojiCode, FW, FH } from "./web/retos/formats.js";
@@ -68,7 +68,14 @@ export async function renderFormat(spec, workdir, onProgress = () => {}) {
   }
   ff.stdin.end();
   await done;
-  const audio = await audioCheck(out);
+  let audio = await audioCheck(out);
+  // El códec AAC puede pasarse del techo: si el pico real supera -1 dB se baja solo el audio (el vídeo se copia)
+  if (audio.true_peak != null && audio.true_peak > -1) {
+    const fixed = path.join(workdir, "final_tp.mp4"), db = (-1.3 - audio.true_peak).toFixed(2);
+    await new Promise((res, rej) => { const p = spawn("ffmpeg", ["-y", "-v", "error", "-i", out, "-map", "0:v", "-map", "0:a", "-c:v", "copy", "-af", `volume=${db}dB`, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", fixed]); p.on("error", rej); p.on("close", (c) => (c === 0 ? res() : rej(new Error(`FFmpeg ${c}`)))); });
+    await rename(fixed, out);
+    audio = { ...(await audioCheck(out)), true_peak_fix: Number(db) };
+  }
   const size = (await stat(out)).size;
   return { file: out, size, duration: plan.duration, report: { format: spec.format, frames, audio, emojis: Object.keys(imgs).length, render_seconds: Math.round((Date.now() - t0) / 100) / 10 } };
 }

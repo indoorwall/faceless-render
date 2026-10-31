@@ -171,10 +171,10 @@ export function makeNumero(seed = Date.now()) {
   return { steps, result };
 }
 function planNumero(d, o) {
-  const STEPS = d.steps, T0 = 2.4, STEP = 3.4, REV = T0 + STEPS.length * STEP + 1.6;
+  const STEPS = d.steps, T0 = 2.4, STEP = 5, REV = T0 + STEPS.length * STEP + 1.6;
   const duration = REV + 5;
   const S = [{ t: 0.2, type: "ding", f: 1568 }, { t: 0.5, type: "whoosh" }];
-  STEPS.forEach((s, i) => { const t = T0 + i * STEP; S.push({ t, type: "pop", f: 520 + i * 60 }); for (let k = 1; k <= 3; k++) S.push({ t: t + k * 0.8, type: "tick" }); });
+  STEPS.forEach((s, i) => { const t = T0 + i * STEP; S.push({ t, type: "pop", f: 520 + i * 60 }); for (let k = 1; k <= 4; k++) S.push({ t: t + 0.3 + k * 0.95, type: "tick" }); });
   S.push({ t: REV - 1.6, type: "roll", len: 1.6 }, { t: REV, type: "boom" }, { t: REV, type: "ding", f: 1318 }, { t: REV + 0.1, type: "ding", f: 1975 });
   const stars = Array.from({ length: 70 }, (_, i) => [Math.abs(Math.sin(i * 12.9898)) * FW, Math.abs(Math.sin(i * 78.233)) * FH, 1 + (i % 3)]);
   const draw = (ctx, t, E) => {
@@ -199,7 +199,7 @@ function planNumero(d, o) {
       const p = prog(t, t0 + 0.3, t0 + STEP - 0.2);
       ctx.lineWidth = 12; ctx.strokeStyle = "rgba(255,255,255,.15)"; ctx.beginPath(); ctx.arc(FW / 2, 1060, 50, 0, 7); ctx.stroke();
       ctx.strokeStyle = "#C77DFF"; ctx.lineCap = "round"; ctx.beginPath(); ctx.arc(FW / 2, 1060, 50, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - p)); ctx.stroke();
-      txt(String(Math.max(1, Math.ceil((1 - p) * 3))), FW / 2, 1062, { size: 44, font: "M", alpha: 1 - out });
+      txt(String(Math.max(1, Math.ceil((1 - p) * 4))), FW / 2, 1062, { size: 44, font: "M", alpha: 1 - out });
       ctx.restore();
     });
     if (t >= REV - 1.6 && t < REV) txt("Tu resultado es…", FW / 2, 760, { size: 62, font: "M", scale: 1 + 0.05 * Math.sin(t * 20) });

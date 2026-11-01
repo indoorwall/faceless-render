@@ -1715,6 +1715,9 @@ Varía épocas, países y tipos de historia. Llama a guardar_ideas.`}`;
     .filter((i: any) => i?.title && Number(i.fit ?? 0) >= 7.5 && !seen.has(String(i.title).toLowerCase()))
     // deno-lint-ignore no-explicit-any
     .map((i: any) => ({ ...i, format: wantF === "mix" ? (allowedF.includes(i.format) ? i.format : allowedF[0]) : wantF }))
+    // Shorts recopilatorios (varias historias) fuera, salvo en los canales de «5 curiosidades»: los datos dicen que un Short funciona con una sola historia
+    // deno-lint-ignore no-explicit-any
+    .filter((i: any) => list5 || i.format !== "short" || !(i.kind === "compilation" && Array.isArray(i.stories) && i.stories.length >= 2))
     // deno-lint-ignore no-explicit-any
     .map((i: any) => ({
       channel_id: ch.id, format: i.format, title: clean(i.title), angle: clean(i.angle), reason: clean(i.reason), hook: clean(i.hook),
@@ -1747,7 +1750,10 @@ async function stepLearn(job: Job) {
   const system = `Mantienes el "manual aprendido" de un canal de YouTube: reglas cortas y concretas que el guionista aplica en cada vídeo para no repetir errores y repetir lo que funciona. Generalizas: conviertes cada corrección o dato en una regla aplicable a vídeos futuros, no en una nota sobre un vídeo concreto. Escribe en español.`;
   const user = `Canal: ${ch.name} (${ch.niche}, ${ch.format === "short" ? "Shorts" : "vídeos largos"})\n\nMANUAL ACTUAL:\n${ch.playbook || "(vacío)"}\n\nLO QUE ACABA DE PASAR (${job.payload?.source}):\n${material}\n\nActualiza el manual: añade lo nuevo, refuerza lo que se repite, corrige lo que contradiga datos reales (las métricas de YouTube mandan sobre las opiniones) y elimina lo redundante. Máximo 25 reglas en viñetas, agrupadas por: Gancho, Guion, Planos e imágenes, Subtítulos, Cierre, Títulos y temas. Llama a guardar.`;
   const r = await claudeTool(MODEL_CHEAP, system, user, { name: "guardar", description: "Guarda el manual actualizado", input_schema: { type: "object", required: ["playbook", "new_lessons"], properties: { playbook: { type: "string" }, new_lessons: { type: "array", items: { type: "string" }, maxItems: 3, description: "Lo nuevo aprendido ahora, 1 frase cada una" } } } }, 3000);
-  const pb = String(r.input.playbook ?? "").trim();
+  let pb = String(r.input.playbook ?? "").trim();
+  // Las reglas fijas del dueño se conservan siempre, literales y al principio
+  const fixed = String(ch.playbook ?? "").match(/^REGLAS FIJAS DEL DUEÑO[\s\S]*?\n\n/)?.[0];
+  if (fixed) pb = fixed + pb.replace(/^REGLAS FIJAS DEL DUEÑO[\s\S]*?\n\n/, "");
   if (pb.length > 40) await sb.from("channels").update({ playbook: pb.slice(0, 6000), playbook_updated_at: new Date().toISOString() }).eq("id", ch.id);
   const ls = (r.input.new_lessons ?? []).map((l: string) => ({ channel_id: ch.id, video_id: job.video_id ?? null, source: String(job.payload?.source ?? "otro"), lesson: clean(l).slice(0, 300) })).filter((x: { lesson: string }) => x.lesson);
   if (ls.length) await sb.from("lessons").insert(ls);
@@ -2638,6 +2644,8 @@ function scheduleOf(ch: any) {
   const s = { ...DEF_SCHEDULE, ...(ch.schedule ?? {}) };
   const fm: string[] = ch.formats?.length ? ch.formats : [ch.format ?? "long"];
   if (!fm.includes("long")) s.long_per_week = 0;
+  // Sin vídeos largos hasta llegar a los suscriptores fijados (primero se crece con Shorts)
+  if (Number(s.long_min_subs ?? 0) > Number(ch.yt_stats?.subs ?? 0)) s.long_per_week = 0;
   if (!fm.includes("short") && !(ch.clips_per_long > 0)) s.shorts_per_week = 0;
   return s;
 }
@@ -3383,9 +3391,9 @@ async function stepDailyReport(job: Job) {
     return;
   }
   const challenges = ch.production_type === "challenges";
-  const system = `Eres el analista de un canal de YouTube faceless. Cada mañana revisas los datos reales y decides qué se cambia para crecer. Reglas: cada conclusión cita el dato que la apoya; no saques conclusiones de vídeos con menos de 24 h ni de un solo vídeo (dilo si la muestra es pequeña); las analíticas de retención tardan ~2 días; compara con los informes anteriores para ver si sus cambios funcionaron; los cambios automáticos son reglas concretas para guion, ideas, títulos o ritmo (se añaden al manual del canal); calendario, frecuencia, presupuesto o parar/crear formatos siempre los decide el dueño (auto=false). Si no hay nada nuevo que cambiar, no inventes cambios. Español claro, sin jerga.`;
+  const system = `Eres el analista de un canal de YouTube faceless. Cada mañana revisas los datos reales y decides qué se cambia para crecer. OBJETIVO ACTUAL DEL CANAL: ganar suscriptores (la métrica principal es suscriptores ganados por cada 1.000 visitas; después, visitas y % visto). Prioriza los cambios que más suscriptores traigan. Reglas: cada conclusión cita el dato que la apoya; no saques conclusiones de vídeos con menos de 24 h ni de un solo vídeo (dilo si la muestra es pequeña); las analíticas de retención tardan ~2 días; compara con los informes anteriores para ver si sus cambios funcionaron; los cambios automáticos son reglas concretas para guion, ideas, títulos o ritmo (se añaden al manual del canal); calendario, frecuencia, presupuesto o parar/crear formatos siempre los decide el dueño (auto=false). Si no hay nada nuevo que cambiar, no inventes cambios. Español claro, sin jerga.`;
   const user = `Canal: ${ch.name} — ${ch.niche ?? ""}${challenges ? " (canal de retos y preguntas; los temas rotan y se pueden ponderar con theme_weights)" : ""}
-Hoy: ${day} · Suscriptores: ${subs || "?"} · Gasto de los últimos 7 días: ${eur7.toFixed(2)} €
+Hoy: ${day} · Suscriptores: ${subs || "?"}${prevRep?.[0]?.metrics?.subs ? ` (en el informe anterior, ${prevRep[0].metrics.subs})` : ""} · Gasto de los últimos 7 días: ${eur7.toFixed(2)} €
 Calendario: ${ch.schedule?.shorts_per_week ?? 0} Shorts/semana a las ${(ch.schedule?.short_times ?? []).join(", ")}${ch.schedule?.long_per_week ? ` y ${ch.schedule.long_per_week} largo/semana` : ""}${challenges && ch.schedule?.theme_weights ? `\nPesos actuales de los temas: ${JSON.stringify(ch.schedule.theme_weights)}` : ""}
 
 VISITAS GANADAS POR DÍA (todos los vídeos de las 4 últimas semanas): ${days.map(([d, n]) => `${d.slice(5)} ${n}`).join(" · ") || "sin datos"}

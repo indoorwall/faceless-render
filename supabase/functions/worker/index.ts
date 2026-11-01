@@ -1110,6 +1110,12 @@ async function stepVisuals(job: Job) {
   const ch = v.channel; const short = ch.format === "short";
   // FLUX (fal.ai) para los planos IA; OpenAI solo para el primero del vídeo (el gancho)
   const fluxOn = (ch.image_provider === "flux" || OPENAI_DOWN || !KEYS["OPENAI_API_KEY"]) && !!KEYS["FAL_KEY"] && !FLUX_DOWN;
+  // Si en esta ejecución ya se vio que no queda saldo de IA, el vídeo espera sin intentarlo
+  if (ch.image_source !== "stock" && (OPENAI_DOWN || FLUX_DOWN) && aiDown()) {
+    await sb.from("videos").update({ stage: "Esperando saldo de imágenes IA (recarga fal.ai)", error: null }).eq("id", v.id);
+    await enqueue("visuals", { video_id: v.id, delaySec: 2 * 3600 });
+    return;
+  }
   await sb.from("videos").update({ stage: "Generando imágenes" }).eq("id", v.id);
   const { data: allScenes } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
   const used = new Set<string>();
@@ -1195,10 +1201,17 @@ async function stepVisuals(job: Job) {
         } catch (e) {
           // Sin presupuesto a mitad de escena: se guarda lo ya generado para no pagarlo otra vez
           if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN }); throw e; }
-          // Proveedor sin crédito: el vídeo sigue con fotos reales y acercamientos en vez de fallar entero
+          // Proveedor sin crédito: si no queda ninguno, el vídeo espera al saldo (no se baja la calidad con fotos de relleno)
           if (!creditError(e)) throw e;
           if (viaFlux) FLUX_DOWN = true; else OPENAI_DOWN = true;
-          if (aiDown()) await log(job, `Imágenes IA no disponibles (${String((e as Error).message).slice(0, 90)}). Recarga fal.ai u OpenAI; mientras, se usan fotos reales.`, "warn");
+          if (aiDown()) {
+            await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN });
+            await sb.from("videos").update({ stage: "Esperando saldo de imágenes IA (recarga fal.ai)", error: null }).eq("id", v.id);
+            await enqueue("visuals", { video_id: v.id, delaySec: 2 * 3600 });
+            const { count } = await sb.from("activity").select("id", { count: "exact", head: true }).ilike("message", "Sin saldo de imágenes IA%").gte("created_at", new Date(Date.now() - 6 * 3600e3).toISOString());
+            if (!count) await log(job, `Sin saldo de imágenes IA (${String((e as Error).message).slice(0, 90)}). Los vídeos esperan y siguen solos cuando recargues fal.ai.`, "warn");
+            return;
+          }
           bytes = null;
         }
         if (bytes) {

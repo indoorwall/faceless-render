@@ -983,7 +983,10 @@ async function aiImage(prompt: string, short: boolean, quality = "medium") {
   const d = await r.json();
   return b64ToBytes(d.data[0].b64_json);
 }
-let OPENAI_DOWN = false;
+let OPENAI_DOWN = false, FLUX_DOWN = false;
+// Sin ningún proveedor de imágenes IA disponible (sin clave o sin crédito): se usan fotos reales y acercamientos
+const aiDown = () => (OPENAI_DOWN || !KEYS["OPENAI_API_KEY"]) && (FLUX_DOWN || !KEYS["FAL_KEY"]);
+const creditError = (e: unknown) => /sin crédito|sin cr[eé]dito|locked|no credits|insufficient_quota|billing|exceeded your current quota|\(40[13]\)/i.test(String((e as Error)?.message ?? e));
 // Si el filtro de OpenAI rechaza el prompt, se reintenta una vez con una versión suavizada
 const SOFTEN = /\b(half-starved|starv\w*|gaunt|emaciated|wounded|injur\w*|blood\w*|corpse\w*|dead|dying|kill\w*|gun\w*|rifle\w*|weapon\w*|ammunition|ammo|artillery|shell\w*|bomb\w*|explosi\w*|battle\w*|combat|smoking ridge|war-torn|warfare|trooper\w*|military)\b/gi;
 // Escenas en calidad baja (casi igual en el móvil, unas 3 veces más barata); las miniaturas siguen en media
@@ -1106,7 +1109,7 @@ async function stepVisuals(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
   // FLUX (fal.ai) para los planos IA; OpenAI solo para el primero del vídeo (el gancho)
-  const fluxOn = (ch.image_provider === "flux" || OPENAI_DOWN || !KEYS["OPENAI_API_KEY"]) && !!KEYS["FAL_KEY"];
+  const fluxOn = (ch.image_provider === "flux" || OPENAI_DOWN || !KEYS["OPENAI_API_KEY"]) && !!KEYS["FAL_KEY"] && !FLUX_DOWN;
   await sb.from("videos").update({ stage: "Generando imágenes" }).eq("id", v.id);
   const { data: allScenes } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
   const used = new Set<string>();
@@ -1174,7 +1177,7 @@ async function stepVisuals(job: Job) {
         // Si no queda nada que reutilizar, se permite una imagen IA más aunque se pase del tope (mejor que una imagen clavada)
         if (!media) aiBudget = Math.max(aiBudget, 1);
       }
-      if (!media && ch.image_source !== "stock" && (KEYS["OPENAI_API_KEY"] || fluxOn)) {
+      if (!media && ch.image_source !== "stock" && (KEYS["OPENAI_API_KEY"] || fluxOn) && !aiDown()) {
         if (aiBudget <= 0) break;
         let viaFlux = fluxOn && (OPENAI_DOWN || !(sc.n === 1 && shots.indexOf(sh) === 0 && KEYS["OPENAI_API_KEY"]));
         let bytes: Uint8Array | null;
@@ -1183,7 +1186,7 @@ async function stepVisuals(job: Job) {
           else {
             try { bytes = await safeImage(ctxPrompt(sh, v, ch), short, SCENE_QUALITY); } catch (e) {
               // OpenAI sin crédito o caído: si hay FLUX, se usa FLUX y no se vuelve a probar OpenAI en esta ejecución
-              if (e instanceof OverBudget || !KEYS["FAL_KEY"]) throw e;
+              if (e instanceof OverBudget || !KEYS["FAL_KEY"] || FLUX_DOWN) throw e;
               OPENAI_DOWN = true; viaFlux = true;
               await log(job, `OpenAI no responde (${String((e as Error).message).slice(0, 80)}); se usa FLUX`, "warn");
               bytes = await fluxImage(ctxPrompt(sh, v, ch), short);
@@ -1191,8 +1194,12 @@ async function stepVisuals(job: Job) {
           }
         } catch (e) {
           // Sin presupuesto a mitad de escena: se guarda lo ya generado para no pagarlo otra vez
-          if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN }); }
-          throw e;
+          if (e instanceof OverBudget) { await sb.from("scenes").update({ shots }).eq("id", sc.id); await bumpUsage(v.id, { ai_images_low: images, flux_images: fluxN }); throw e; }
+          // Proveedor sin crédito: el vídeo sigue con fotos reales y acercamientos en vez de fallar entero
+          if (!creditError(e)) throw e;
+          if (viaFlux) FLUX_DOWN = true; else OPENAI_DOWN = true;
+          if (aiDown()) await log(job, `Imágenes IA no disponibles (${String((e as Error).message).slice(0, 90)}). Recarga fal.ai u OpenAI; mientras, se usan fotos reales.`, "warn");
+          bytes = null;
         }
         if (bytes) {
           media = { url: await upload(`${v.id}/i_${String(sc.n).padStart(3, "0")}_${shots.indexOf(sh)}_${Date.now()}.jpg`, bytes, "image/jpeg"), kind: "image", fit: "cover", gen: "ai", provider: viaFlux ? "flux" : "openai" };
@@ -1202,7 +1209,7 @@ async function stepVisuals(job: Job) {
           // OpenAI no quiere generarla: foto de archivo del tema o, si no hay, un acercamiento al plano anterior
           try { media = await commons(sh.archive_query || v.idea_title, used); } catch (_) { /* sigue */ }
           if (!media && canReuse(prev?.media_url)) media = { url: prev.media_url, kind: prev.media_kind, fit: prev.fit ?? "cover", reframe: { x: 0.5, y: 0.4, zoom: 1.4 } };
-          await log(job, `${viaFlux ? "FLUX" : "OpenAI"} rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
+          if (!aiDown()) await log(job, `${viaFlux ? "FLUX" : "OpenAI"} rechazó una imagen del plano «${String(sh.line).slice(0, 50)}»; se usa ${media ? "una alternativa" : "nada"}.`, "warn");
         }
       }
       // Último recurso: otra imagen del mismo vídeo con menos de 2 usos (mejor un acercamiento que parar el vídeo)

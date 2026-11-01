@@ -3417,7 +3417,8 @@ async function stepDailyReport(job: Job) {
     const a = v.stats?.analytics ?? {};
     const age = Math.round((Date.now() - new Date(v.published_at!).getTime()) / 36e5);
     const views = Number(v.stats?.views ?? a.views ?? 0), likes = Number(v.stats?.likes ?? a.likes ?? 0);
-    const first = v.script?.scenes?.[0]?.shots?.[0]?.line ?? v.script?.scenes?.[0]?.narration ?? "";
+    // Retos y formatos de código no tienen guion: se usa su resumen o el primer reto
+    const first = v.script?.scenes?.[0]?.shots?.[0]?.line ?? v.script?.scenes?.[0]?.narration ?? v.retos?.summary ?? v.retos?.challenges?.[0]?.question ?? "";
     const shorts = (a.traffic ?? []).find((x: [string, number]) => x[0] === "SHORTS")?.[1];
     const hist = (v.stats?.history ?? []) as { d: string; views: number }[];
     const pubDay = String(v.published_at).slice(0, 10);

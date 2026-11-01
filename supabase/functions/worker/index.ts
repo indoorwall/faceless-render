@@ -39,6 +39,8 @@ const SFX_LIB: Record<string, string> = {
 };
 const sfxKey = (p: string) => { const t = String(p ?? "").toLowerCase(); return Object.keys(SFX_LIB).find((k) => t.includes(k)) ?? (/impact|thud|slam/.test(t) ? "boom" : /tension|suspense|rise/.test(t) ? "riser" : /map|letter|document/.test(t) ? "paper" : /static|morse|signal/.test(t) ? "radio" : "whoosh"); };
 let KEYS: Record<string, string> = {};
+// Errores ya cometidos convertidos en reglas para todos los canales (app_config.global_rules)
+let GLOBAL_RULES = "";
 let CRON_SECRET = "";
 
 class UserError extends Error {}
@@ -131,6 +133,8 @@ async function runLoop() {
   const t0 = Date.now();
   const { data: k } = await sb.rpc("get_api_keys");
   KEYS = (k ?? {}) as Record<string, string>;
+  const { data: gr } = await sb.from("app_config").select("value").eq("key", "global_rules").maybeSingle();
+  GLOBAL_RULES = String(gr?.value ?? "");
   let processed = 0; let budgetLogged = false;
   while (Date.now() - t0 < 60_000) {
     const { data: job } = await sb.rpc("claim_job");
@@ -1652,7 +1656,8 @@ async function stepThumbs(job: Job) {
 // ================= IA que aprende: banco de ideas, manual del canal y métricas =================
 // deno-lint-ignore no-explicit-any
 function playbookBlock(ch: any) {
-  return ch.playbook ? `APRENDIZAJES DEL CANAL (lo que ya sabemos que funciona y lo que no; aplícalo siempre):\n${String(ch.playbook).slice(0, 4000)}\n\n` : "";
+  const g = GLOBAL_RULES ? `ERRORES QUE YA COMETIMOS Y NO SE REPITEN (todos los canales; obligatorio):\n${GLOBAL_RULES.slice(0, 2500)}\n\n` : "";
+  return g + (ch.playbook ? `APRENDIZAJES DEL CANAL (lo que ya sabemos que funciona y lo que no; aplícalo siempre):\n${String(ch.playbook).slice(0, 4000)}\n\n` : "");
 }
 
 // ---------- Paso: generar ideas para el banco del canal (el corazón del canal) ----------
@@ -3374,12 +3379,14 @@ const REPORT_TOOL = { name: "informe", description: "Informe diario del canal", 
   wins: { type: "array", items: { type: "string" }, maxItems: 4, description: "Lo que funciona, con el dato que lo demuestra" },
   problems: { type: "array", items: { type: "string" }, maxItems: 4, description: "Lo que falla, con el dato que lo demuestra" },
   changes: { type: "array", maxItems: 5, items: { type: "object", required: ["area", "change", "reason", "auto"], properties: {
-    area: { type: "string", enum: ["guion", "ideas", "titulos", "ritmo", "retos", "calendario", "produccion"] },
+    area: { type: "string", enum: ["guion", "ideas", "titulos", "ritmo", "retos", "calendario", "produccion", "errores"] },
     change: { type: "string", description: "Qué se cambia, concreto y aplicable" },
     reason: { type: "string", description: "El dato que lo justifica" },
     auto: { type: "boolean", description: "true si se aplica solo (reglas de guion, ideas, títulos, ritmo, temas de retos); false si necesita la decisión del dueño (calendario, frecuencia, presupuesto, parar o crear formatos)" } } } },
   theme_weights: { type: "object", description: "Solo canales de retos: peso de cada tema en la rotación (0.3-3) según sus resultados. Claves posibles: memory, history, pix, geography, visual, science, general, ganaria (¿Quién ganaría?), precios (¿Cuánto costaba?), numero (Piensa un número), piano (Piano fácil)", additionalProperties: { type: "number" } },
-  watch: { type: "array", items: { type: "string" }, maxItems: 3, description: "Qué mirar en los próximos días" } } } };
+  watch: { type: "array", items: { type: "string" }, maxItems: 3, description: "Qué mirar en los próximos días" },
+  global_rules: { type: "array", items: { type: "string" }, maxItems: 3, description: "Solo si un error de los recientes puede repetirse en CUALQUIER canal: la regla general que lo evita (1 frase)" },
+  money: { type: "string", description: "1-2 frases: coste por suscriptor, cuánto falta para monetizar al ritmo actual y si la inversión va camino de recuperarse" } } } };
 function madridDate(d = new Date()) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
 async function stepDailyReport(job: Job) {
   // Sin canal: un informe por cada canal activo
@@ -3424,7 +3431,26 @@ async function stepDailyReport(job: Job) {
   const eur7 = (spend ?? []).reduce((s2, x) => s2 + Number(x.n), 0);
   const { data: prevRep } = await sb.from("channel_reports").select("day,headline,changes,metrics").eq("channel_id", ch.id).lt("day", day).order("day", { ascending: false }).limit(3);
   const subs = Number(ch.yt_stats?.subs ?? 0);
-  const metrics = { views_7d: last7, views_prev_7d: prev7, daily: days, subs, eur_7d: Math.round(eur7 * 100) / 100, videos: list.length,
+  // Ritmo de suscriptores (con el informe más antiguo de los últimos 14 días) y proyección hasta la monetización
+  const { data: oldRep } = await sb.from("channel_reports").select("day,metrics").eq("channel_id", ch.id).gte("day", madridDate(new Date(Date.now() - 14 * 864e5))).order("day").limit(1);
+  const d0 = oldRep?.[0]; const spanDays = d0 ? Math.max(1, (new Date(day).getTime() - new Date(d0.day).getTime()) / 864e5) : 0;
+  const subsPerDay = d0 && Number(d0.metrics?.subs) > 0 && spanDays >= 1 ? Math.max(0, (subs - Number(d0.metrics.subs)) / spanDays) : null;
+  const { data: spend30 } = await sb.from("spend_daily").select("n").eq("k", `eur:${ch.id}`).gte("day", madridDate(new Date(Date.now() - 30 * 864e5)));
+  const eur30 = (spend30 ?? []).reduce((s2, x) => s2 + Number(x.n), 0);
+  const money = {
+    eur_30d: Math.round(eur30 * 100) / 100,
+    subs_per_day: subsPerDay == null ? null : Math.round(subsPerDay * 10) / 10,
+    eur_per_sub: subsPerDay ? Math.round(((eur30 / 30) / subsPerDay) * 100) / 100 : null,
+    months_to_1000: subsPerDay ? Math.max(0, Math.round(((1000 - subs) / subsPerDay / 30) * 10) / 10) : null,
+    long_hours_365: Number(ch.yt_stats?.long_hours_365 ?? 0),
+    revenue_30: Number(ch.yt_stats?.revenue_30 ?? 0),
+  };
+  // Errores recientes del canal (para aprender de ellos y no repetirlos)
+  const since48 = new Date(Date.now() - 48 * 3600e3).toISOString();
+  const { data: bad } = await sb.from("videos").select("title,idea_title,status,stage,error,auto,analysis").eq("channel_id", ch.id).gte("updated_at", since48).in("status", ["failed", "idea_rejected", "final_review", "script_review"]);
+  // deno-lint-ignore no-explicit-any
+  const errs = (bad ?? []).filter((x: any) => x.status === "failed" || (x.status === "idea_rejected" && x.stage) || x.auto?.final?.held || x.auto?.script?.held).slice(0, 12).map((x: any) => `- «${x.title ?? x.idea_title}»: ${x.status === "failed" ? `falló (${String(x.error ?? "").slice(0, 120)})` : x.status === "idea_rejected" ? `descartado (${String(x.stage ?? "").slice(0, 100)})` : `retenido (${x.auto?.final?.held ?? x.auto?.script?.held ?? ""})`}${x.analysis?.summary ? ` · análisis: ${String(x.analysis.summary).slice(0, 220)}` : ""}`).join("\n");
+  const metrics = { views_7d: last7, views_prev_7d: prev7, daily: days, subs, eur_7d: Math.round(eur7 * 100) / 100, videos: list.length, money,
     best: list.slice().sort((a, b) => Number(b.stats?.views ?? 0) - Number(a.stats?.views ?? 0))[0]?.title ?? null };
   if (!list.length) {
     await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: "Todavía no hay vídeos publicados con datos", summary: "Cuando haya vídeos publicados, aquí verás cada día cómo van y qué se mejora.", metrics }, { onConflict: "channel_id,day" });
@@ -3442,13 +3468,25 @@ VISITAS GANADAS POR DÍA (todos los vídeos de las 4 últimas semanas): ${days.m
 VÍDEOS (más reciente primero):
 ${rows}
 
+ECONOMÍA: gasto en 30 días ${money.eur_30d} € · ${money.subs_per_day != null ? `${money.subs_per_day} suscriptores al día · ${money.eur_per_sub ?? "?"} € por suscriptor · ${money.months_to_1000} meses hasta 1.000 al ritmo actual` : "aún sin ritmo de suscriptores medido"} · horas de vídeos largos (12 meses): ${money.long_hours_365} de 4.000 · ingresos 30 días: ${money.revenue_30} €. Los canales son para monetizar: los Shorts traen suscriptores y los vídeos largos (desde 300 suscriptores) suman las horas y el dinero.
+
+ERRORES DE LAS ÚLTIMAS 48 H (conviértelos en cambios con area «errores» para que no se repitan; si alguno puede pasar en cualquier canal, añade su regla en global_rules):
+${errs || "ninguno"}
+
 ${playbookBlock(ch)}INFORMES ANTERIORES:
 ${(prevRep ?? []).map((r) => `${r.day}: ${r.headline}\n  cambios: ${(r.changes ?? []).map((c: { change: string }) => c.change).join(" | ") || "ninguno"}`).join("\n") || "(es el primero)"}`;
   const r = await claudeTool(MODEL_FAST, system, user, REPORT_TOOL, 4000);
   const o = r.input ?? {};
   // deno-lint-ignore no-explicit-any
-  const changes = (o.changes ?? []).map((c: any) => ({ area: String(c.area ?? ""), change: clean(c.change), reason: clean(c.reason), auto: !!c.auto && !["calendario", "produccion"].includes(String(c.area)) }));
-  await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: clean(o.headline).slice(0, 200), summary: clean(o.summary), evolution: clean(o.evolution), wins: (o.wins ?? []).map(clean), problems: (o.problems ?? []).map(clean), changes, watch: (o.watch ?? []).map(clean), metrics, read_at: null }, { onConflict: "channel_id,day" });
+  const changes = (o.changes ?? []).map((c: any) => ({ area: String(c.area ?? ""), change: clean(c.change), reason: clean(c.reason), auto: String(c.area) === "errores" || (!!c.auto && !["calendario", "produccion"].includes(String(c.area))) }));
+  // Reglas generales aprendidas de errores: se añaden a las de todos los canales (sin duplicar)
+  const newG = ((o.global_rules ?? []) as string[]).map(clean).filter((x) => x.length > 10);
+  if (newG.length) {
+    const have = GLOBAL_RULES.split("\n").map((x) => x.replace(/^- /, "").trim().toLowerCase());
+    const add = newG.filter((g) => !have.some((h) => h && (h.includes(g.toLowerCase().slice(0, 40)) || g.toLowerCase().includes(h.slice(0, 40)))));
+    if (add.length) { GLOBAL_RULES = [GLOBAL_RULES, ...add.map((x) => `- ${x}`)].filter(Boolean).join("\n").slice(-2500); await sb.from("app_config").upsert({ key: "global_rules", value: GLOBAL_RULES }); }
+  }
+  await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: clean(o.headline).slice(0, 200), summary: clean(o.summary) + (o.money ? ` ${clean(o.money)}` : ""), evolution: clean(o.evolution), wins: (o.wins ?? []).map(clean), problems: (o.problems ?? []).map(clean), changes, watch: (o.watch ?? []).map(clean), metrics, read_at: null }, { onConflict: "channel_id,day" });
   // Se aplican solos: las reglas al manual del canal (lo leen guion, ideas y títulos) y los pesos de los temas de retos
   const auto = changes.filter((c: { auto: boolean }) => c.auto);
   if (auto.length) await enqueue("learn", { channel_id: ch.id, payload: { source: "informe", material: `Informe del ${day}. Cambios decididos a partir de los datos:\n${auto.map((c: { area: string; change: string; reason: string }) => `- [${c.area}] ${c.change} (por qué: ${c.reason})`).join("\n")}` } });

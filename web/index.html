@@ -761,7 +761,7 @@ function viewDinero(){
       </section>`; }).join("")}`;
 }
 // --- Vista: Informes (cada mañana la IA de cada canal analiza los resultados y decide las mejoras)
-const AREA_TXT={guion:"Guion",ideas:"Ideas",titulos:"Títulos",ritmo:"Ritmo",retos:"Retos",calendario:"Calendario",produccion:"Producción"};
+const AREA_TXT={guion:"Guion",ideas:"Ideas",titulos:"Títulos",ritmo:"Ritmo",retos:"Retos",calendario:"Calendario",produccion:"Producción",errores:"Error aprendido"};
 function viewInformes(){
   const reps=S.reports||[];
   const days=[...new Set(reps.map(r=>r.day))];
@@ -773,7 +773,7 @@ function viewInformes(){
     return `<section class="chblock" style="--c:${esc(c.color||"#888")}">
       <div class="chblock-h"><div class="chname"><span class="dot"></span><h2>${esc(c.name||"Canal")}</h2></div><div class="row">${!r.read_at?`<span class="chip st-acc">Nuevo</span>`:""}${trend(m)}</div></div>
       <div class="idea-t" style="margin-bottom:6px">${esc(r.headline||"")}</div>
-      <div class="row" style="margin-bottom:8px"><span class="chip">${n0(m.views_7d)} visitas en 7 días</span>${m.subs?`<span class="chip">${n0(m.subs)} suscriptores</span>`:""}${m.eur_7d!=null?`<span class="chip">${eur(m.eur_7d)} gastados en 7 días</span>`:""}</div>
+      <div class="row" style="margin-bottom:8px"><span class="chip">${n0(m.views_7d)} visitas en 7 días</span>${m.subs?`<span class="chip">${n0(m.subs)} suscriptores</span>`:""}${m.eur_7d!=null?`<span class="chip">${eur(m.eur_7d)} gastados en 7 días</span>`:""}${m.money?.eur_per_sub!=null?`<span class="chip">${eur(m.money.eur_per_sub)} por suscriptor</span>`:""}${m.money?.months_to_1000!=null?`<span class="chip ${m.money.months_to_1000<=3?"st-ok":"st-warn"}">≈ ${String(m.money.months_to_1000).replace(".",",")} meses hasta 1.000 subs</span>`:""}${m.money?.long_hours_365?`<span class="chip">${n0(m.money.long_hours_365)} / 4.000 h</span>`:""}</div>
       ${r.summary?`<p style="margin:0 0 8px">${esc(r.summary)}</p>`:""}
       ${r.evolution?`<p class="muted" style="margin:0 0 8px"><b>Evolución:</b> ${esc(r.evolution)}</p>`:""}
       <div class="fgrid">

@@ -639,7 +639,7 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   // Opus por la API de lotes (mitad de precio) y con la documentación de Wikipedia en vez de búsquedas web de pago
   const redo = !!(v.review_feedback && v.script);
   let docs: { title: string; url: string; text: string }[] = [];
-  if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
+  if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: v.idea_kind === "trend" ? "Escribiendo el guion (actualidad, al momento)" : "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
   const docBlock = docs.length ? `\n\nDOCUMENTACIÓN (Wikipedia):\n${docs.map((d, k) => `[${k + 1}] ${d.title} — ${d.url}\n${d.text}`).join("\n\n")}` : "";
   // Actualidad: al momento (por lotes puede tardar horas y la noticia caduca)
   const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: v.idea_kind === "trend" ? undefined : { job, tag: "script" }, stop: ["</json>"] });

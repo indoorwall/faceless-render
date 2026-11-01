@@ -226,6 +226,7 @@ async function runStep(job: Job) {
     case "research": return stepResearch(job);
     case "advise": return stepAdvise(job);
     case "daily_report": return stepDailyReport(job);
+    case "trends": return stepTrends(job);
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
@@ -640,7 +641,8 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   let docs: { title: string; url: string; text: string }[] = [];
   if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
   const docBlock = docs.length ? `\n\nDOCUMENTACIÓN (Wikipedia):\n${docs.map((d, k) => `[${k + 1}] ${d.title} — ${d.url}\n${d.text}`).join("\n\n")}` : "";
-  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: { job, tag: "script" }, stop: ["</json>"] });
+  // Actualidad: al momento (por lotes puede tardar horas y la noticia caduca)
+  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: v.idea_kind === "trend" ? undefined : { job, tag: "script" }, stop: ["</json>"] });
   if (r.stop === "max_tokens") throw new Error("El guion salió cortado; se reintenta");
   // deno-lint-ignore no-explicit-any
   const s = parseJson<any>(r.text);
@@ -1397,6 +1399,8 @@ async function stepPublish(job: Job) {
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
   // Sin fecha elegida: el siguiente hueco libre del calendario del canal (si tiene ritmo para ese formato)
+  // Actualidad: sale en cuanto está aprobada (la noticia caduca)
+  if (!v.publish_at && v.idea_kind === "trend") { v.publish_at = new Date(Date.now() + 10 * 60000).toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); }
   if (!v.publish_at && v.auto?.publish_now !== true) { const slot = await nextSlot(v.channel, v.format ?? v.channel.format ?? "long", undefined, strongVideo(v)); if (slot) { v.publish_at = slot.toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); } }
   // Cuota: subir un vídeo gasta 1.600 unidades y la miniatura 50 (10.000 al día por proyecto)
   const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
@@ -3379,6 +3383,66 @@ async function stepResearch(job: Job) {
 }
 
 // ---------- Paso: calendario recomendado de un canal (sin IA, se recalcula cada día) ----------
+// ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------
+const TREND_TOOL = { name: "tendencia", description: "Tema de actualidad elegido", input_schema: { type: "object", required: ["pick"], properties: {
+  pick: { type: "boolean", description: "true solo si hay un tema que cumple TODOS los criterios" },
+  why_not: { type: "string" },
+  topic: { type: "string", description: "El tema, en 2-5 palabras" },
+  title: { type: "string", description: "Idea del vídeo (sin emojis), p. ej. «5 cosas que no sabías del villancico de Mariah Carey»" },
+  angle: { type: "string", description: "Qué 5 curiosidades se contarán y por qué es noticia hoy" },
+  hook: { type: "string", description: "Primera frase del vídeo: por qué todo el mundo habla de esto hoy + la promesa" },
+  wiki_title: { type: "string", description: "Título EXACTO del artículo de Wikipedia en español (o inglés) que documenta el tema" },
+  why: { type: "string", description: "Por qué funcionará en este canal" } } } };
+function rssItems(xml: string) {
+  const out: { title: string; traffic: string; news: string }[] = [];
+  for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const b = m[1]; const g = (re: RegExp) => (b.match(re)?.[1] ?? "").replace(/<!\[CDATA\[|\]\]>/g, "").trim();
+    out.push({ title: g(/<title>([\s\S]*?)<\/title>/), traffic: g(/<ht:approx_traffic>([\s\S]*?)<\/ht:approx_traffic>/), news: g(/<ht:news_item_title>([\s\S]*?)<\/ht:news_item_title>/) });
+  }
+  return out;
+}
+async function stepTrends(job: Job) {
+  if (!job.channel_id) {
+    const { data: chs } = await sb.from("channels").select("id,schedule").neq("status", "archived");
+    for (const c of chs ?? []) if (c.schedule?.trends) await enqueue("trends", { channel_id: c.id });
+    return;
+  }
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch?.schedule?.trends) return;
+  const today = madridDate();
+  const { data: done } = await sb.from("videos").select("idea_title,created_at").eq("channel_id", ch.id).eq("idea_kind", "trend").gte("created_at", new Date(Date.now() - 21 * 864e5).toISOString());
+  const todayN = (done ?? []).filter((x) => madridDate(new Date(x.created_at)) === today).length;
+  if (todayN >= Number(ch.schedule?.trends_per_day ?? 1) && !job.payload?.force) return;
+  // Fuentes: búsquedas del día en Google (España y México), lo más visto en YouTube España y lo más leído en Wikipedia
+  const lines: string[] = [];
+  for (const geo of ["ES", "MX"]) {
+    try { const r = await fetch(`https://trends.google.com/trending/rss?geo=${geo}`); if (r.ok) for (const it of rssItems(await r.text()).slice(0, 20)) lines.push(`[Google ${geo}] ${it.title} (${it.traffic})${it.news ? ` — ${it.news}` : ""}`); } catch (_) { /* sin fuente */ }
+  }
+  if (KEYS["YOUTUBE_API_KEY"]) { try { const d = await yt("videos", { part: "snippet", chart: "mostPopular", regionCode: "ES", maxResults: "20" }); for (const it of d.items ?? []) lines.push(`[YouTube ES] ${it.snippet?.title}`); } catch (_) { /* sin fuente */ } }
+  try {
+    const y = new Date(Date.now() - 864e5); const p = (n: number) => String(n).padStart(2, "0");
+    const r = await fetch(`https://wikimedia.org/api/rest_v1/metrics/pageviews/top/es.wikipedia/all-access/${y.getUTCFullYear()}/${p(y.getUTCMonth() + 1)}/${p(y.getUTCDate())}`, { headers: { "User-Agent": "FacelessStudio/1.0 (https://github.com/indoorwall/faceless-render)" } });
+    if (r.ok) { const d = await r.json(); for (const a of (d.items?.[0]?.articles ?? []).filter((a: { article: string }) => !/^(Especial|Wikipedia|Portada|Anexo):|Main_Page/.test(a.article)).slice(0, 20)) lines.push(`[Wikipedia ES] ${String(a.article).replace(/_/g, " ")} (${a.views} lecturas)`); }
+  } catch (_) { /* sin fuente */ }
+  if (!lines.length) return;
+  const system = `Eres el editor de actualidad de «${ch.name}», un canal de Shorts que cuenta 5 curiosidades poco conocidas de un tema, para todos los públicos (España y Latinoamérica). Eliges como mucho UN tema del día. Criterios, todos obligatorios: 1) es noticia o tendencia HOY; 2) tiene un ángulo curioso con al menos 5 datos sorprendentes, reales y comprobables en Wikipedia; 3) es amable: famosos, música, cine, series, fiestas y tradiciones, ciencia, espacio, animales, fenómenos virales, récords. Nunca: muertes, accidentes, catástrofes, alertas meteorológicas, crímenes, política, guerras actuales, resultados deportivos ni apuestas. 4) no se ha hecho ya. Si ningún tema los cumple, pick=false: es mejor no hacer nada que un vídeo flojo.`;
+  const user = `${playbookBlock(ch)}TENDENCIAS DE HOY (${today}):\n${lines.join("\n")}\n\nTEMAS DE ACTUALIDAD YA HECHOS:\n${(done ?? []).map((x) => `- ${x.idea_title}`).join("\n") || "ninguno"}`;
+  const r = await claudeTool(MODEL_FAST, system, user, TREND_TOOL, 1500);
+  const o = r.input ?? {};
+  if (!o.pick || !o.title || !o.wiki_title) { await log(job, `Actualidad: hoy no hay un tema que encaje (${clean(o.why_not ?? "").slice(0, 120)})`); return; }
+  const wiki = clean(o.wiki_title);
+  const { data: v, error } = await sb.from("videos").insert({
+    channel_id: ch.id, format: "short", status: "scripting", priority: 10, idea_kind: "trend",
+    idea_title: clean(o.title), idea_hook: clean(o.hook), idea_reason: clean(o.why),
+    idea_angle: `ACTUALIDAD (${today}): ${clean(o.angle)}. Es tendencia hoy: la primera frase dice por qué todo el mundo habla de esto.`,
+    idea_evidence: [{ title: wiki, url: `https://es.wikipedia.org/wiki/${encodeURIComponent(wiki.replace(/ /g, "_"))}` }],
+    auto: { trend: { topic: clean(o.topic), at: new Date().toISOString() } },
+  }).select("id").single();
+  if (error) throw new Error(error.message);
+  await enqueue("script", { video_id: v.id });
+  await log({ ...job, video_id: v.id }, `Actualidad: «${clean(o.title)}» (${clean(o.topic)}). Se publica en cuanto esté listo y aprobado.`);
+}
+
 // ---------- Paso: informe diario del canal (analiza resultados, decide mejoras y las aplica) ----------
 const REPORT_TOOL = { name: "informe", description: "Informe diario del canal", input_schema: { type: "object", required: ["headline", "summary", "evolution", "wins", "problems", "changes", "watch"], properties: {
   headline: { type: "string", description: "Una frase con lo más importante de hoy (máx. 120 caracteres)" },

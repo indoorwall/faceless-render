@@ -23,7 +23,7 @@ const MODEL_FAST = "claude-sonnet-5-5";
 const MODEL_CHEAP = "claude-haiku-5-5";
 const MUSIC_MODEL = "music_v2_5";
 const SFX_MODEL = "eleven_text_to_sound_v3";
-const MUSIC_LIBRARY = 4;
+const MUSIC_LIBRARY = 8;
 // Efectos de sonido: un catálogo fijo que se genera una sola vez por canal y se reutiliza siempre
 const SFX_LIB: Record<string, string> = {
   whoosh: "deep cinematic whoosh transition",
@@ -929,13 +929,21 @@ async function stepAudio(job: Job) {
       const meta = v.script?.music_meta;
       const need = short ? voiceSec + 0.5 : Math.min(voiceSec, 170);
       // Biblioteca musical del canal: se componen como mucho MUSIC_LIBRARY pistas por canal y después se van rotando (componer es lo más caro de ElevenLabs)
-      const { data: lib } = await sb.from("videos").select("music_url").eq("channel_id", ch.id).neq("id", v.id).not("music_url", "is", null).order("created_at", { ascending: false }).limit(60);
-      const tracks = [...new Set((lib ?? []).map((x) => String(x.music_url)))];
+      const { data: lib } = await sb.from("videos").select("music_url,script,updated_at").eq("channel_id", ch.id).neq("id", v.id).not("music_url", "is", null).order("updated_at", { ascending: false }).limit(80);
+      // Pista → su descripción y duración (de la primera vez que se compuso)
+      const info = new Map<string, { prompt: string; sec: number }>();
+      for (const x of lib ?? []) { const u = String(x.music_url), m = x.script?.music_meta; if (!info.has(u) || (m?.prompt && !m?.library)) info.set(u, { prompt: String(m?.prompt ?? ""), sec: Number(m?.sec ?? 60) }); }
+      const tracks = [...info.keys()];
       if (v.music_url && meta?.prompt === prompt && Number(meta?.sec) >= need) {
         await log(job, "Se reaprovecha la música del montaje anterior");
-      } else if (tracks.length >= MUSIC_LIBRARY) {
-        const { count: nv } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).not("music_url", "is", null);
-        const pick = tracks[(nv ?? 0) % tracks.length];
+      } else if (tracks.length >= MUSIC_LIBRARY && (short || tracks.some((t) => info.get(t)!.sec >= 120))) {
+        // La pista de la biblioteca que mejor encaja con el tono del vídeo, sin repetir las 2 últimas usadas
+        const recent = (lib ?? []).slice(0, 2).map((x) => String(x.music_url));
+        const words = (t: string) => new Set(t.toLowerCase().split(/[^a-záéíóúñü]+/).filter((w) => w.length > 3));
+        const want = words(prompt);
+        const score = (t: string) => { const w = words(info.get(t)!.prompt); let n = 0; for (const x of want) if (w.has(x)) n++; return n / Math.max(1, want.size); };
+        const pool = tracks.filter((t) => !recent.includes(t) && (short || info.get(t)!.sec >= 120));
+        const pick = (pool.length ? pool : tracks).sort((a, b) => score(b) - score(a))[0];
         await sb.from("videos").update({ music_url: pick, script: { ...v.script, music_meta: { prompt, sec: 180, library: true } } }).eq("id", v.id);
         await log(job, "Música de la biblioteca del canal (sin coste)");
       } else {

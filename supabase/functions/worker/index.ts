@@ -1402,6 +1402,16 @@ async function stepPublish(job: Job) {
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
+  // Vídeo rehecho: se borra la versión anterior de YouTube y se sube la nueva a la misma hora (si aún no ha pasado)
+  if (v.auto?.replace && v.youtube_video_id) {
+    if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) throw new QuotaWait("youtube");
+    const d = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${v.youtube_video_id}`, { method: "DELETE", headers: { Authorization: `Bearer ${access_token}` } });
+    if (!d.ok && d.status !== 404) throw new Error(`YouTube (borrar versión anterior) ${d.status}: ${(await d.text()).slice(0, 200)}`);
+    const keep = v.auto.replace.publish_at && new Date(v.auto.replace.publish_at) > new Date(Date.now() + 15 * 60000) ? v.auto.replace.publish_at : null;
+    await log(job, `Versión anterior borrada de YouTube (${v.youtube_video_id}); se sube la nueva${keep ? ` para la misma hora` : ""}`);
+    v.youtube_video_id = null; v.publish_at = keep;
+    await sb.from("videos").update({ youtube_video_id: null, publish_at: keep, auto: { ...v.auto, replace: { ...v.auto.replace, deleted: true } } }).eq("id", v.id);
+  }
   // Sin fecha elegida: el siguiente hueco libre del calendario del canal (si tiene ritmo para ese formato)
   // Actualidad: sale en cuanto está aprobada (la noticia caduca)
   if (!v.publish_at && v.idea_kind === "trend") { v.publish_at = new Date(Date.now() + 10 * 60000).toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); }
@@ -2910,7 +2920,8 @@ async function planChannel(job: Job, ch: any) {
         if (why) { await setAuto(v, { final: { held: why, at: new Date().toISOString() } }); await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» te espera (${why})`, "warn"); continue; }
         const parent = v.parent_id ? V.find((x) => x.id === v.parent_id) : null;
         const after = parent?.publish_at ? new Date(new Date(parent.publish_at).getTime() + 3 * 3600000) : undefined;
-        const at = await nextSlot(ch, fmtOf(v), after, strongVideo(v));
+        const keepAt = v.auto?.replace?.publish_at && new Date(v.auto.replace.publish_at) > new Date(Date.now() + 30 * 60000) ? new Date(v.auto.replace.publish_at) : null;
+        const at = keepAt ?? await nextSlot(ch, fmtOf(v), after, strongVideo(v));
         const ai = await needsAiDisclosure(v, ch);
         await setAuto(v, { final: { by: "auto", score, at: new Date().toISOString(), warn: pol.warn } }, { status: "publishing", stage: "Subiendo a YouTube", publish_at: at ? at.toISOString() : null, ai_disclosure: ai });
         await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» aprobado (${score}/10) y programado ${at ? `para el ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}` : "ya"}`);

@@ -517,11 +517,18 @@ function drawDesign(ctx, W, H, project, tl, t, theme) {
   const world = isWorldMechanic(c.mechanic), Q = world ? L.wq : L.q;
   ctx.save(); ctx.globalAlpha = tk >= 0 ? clamp(1 - clamp(tk * 4) + clamp((tk - 0.8) * 5)) : qk; ctx.translate(Q.x, Q.y - (1 - qk) * 24);
   const memoNow = seg.memo && t < seg.memo[1], qText = world && memoNow ? (TR(c.instructions) || U.memorize) : TR(c.question);
-  const lines = L.v ? wrap(ctx, qText.toUpperCase(), Q.maxW, Q.size).slice(0, 2) : [qText.toUpperCase()], qs = lines.length > 1 ? Q.size * 0.82 : Q.size;
+  // La pregunta se ve siempre entera: se reparte en líneas al tamaño real y, si pasa de 2, se reduce el tamaño (3 líneas como mucho)
+  const qUp = qText.toUpperCase();
+  let qs = Q.size, lines = [qUp];
+  if (L.v) {
+    lines = wrap(ctx, qUp, Q.maxW, qs);
+    if (lines.length > 1) { qs = Q.size * 0.82; lines = wrap(ctx, qUp, Q.maxW, qs); }
+    while (lines.length > 2 && qs > Q.size * 0.6) { qs *= 0.93; lines = wrap(ctx, qUp, Q.maxW, qs); }
+  }
   // Playable World: al resolverse, la pregunta se convierte en la solución («ENTRADA C», «¡LA VELA…!»)
   const solvedT = world && seg.reveal ? seg.reveal[0] + solvedAt(c) : Infinity, sk = clamp((t - solvedT) / 0.3);
   if (sk > 0 && c.answer?.label) {
-    ctx.globalAlpha = 1; const ls = wrap(ctx, TR(c.answer.label).toUpperCase(), Q.maxW, Q.size * 0.9).slice(0, 2), s2 = (ls.length > 1 ? Q.size * 0.72 : Q.size * 0.9) * eBack(sk);
+    ctx.globalAlpha = 1; const aUp = TR(c.answer.label).toUpperCase(); let as = Q.size * 0.9, ls = wrap(ctx, aUp, Q.maxW, as); if (ls.length > 1) { as = Q.size * 0.72; ls = wrap(ctx, aUp, Q.maxW, as); } while (ls.length > 2 && as > Q.size * 0.5) { as *= 0.93; ls = wrap(ctx, aUp, Q.maxW, as); } const s2 = as * eBack(sk);
     ls.forEach((ln, i) => fitText(ctx, ln, 0, (i - (ls.length - 1) / 2) * s2 * 1.08, s2, Q.maxW, P.dark ? P.ok : mix(P.ok, "#000000", 0.25)));
   } else lines.forEach((ln, i) => fitText(ctx, ln, 0, (i - (lines.length - 1) / 2) * qs * 1.08, qs, Q.maxW, P.ink));
   if (!world && seg.memo && t < seg.memo[1]) text(ctx, (TR(c.instructions) || U.memorize).toUpperCase(), 0, qs * (lines.length * 0.55 + 0.45), qs * 0.48, P.dark ? P.teal : mix(P.teal, "#000000", 0.15));

@@ -228,6 +228,7 @@ async function runStep(job: Job) {
     case "daily_report": return stepDailyReport(job);
     case "trends": return stepTrends(job);
     case "sequels": return stepSequels(job);
+    case "playlists": return stepPlaylists(job);
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
@@ -3450,6 +3451,46 @@ async function stepResearch(job: Job) {
 }
 
 // ---------- Paso: calendario recomendado de un canal (sin IA, se recalcula cada día) ----------
+// ---------- Paso: listas de reproducción por serie (quien llega al canal ve más vídeos seguidos) ----------
+// Usa la cuota sobrante del día (cada alta cuesta 50 unidades): las subidas de vídeos siempre van primero
+async function stepPlaylists(job: Job) {
+  if (!job.channel_id) {
+    const { data: chs } = await sb.from("channels").select("id,schedule").neq("status", "archived");
+    for (const c of chs ?? []) if ((c.schedule?.series ?? []).length) await enqueue("playlists", { channel_id: c.id });
+    return;
+  }
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch || !(ch.schedule?.series ?? []).length) return;
+  const token = await ytAccess(ch.id); if (!token) return;
+  const { data: vids } = await sb.from("videos").select("id,title,auto,script,youtube_video_id,status").eq("channel_id", ch.id).not("youtube_video_id", "is", null).in("status", ["published", "scheduled"]).order("published_at").limit(200);
+  // Vídeos ya publicados sin serie (de antes de las series): se clasifican sin tocar su título en YouTube
+  for (const v of (vids ?? []).filter((x) => !x.auto?.series).slice(0, 15)) {
+    try { await withSeries(ch, v, String(v.title ?? ""), (v.script?.scenes ?? []).map((x: { narration?: string }) => x.narration ?? "").join(" ").slice(0, 1200)); } catch (e) { if (e instanceof OverBudget) throw e; }
+  }
+  const { data: fresh } = await sb.from("videos").select("id,auto,youtube_video_id").eq("channel_id", ch.id).not("youtube_video_id", "is", null).in("status", ["published", "scheduled"]).order("published_at").limit(200);
+  const pending = (fresh ?? []).filter((x) => x.auto?.series?.name && !x.auto?.playlisted);
+  const lists: Record<string, string> = { ...(ch.yt_playlists ?? {}) };
+  let added = 0, made = 0;
+  for (const v of pending) {
+    const name = String(v.auto.series.name);
+    if (!lists[name]) {
+      if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
+      const r = await fetch("https://www.googleapis.com/youtube/v3/playlists?part=snippet,status", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ snippet: { title: name, description: `${name}: todos los vídeos de la serie en «${ch.name}», del primero al último.`, defaultLanguage: ch.language ?? "es" }, status: { privacyStatus: "public" } }) });
+      if (!r.ok) throw new Error(`YouTube (lista) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      lists[name] = (await r.json()).id; made++;
+      await sb.from("channels").update({ yt_playlists: lists }).eq("id", ch.id);
+    }
+    if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
+    const r = await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ snippet: { playlistId: lists[name], resourceId: { kind: "youtube#video", videoId: v.youtube_video_id } } }) });
+    if (!r.ok && r.status !== 409) throw new Error(`YouTube (añadir a lista) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    await sb.from("videos").update({ auto: { ...(v.auto ?? {}), playlisted: lists[name] } }).eq("id", v.id);
+    added++;
+  }
+  if (added || made) await log(job, `Listas de reproducción: ${added} vídeos añadidos${made ? `, ${made} listas nuevas` : ""}${pending.length > added ? ` (quedan ${pending.length - added} para cuando haya cuota)` : ""}`);
+}
+
 // ---------- Paso: secuelas (un Short que dobla las visitas normales del canal tiene segunda parte enseguida) ----------
 const SEQUEL_TOOL = { name: "secuela", description: "Segunda parte de un Short que ha funcionado", input_schema: { type: "object", required: ["title", "angle", "hook", "wiki_title"], properties: {
   title: { type: "string", description: "Idea de la segunda parte (sin emojis)" },

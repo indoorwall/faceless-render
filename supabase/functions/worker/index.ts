@@ -3436,17 +3436,18 @@ async function stepSequels(job: Job) {
     return h.find((x) => (new Date(x.d).getTime() - p) / 864e5 >= 2)?.views ?? null;
   };
   const vals = (vids ?? []).map((v) => at48(v)).filter((x): x is number => x != null).sort((a, b) => a - b);
-  if (vals.length < 5) return;
+  if (vals.length < 3) return;
   const median = vals[Math.floor(vals.length / 2)];
   // Una secuela al día como mucho; hasta la parte 3 de una misma serie
   const { count: today } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("idea_kind", "sequel").gte("created_at", new Date(Date.now() - 864e5).toISOString());
   if ((today ?? 0) > 0) return;
   const hit = (vids ?? []).filter((v) => !v.auto?.sequel && (v.auto?.part ?? 1) < 3 && Date.now() - new Date(v.published_at).getTime() < 8 * 864e5)
-    .map((v) => ({ v, n: at48(v) ?? 0 })).filter((x) => x.n >= Math.max(1500, median * 2)).sort((a, b) => b.n - a.n)[0];
+    // Destaca: 1,6 veces lo normal a las 48 h, o el doble contando lo que sigue creciendo después (segundo empujón de YouTube)
+    .map((v) => ({ v, n: at48(v) ?? 0, now: Number(v.stats?.views ?? 0) })).filter((x) => x.n >= 1500 && (x.n >= median * 1.6 || x.now >= median * 2)).sort((a, b) => b.now - a.now)[0];
   if (!hit) return;
   const v = hit.v; const part = Number(v.auto?.part ?? 1) + 1;
   const told = (v.script?.scenes ?? []).map((s: { narration?: string }) => s.narration ?? "").join(" ").slice(0, 2500);
-  const r = await claudeTool(MODEL_FAST, `Eres el editor de «${ch.name}». Un Short ha funcionado el doble de lo normal y preparas su parte ${part}: mismo tema y mismo estilo, pero solo con datos NUEVOS, reales y comprobables (nada de repetir lo que ya se contó).`,
+  const r = await claudeTool(MODEL_FAST, `Eres el editor de «${ch.name}». Un Short ha funcionado mucho mejor de lo normal y preparas su parte ${part}: mismo tema y mismo estilo, pero solo con datos NUEVOS, reales y comprobables (nada de repetir lo que ya se contó).`,
     `${playbookBlock(ch)}SHORT ORIGINAL: «${v.title}» (${hit.n} visitas a las 48 h; lo normal en el canal es ${median})\nLO QUE YA SE CONTÓ:\n${told}`, SEQUEL_TOOL, 1500);
   const o = r.input ?? {};
   if (!o.title || !o.wiki_title) return;
@@ -3454,7 +3455,7 @@ async function stepSequels(job: Job) {
   const { data: nv, error } = await sb.from("videos").insert({
     channel_id: ch.id, format: "short", status: "scripting", priority: 8, idea_kind: "sequel", parent_id: v.id,
     idea_title: `${clean(o.title)} (parte ${part})`, idea_hook: clean(o.hook),
-    idea_angle: `SECUELA (parte ${part}) de «${v.title}», que funcionó el doble de lo normal. ${clean(o.angle)} Al final, invita a seguir el canal para la parte ${part + 1}. NO repitas nada de esto: ${told.slice(0, 900)}`,
+    idea_angle: `SECUELA (parte ${part}) de «${v.title}», que funcionó mucho mejor de lo normal en el canal. ${clean(o.angle)} Al final, invita a seguir el canal para la parte ${part + 1}. NO repitas nada de esto: ${told.slice(0, 900)}`,
     idea_reason: `«${v.title}» hizo ${hit.n} visitas a las 48 h (lo normal: ${median})`,
     idea_evidence: [{ title: wiki, url: `https://es.wikipedia.org/wiki/${encodeURIComponent(wiki.replace(/ /g, "_"))}` }],
     auto: { part, sequel_of: v.id },
@@ -3462,7 +3463,7 @@ async function stepSequels(job: Job) {
   if (error) throw new Error(error.message);
   await sb.from("videos").update({ auto: { ...(v.auto ?? {}), sequel: nv.id } }).eq("id", v.id);
   await enqueue("script", { video_id: nv.id });
-  await log({ ...job, video_id: nv.id }, `Secuela en marcha: «${v.title}» hizo ${hit.n} visitas a las 48 h (el doble de lo normal), así que tendrá parte ${part}`);
+  await log({ ...job, video_id: nv.id }, `Secuela en marcha: «${v.title}» hizo ${hit.n} visitas a las 48 h y lleva ${hit.now} (lo normal en el canal: ${median}), así que tendrá parte ${part}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

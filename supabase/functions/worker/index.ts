@@ -1441,6 +1441,27 @@ async function stepPublish(job: Job) {
 }
 
 
+
+// Serie del vídeo y su número dentro del canal (se conserva si el vídeo ya tenía una)
+// deno-lint-ignore no-explicit-any
+async function withSeries(ch: any, v: any, title: string, summary: string) {
+  const list: string[] = (ch.schedule?.series ?? []).map((x: unknown) => String(x)).filter(Boolean);
+  const base = String(title).replace(/\s*\|\s*[^|]+#\d+\s*$/, "").trim();
+  if (!list.length || !v?.id) return base;
+  let cur = v.auto?.series as { name: string; n: number } | undefined;
+  if (!cur?.name || !list.includes(cur.name)) {
+    const r = await claudeTool(MODEL_CHEAP, "Clasificas vídeos de YouTube en la serie del canal que mejor encaja. Si ninguna encaja de verdad, responde «ninguna».", `Series: ${list.join(" · ")}\n\nVídeo: «${base}»\n${summary}`,
+      { name: "serie", description: "Serie elegida", input_schema: { type: "object", required: ["serie"], properties: { serie: { type: "string", enum: [...list, "ninguna"] } } } }, 200);
+    const name = String(r.input?.serie ?? "ninguna");
+    if (!list.includes(name)) return base;
+    const { count } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).neq("id", v.id).eq("auto->series->>name", name).neq("status", "idea_rejected");
+    cur = { name, n: (count ?? 0) + 1 };
+    const { data: fresh } = await sb.from("videos").select("auto").eq("id", v.id).maybeSingle();
+    await sb.from("videos").update({ auto: { ...(fresh?.auto ?? {}), series: cur } }).eq("id", v.id);
+  }
+  const full = `${base} | ${cur.name} #${cur.n}`;
+  return full.length <= 100 ? full : base;
+}
 // Capítulos de un vídeo largo a partir de los tiempos reales de cada escena (6-8 capítulos, títulos con Haiku)
 // deno-lint-ignore no-explicit-any
 async function chaptersText(v: any) {
@@ -2488,8 +2509,10 @@ async function generateFormatShort(job: Job, ch: any, theme: { key: string; labe
   if (!val.ok) throw new Error(`${theme.label}: datos no válidos (${val.errors[0]}); se reintenta`);
   let pack: { title: string; description: string; tags: string[] } | null = null;
   try { pack = await packageRetos(ch, { format: "short", challenges: [{ question: summary }] }, theme.label); } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Título con IA no disponible: ${(e as Error).message}`, "warn"); }
-  const title = pack?.title ?? theme.label;
-  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: "short", title, idea_title: title, description: pack?.description ?? summary, tags: pack?.tags ?? [], retos: { kind: "formato", format: theme.format, theme: theme.key, data, summary } }).select("id").single();
+  const n = (prevV ?? []).length + 1;
+  const base = (pack?.title ?? theme.label).replace(/\s*\|\s*[^|]+#\d+\s*$/, "");
+  const title = `${base} | ${theme.label} #${n}`.length <= 100 ? `${base} | ${theme.label} #${n}` : base;
+  const { data: v, error } = await sb.from("videos").insert({ channel_id: ch.id, engine: "challenges", status: "script_review", format: "short", title, auto: { series: { name: theme.label, n } }, idea_title: title, description: pack?.description ?? summary, tags: pack?.tags ?? [], retos: { kind: "formato", format: theme.format, theme: theme.key, data, summary } }).select("id").single();
   if (error) throw new Error(error.message);
   if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
   await log({ ...job, video_id: v.id }, `${theme.label} preparado: «${title}»`);
@@ -3321,6 +3344,8 @@ async function packageVideo(ch: any, s: any, v: any) {
   if (!t) return null;
   // Canales «5 curiosidades»: el título lleva el 5 (con número, sus títulos funcionan un 60 % mejor)
   if (ch.idea_format === "list5" && !/(^|\D)5(\D|$)|\bcinco\b/i.test(t)) { const alt = (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()).find((x: string) => /(^|\D)5(\D|$)|\bcinco\b/i.test(x)); if (alt) t = alt; }
+  // Serie con número («… | Animales en guerra #4»): da al espectador un motivo para suscribirse y no perderse el siguiente
+  try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200)); } catch (e) { if (e instanceof OverBudget) throw e; }
   return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
 }
 // Rehacer título y descripción de un vídeo ya escrito o montado

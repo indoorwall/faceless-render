@@ -13,7 +13,7 @@ import { render, cleanup } from "./render.js";
 import { frames, thumbnail } from "./tools.js";
 
 const PORT = Number(process.env.PORT || 8080);
-const VERSION = "2026-11-01-formatos-2";
+const VERSION = "2026-11-02-suscribete-1";
 const SECRET = process.env.RENDER_SECRET || "";
 const jobs = new Map(); // id -> {status, progress, stage, error, duration, size, created}
 const queue = [];

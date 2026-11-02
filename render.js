@@ -107,7 +107,7 @@ const assEsc = (s) => s.replace(/\\/g, "").replace(/[{}]/g, "");
 const STOP = new Set("de del la las el los lo un una unos unas y e o u a al en con por para que se su sus es fue era the of and a an to in on".split(" "));
 const norm = (w) => String(w).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9ñ]/g, "");
 
-export function buildAss(spec, starts) {
+export function buildAss(spec, starts, total = 0) {
   const W = spec.width, H = spec.height;
   const sub = { max_words: W < H ? 3 : 6, y: W < H ? 0.64 : 0.86, size: W < H ? 0.07 : 0.05, color: "#FFFFFF", highlight: "#FFD400", font: "Montserrat ExtraBold", style: "classic", ...(spec.subtitles || {}) };
   // Estilo «box»: la palabra que suena va dentro de una caja de color (texto negro), como los Shorts virales
@@ -130,7 +130,7 @@ ScaledBorderAndShadow: yes
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,${fontName},${fontSize},${assColor(sub.color)},${assColor(sub.color)},&H00000000,&H64000000,0,0,0,0,100,100,${box ? 2 : 0},0,1,${outline},${Math.round(outline * 0.4)},2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
 Style: Box,${fontName},${fontSize},&H00000000,&H00000000,${assColor(sub.highlight)},&H00000000,0,0,0,0,100,100,${box ? 2 : 0},0,3,${boxPad},0,2,${Math.round(W * 0.06)},${Math.round(W * 0.06)},${marginV},1
-${titleStyles(spec)}${chapterStyles(spec)}
+${titleStyles(spec)}${chapterStyles(spec)}${subscribeStyles(spec)}
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
@@ -188,7 +188,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       });
     });
   });
-  return head + titleEvents(spec, starts) + chapterEvents(spec, starts) + lines.join("\n") + "\n";
+  return head + titleEvents(spec, starts) + chapterEvents(spec, starts) + subscribeEvents(spec, total) + lines.join("\n") + "\n";
+}
+// Botón «Suscríbete» animado en los últimos segundos: aparece con un salto, se «pulsa» y pasa a «Suscrito»
+function subscribeSize(spec) { return Math.round(Math.min(spec.width, spec.height) * 0.075); }
+function subscribeStyles(spec) {
+  if (!spec.subscribe_cta) return "";
+  const fs = subscribeSize(spec), pad = Math.round(fs * 0.42);
+  return `Style: SubBtn,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor("#E62117")},&H00000000,0,0,0,0,100,100,1,0,3,${pad},0,5,0,0,0,1
+Style: SubDone,Montserrat ExtraBold,${fs},&H00FFFFFF,&H00FFFFFF,${assColor("#606060")},&H00000000,0,0,0,0,100,100,1,0,3,${pad},0,5,0,0,0,1
+`;
+}
+function subscribeEvents(spec, total) {
+  const c = spec.subscribe_cta; if (!c || !(total > 4)) return "";
+  const W = spec.width, H = spec.height, x = Math.round(W / 2), y = Math.round(H * (W < H ? 0.79 : 0.8));
+  const a = Math.max(0, total - 2.8), b = Math.max(a + 0.8, total - 1.3);
+  const on = assEsc(String(c.text ?? "SUSCRÍBETE").toUpperCase()), done = assEsc(String(c.done ?? "SUSCRITO").toUpperCase());
+  return `Dialogue: 6,${assTime(a)},${assTime(b)},SubBtn,,0,0,0,,{\\an5\\pos(${x},${y})\\fscx0\\fscy0\\t(0,200,\\fscx115\\fscy115)\\t(200,320,\\fscx100\\fscy100)\\t(${Math.round((b - a) * 1000) - 160},${Math.round((b - a) * 1000)},\\fscx88\\fscy88)}${on}
+Dialogue: 6,${assTime(b)},${assTime(total)},SubDone,,0,0,0,,{\\an5\\pos(${x},${y})\\fscx88\\fscy88\\t(0,160,\\fscx100\\fscy100)}${done}
+`;
 }
 // Título de cada curiosidad («1 · RECONOCEN SU NOMBRE»), estilo TikTok: aparece con un pequeño salto al empezar cada una
 function chapterSize(spec) { return Math.round(Math.min(spec.width, spec.height) * (spec.chapter_style?.size ?? 0.066)); }
@@ -400,7 +418,7 @@ export async function render(spec, workdir, progress = () => {}) {
   // 3) Unión con fundidos y subtítulos quemados
   progress(62, "Uniendo escenas y subtítulos");
   const assFile = path.join(workdir, "subs.ass");
-  await writeFile(assFile, spec.subtitles?.enabled === false ? "" : buildAss(spec, starts));
+  await writeFile(assFile, spec.subtitles?.enabled === false ? "" : buildAss(spec, starts, total));
   const vin = scenes.flatMap((_, i) => ["-i", path.join(workdir, `c${i}.mp4`)]);
   const parts = scenes.map((_, i) => `[${i}:v]settb=AVTB,fps=${FPS}[s${i}]`);
   let last = "s0";

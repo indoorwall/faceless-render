@@ -227,6 +227,7 @@ async function runStep(job: Job) {
     case "advise": return stepAdvise(job);
     case "daily_report": return stepDailyReport(job);
     case "trends": return stepTrends(job);
+    case "sequels": return stepSequels(job);
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
@@ -639,10 +640,10 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   // Opus por la API de lotes (mitad de precio) y con la documentación de Wikipedia en vez de búsquedas web de pago
   const redo = !!(v.review_feedback && v.script);
   let docs: { title: string; url: string; text: string }[] = [];
-  if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: v.idea_kind === "trend" ? "Escribiendo el guion (actualidad, al momento)" : "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
+  if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: ["trend", "sequel"].includes(v.idea_kind) ? "Escribiendo el guion (al momento)" : "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
   const docBlock = docs.length ? `\n\nDOCUMENTACIÓN (Wikipedia):\n${docs.map((d, k) => `[${k + 1}] ${d.title} — ${d.url}\n${d.text}`).join("\n\n")}` : "";
   // Actualidad: al momento (por lotes puede tardar horas y la noticia caduca)
-  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: v.idea_kind === "trend" ? undefined : { job, tag: "script" }, stop: ["</json>"] });
+  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: ["trend", "sequel"].includes(v.idea_kind) ? undefined : { job, tag: "script" }, stop: ["</json>"] });
   if (r.stop === "max_tokens") throw new Error("El guion salió cortado; se reintenta");
   // deno-lint-ignore no-explicit-any
   const s = parseJson<any>(r.text);
@@ -1856,7 +1857,7 @@ async function stepMetrics(job: Job) {
   // Canales conectados con su cuenta de YouTube: analíticas completas (retención, fuentes de tráfico…) y aprenden de ellas
   const { data: conn } = await sb.from("youtube_tokens").select("channel_id");
   const connected = new Set((conn ?? []).map((x) => x.channel_id));
-  for (const id of connected) { await enqueue("analytics", { channel_id: id }); await enqueue("money", { channel_id: id, delaySec: 60 }); await enqueue("audience", { channel_id: id, delaySec: 120 }); }
+  for (const id of connected) { await enqueue("sequels", { channel_id: id, delaySec: 900 }); await enqueue("analytics", { channel_id: id }); await enqueue("money", { channel_id: id, delaySec: 60 }); await enqueue("audience", { channel_id: id, delaySec: 120 }); }
   // Calendario recomendado de los canales sin YouTube conectado (los conectados lo recalculan tras leer su público)
   const { data: allCh } = await sb.from("channels").select("id").neq("status", "archived");
   for (const c of allCh ?? []) if (!connected.has(c.id)) await enqueue("advise", { channel_id: c.id, delaySec: 300 });
@@ -3419,6 +3420,51 @@ async function stepResearch(job: Job) {
 }
 
 // ---------- Paso: calendario recomendado de un canal (sin IA, se recalcula cada día) ----------
+// ---------- Paso: secuelas (un Short que dobla las visitas normales del canal tiene segunda parte enseguida) ----------
+const SEQUEL_TOOL = { name: "secuela", description: "Segunda parte de un Short que ha funcionado", input_schema: { type: "object", required: ["title", "angle", "hook", "wiki_title"], properties: {
+  title: { type: "string", description: "Idea de la segunda parte (sin emojis)" },
+  angle: { type: "string", description: "Qué cuenta, con datos NUEVOS que no salen en la primera parte" },
+  hook: { type: "string", description: "Primera frase: engancha a quien vio la primera parte y también a quien no" },
+  wiki_title: { type: "string", description: "Artículo de Wikipedia (es o en) que documenta los datos nuevos" } } } };
+async function stepSequels(job: Job) {
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch || ch.production_type === "challenges" || ch.autopilot === "manual") return;
+  // Visitas a las 48 h de los últimos 20 Shorts publicados (la referencia del canal)
+  const { data: vids } = await sb.from("videos").select("id,title,idea_title,idea_angle,idea_evidence,idea_kind,script,stats,published_at,auto,parent_id").eq("channel_id", ch.id).eq("format", "short").not("youtube_video_id", "is", null).lte("published_at", new Date(Date.now() - 48 * 3600e3).toISOString()).order("published_at", { ascending: false }).limit(20);
+  const at48 = (v: { stats?: { history?: { d: string; views: number }[] }; published_at: string }) => {
+    const h = v.stats?.history ?? []; const p = new Date(String(v.published_at).slice(0, 10)).getTime();
+    return h.find((x) => (new Date(x.d).getTime() - p) / 864e5 >= 2)?.views ?? null;
+  };
+  const vals = (vids ?? []).map((v) => at48(v)).filter((x): x is number => x != null).sort((a, b) => a - b);
+  if (vals.length < 5) return;
+  const median = vals[Math.floor(vals.length / 2)];
+  // Una secuela al día como mucho; hasta la parte 3 de una misma serie
+  const { count: today } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("idea_kind", "sequel").gte("created_at", new Date(Date.now() - 864e5).toISOString());
+  if ((today ?? 0) > 0) return;
+  const hit = (vids ?? []).filter((v) => !v.auto?.sequel && (v.auto?.part ?? 1) < 3 && Date.now() - new Date(v.published_at).getTime() < 8 * 864e5)
+    .map((v) => ({ v, n: at48(v) ?? 0 })).filter((x) => x.n >= Math.max(1500, median * 2)).sort((a, b) => b.n - a.n)[0];
+  if (!hit) return;
+  const v = hit.v; const part = Number(v.auto?.part ?? 1) + 1;
+  const told = (v.script?.scenes ?? []).map((s: { narration?: string }) => s.narration ?? "").join(" ").slice(0, 2500);
+  const r = await claudeTool(MODEL_FAST, `Eres el editor de «${ch.name}». Un Short ha funcionado el doble de lo normal y preparas su parte ${part}: mismo tema y mismo estilo, pero solo con datos NUEVOS, reales y comprobables (nada de repetir lo que ya se contó).`,
+    `${playbookBlock(ch)}SHORT ORIGINAL: «${v.title}» (${hit.n} visitas a las 48 h; lo normal en el canal es ${median})\nLO QUE YA SE CONTÓ:\n${told}`, SEQUEL_TOOL, 1500);
+  const o = r.input ?? {};
+  if (!o.title || !o.wiki_title) return;
+  const wiki = clean(o.wiki_title);
+  const { data: nv, error } = await sb.from("videos").insert({
+    channel_id: ch.id, format: "short", status: "scripting", priority: 8, idea_kind: "sequel", parent_id: v.id,
+    idea_title: `${clean(o.title)} (parte ${part})`, idea_hook: clean(o.hook),
+    idea_angle: `SECUELA (parte ${part}) de «${v.title}», que funcionó el doble de lo normal. ${clean(o.angle)} Al final, invita a seguir el canal para la parte ${part + 1}. NO repitas nada de esto: ${told.slice(0, 900)}`,
+    idea_reason: `«${v.title}» hizo ${hit.n} visitas a las 48 h (lo normal: ${median})`,
+    idea_evidence: [{ title: wiki, url: `https://es.wikipedia.org/wiki/${encodeURIComponent(wiki.replace(/ /g, "_"))}` }],
+    auto: { part, sequel_of: v.id },
+  }).select("id").single();
+  if (error) throw new Error(error.message);
+  await sb.from("videos").update({ auto: { ...(v.auto ?? {}), sequel: nv.id } }).eq("id", v.id);
+  await enqueue("script", { video_id: nv.id });
+  await log({ ...job, video_id: nv.id }, `Secuela en marcha: «${v.title}» hizo ${hit.n} visitas a las 48 h (el doble de lo normal), así que tendrá parte ${part}`);
+}
+
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------
 const TREND_TOOL = { name: "tendencia", description: "Tema de actualidad elegido", input_schema: { type: "object", required: ["pick"], properties: {
   pick: { type: "boolean", description: "true solo si hay un tema que cumple TODOS los criterios" },

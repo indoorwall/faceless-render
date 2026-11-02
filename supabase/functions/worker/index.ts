@@ -623,7 +623,10 @@ async function stepScript(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel;
   const short = ch.format === "short";
-  const words = short ? Number(ch.schedule?.short_words ?? 120) : Math.round(ch.target_minutes * 150);
+  // Experimento en curso: a cada Short normal le toca la variante A o B por turnos
+  const arm = short ? await assignExperiment(ch, v) : null;
+  const words = short ? Number(arm?.words ?? ch.schedule?.short_words ?? 120) : Math.round(ch.target_minutes * 150);
+  const expBlock = arm?.prompt ? `\n\nEXPERIMENTO EN CURSO (obligatorio, manda sobre cualquier otra indicación de este aspecto): ${arm.prompt}` : "";
   const scenes = short ? "4-7" : `${Math.round(ch.target_minutes * 3)}-${Math.round(ch.target_minutes * 4)}`;
   const allowed = ch.image_source === "ai" ? `"ai" y "reframe"` : ch.image_source === "stock" ? `"archive", "stock_photo", "stock_video" y "reframe"` : `"ai", "archive", "stock_photo", "stock_video" y "reframe"`;
   const visualRule = `PLANOS: cada escena es un bloque de locución y se divide en planos (shots). Cada plano es un fragmento literal de la narración (line) con su visual; la unión de las line de una escena es su narración completa, sin cambiar ni una palabra. Duración de cada plano: ${short ? "1,5-3,5 s (4-9 palabras)" : "3-6 s (8-15 palabras)"}. Los cambios de plano acompañan lo que se cuenta, nunca cortes sin sentido. Tipos de visual permitidos en este canal: ${allowed}.
@@ -644,7 +647,7 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   if (!job.payload?.batches?.script_0) { docs = await researchPack(v); await sb.from("videos").update({ stage: ["trend", "sequel"].includes(v.idea_kind) ? "Escribiendo el guion (al momento)" : "Escribiendo el guion (por lotes, a mitad de precio)" }).eq("id", v.id); }
   const docBlock = docs.length ? `\n\nDOCUMENTACIÓN (Wikipedia):\n${docs.map((d, k) => `[${k + 1}] ${d.title} — ${d.url}\n${d.text}`).join("\n\n")}` : "";
   // Actualidad: al momento (por lotes puede tardar horas y la noticia caduca)
-  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + docBlock, { maxTokens: short ? 16000 : 32000, batch: ["trend", "sequel"].includes(v.idea_kind) ? undefined : { job, tag: "script" }, stop: ["</json>"] });
+  const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + expBlock + docBlock, { maxTokens: short ? 16000 : 32000, batch: ["trend", "sequel"].includes(v.idea_kind) ? undefined : { job, tag: "script" }, stop: ["</json>"] });
   if (r.stop === "max_tokens") throw new Error("El guion salió cortado; se reintenta");
   // deno-lint-ignore no-explicit-any
   const s = parseJson<any>(r.text);
@@ -1569,7 +1572,9 @@ async function stepDirect(job: Job) {
   const system = `Eres el director de contenidos de canales de YouTube que se hacen virales. Revisas el borrador del guionista con ojo implacable y lo reescribes para maximizar retención, rebote y compartidos, sin perder rigor. Respetas la guía del canal (es obligatoria). Mantienes el formato JSON exacto del borrador. Responde SOLO con JSON dentro de <json></json>.`;
   const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}${VIRAL_RULES(short)}\n${weak.length ? `\nPuntos débiles detectados en una primera lectura: ${weak.join(" · ")}\n` : ""}\nCanal: ${ch.name} — ${ch.niche}. Idioma: ${ch.language}. Formato: ${short ? "Short vertical" : `vídeo largo de ~${ch.target_minutes} min`}.\nTipos de plano permitidos: ${ch.image_source === "ai" ? "ai y reframe" : ch.image_source === "stock" ? "archive, stock_photo, stock_video y reframe" : "ai, archive, stock_photo, stock_video y reframe"}.\n${v.review_feedback ? `Feedback del autor que el guion debe cumplir: ${v.review_feedback}\n` : ""}\nBORRADOR DEL GUIONISTA:\n${JSON.stringify(original)}\n\nTareas:\n1. Puntúa el borrador de 0 a 10 en potencial viral.\n2. Reescribe lo necesario (gancho, orden, frases sobrantes, planos, keywords, cierre, título, texto de miniatura). No inventes datos nuevos: usa solo los hechos del borrador y sus fuentes.\n3. Propón 3 conceptos de miniatura distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de miniatura alternativos.\nDevuelve: <json>{"review":{"score_before":0,"score_after":0,"changes":["qué has cambiado y por qué, frases cortas"],"title_options":["","",""]},"script":{...mismo formato del borrador, completo...,"thumbnail_concepts":["","",""],"thumbnail_texts":["","",""]}}</json>`;
   try {
-    const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user, { maxTokens: 20000 });
+    // El director respeta la variante del experimento del vídeo (si no, desharía la prueba)
+    const exArm = (ch.experiments?.active?.arms ?? []).find((a: Arm) => v.auto?.exp?.id === ch.experiments?.active?.id && a.key === v.auto?.exp?.arm);
+    const r = await claude(short ? MODEL_FAST : MODEL_SCRIPT, system, user + (exArm?.prompt ? `\n\nEXPERIMENTO EN CURSO (respétalo al reescribir): ${exArm.prompt}` : ""), { maxTokens: 20000 });
     await bumpUsage(v.id, usageOf(r));
     // Nunca aceptar una versión cortada o mucho más corta que el borrador
     if (r.stop === "max_tokens") throw new Error("la respuesta salió cortada");
@@ -3614,6 +3619,60 @@ async function stepTrends(job: Job) {
   await log({ ...job, video_id: v.id }, `Actualidad: «${clean(o.title)}» (${clean(o.topic)}). Se publica en cuanto esté listo y aprobado.`);
 }
 
+
+// ---------- Experimentos A/B: se prueba una sola cosa cada vez y gana lo que digan los datos ----------
+type Arm = { key: string; label: string; prompt?: string; words?: number };
+// deno-lint-ignore no-explicit-any
+async function assignExperiment(ch: any, v: any): Promise<Arm | null> {
+  const ex = ch.experiments?.active; if (!ex?.id || !Array.isArray(ex.arms) || ex.arms.length < 2) return null;
+  // Actualidad y secuelas no entran: van con otras prisas y otro gancho
+  if (["trend", "sequel"].includes(v.idea_kind) || v.engine === "challenges") return null;
+  if (v.auto?.exp?.id === ex.id) return ex.arms.find((a: Arm) => a.key === v.auto.exp.arm) ?? null;
+  const { count } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("auto->exp->>id", ex.id);
+  const arm: Arm = ex.arms[(count ?? 0) % ex.arms.length];
+  const { data: fresh } = await sb.from("videos").select("auto").eq("id", v.id).maybeSingle();
+  await sb.from("videos").update({ auto: { ...(fresh?.auto ?? {}), exp: { id: ex.id, arm: arm.key } } }).eq("id", v.id);
+  return arm;
+}
+// Resultado del experimento con los vídeos que ya tienen 48 h; cuando las dos variantes tienen suficientes, se decide y empieza el siguiente
+// deno-lint-ignore no-explicit-any
+async function experimentStatus(ch: any) {
+  const ex = ch.experiments?.active; if (!ex?.id) return null;
+  const { data: vids } = await sb.from("videos").select("auto,stats,published_at").eq("channel_id", ch.id).eq("auto->exp->>id", ex.id).not("youtube_video_id", "is", null).lte("published_at", new Date(Date.now() - 48 * 3600e3).toISOString());
+  const at48 = (v: { stats?: { history?: { d: string; views: number }[] }; published_at: string }) => { const p = new Date(String(v.published_at).slice(0, 10)).getTime(); return (v.stats?.history ?? []).find((x) => (new Date(x.d).getTime() - p) / 864e5 >= 2)?.views ?? null; };
+  const arms = (ex.arms as Arm[]).map((a) => {
+    const vs = (vids ?? []).filter((v) => v.auto?.exp?.arm === a.key);
+    const v48 = vs.map(at48).filter((x): x is number => x != null);
+    const pct = vs.map((v) => Number(v.stats?.analytics?.avg_pct)).filter((x) => x > 0);
+    const views = vs.reduce((s2, v) => s2 + Number(v.stats?.analytics?.views ?? v.stats?.views ?? 0), 0), subs = vs.reduce((s2, v) => s2 + Number(v.stats?.analytics?.subs ?? 0), 0);
+    const avg = (xs: number[]) => xs.length ? Math.round(xs.reduce((s2, x) => s2 + x, 0) / xs.length) : null;
+    return { key: a.key, label: a.label, n: v48.length, views48: avg(v48), pct: avg(pct), subs_per_1000: views ? Math.round((subs / views) * 10000) / 10 : null };
+  });
+  const min = Number(ex.min_per_arm ?? 6);
+  if (arms.some((a) => a.n < min)) return { ...ex, arms_result: arms, decided: false };
+  // Gana la que más visitas a las 48 h y suscriptores por 1.000 visitas consigue (a partes iguales); con menos de un 10 % de diferencia, empate
+  const top = (k: "views48" | "subs_per_1000") => Math.max(...arms.map((a) => Number(a[k] ?? 0)), 1e-9);
+  const score = (a: typeof arms[number]) => 0.5 * Number(a.views48 ?? 0) / top("views48") + 0.5 * Number(a.subs_per_1000 ?? 0) / top("subs_per_1000");
+  const sorted = [...arms].sort((a, b) => score(b) - score(a));
+  const tie = score(sorted[0]) - score(sorted[1]) < 0.1 * score(sorted[0]);
+  const winner = tie ? null : sorted[0];
+  const result = { id: ex.id, name: ex.name, arms: arms, winner: winner?.key ?? null, at: new Date().toISOString() };
+  const queue = (ch.experiments?.queue ?? []) as typeof ex[];
+  const next = queue[0] ? { ...queue[0], started: new Date().toISOString() } : null;
+  await sb.from("channels").update({ experiments: { ...(ch.experiments ?? {}), active: next, queue: queue.slice(1), history: [...(ch.experiments?.history ?? []), result] } }).eq("id", ch.id);
+  // La variante ganadora pasa a ser regla fija del canal
+  if (winner) {
+    const w = (ex.arms as Arm[]).find((a) => a.key === winner.key)!;
+    const line = `- Experimento «${ex.name}» (${new Date().toLocaleDateString("es-ES")}): ganó «${w.label}» (${winner.views48} visitas a las 48 h y ${winner.subs_per_1000 ?? "?"} subs/1.000 frente a ${sorted[1].views48} y ${sorted[1].subs_per_1000 ?? "?"}). ${w.prompt ?? ""}`.trim();
+    const pb = String(ch.playbook ?? "");
+    const m = pb.match(/^REGLAS FIJAS DEL DUEÑO[\s\S]*?\n\n/);
+    const newPb = m ? pb.replace(m[0], m[0].replace(/\n\n$/, `\n${line}\n\n`)) : `REGLAS FIJAS DEL DUEÑO (no se cambian):\n${line}\n\n${pb}`;
+    const patch: Record<string, unknown> = { playbook: newPb };
+    if (w.words) patch.schedule = { ...(ch.schedule ?? {}), short_words: w.words };
+    await sb.from("channels").update(patch).eq("id", ch.id);
+  }
+  return { ...ex, arms_result: arms, decided: true, winner: winner?.label ?? "empate", next: next?.name ?? null };
+}
 // ---------- Paso: informe diario del canal (analiza resultados, decide mejoras y las aplica) ----------
 const REPORT_TOOL = { name: "informe", description: "Informe diario del canal", input_schema: { type: "object", required: ["headline", "summary", "evolution", "wins", "problems", "changes", "watch"], properties: {
   headline: { type: "string", description: "Una frase con lo más importante de hoy (máx. 120 caracteres)" },
@@ -3694,7 +3753,9 @@ async function stepDailyReport(job: Job) {
   const { data: bad } = await sb.from("videos").select("title,idea_title,status,stage,error,auto,analysis").eq("channel_id", ch.id).gte("updated_at", since48).in("status", ["failed", "idea_rejected", "final_review", "script_review"]);
   // deno-lint-ignore no-explicit-any
   const errs = (bad ?? []).filter((x: any) => x.status === "failed" || (x.status === "idea_rejected" && x.stage) || x.auto?.final?.held || x.auto?.script?.held).slice(0, 12).map((x: any) => `- «${x.title ?? x.idea_title}»: ${x.status === "failed" ? `falló (${String(x.error ?? "").slice(0, 120)})` : x.status === "idea_rejected" ? `descartado (${String(x.stage ?? "").slice(0, 100)})` : `retenido (${x.auto?.final?.held ?? x.auto?.script?.held ?? ""})`}${x.analysis?.summary ? ` · análisis: ${String(x.analysis.summary).slice(0, 220)}` : ""}`).join("\n");
-  const metrics = { views_7d: last7, views_prev_7d: prev7, daily: days, subs, eur_7d: Math.round(eur7 * 100) / 100, videos: list.length, money,
+  let exp: Awaited<ReturnType<typeof experimentStatus>> = null;
+  try { exp = await experimentStatus(ch); } catch (_) { /* sin experimento */ }
+  const metrics = { views_7d: last7, views_prev_7d: prev7, daily: days, subs, eur_7d: Math.round(eur7 * 100) / 100, videos: list.length, money, experiment: exp ? { name: exp.name, decided: exp.decided, winner: exp.decided ? exp.winner : null, next: exp.decided ? exp.next : null, arms: exp.arms_result } : null,
     best: list.slice().sort((a, b) => Number(b.stats?.views ?? 0) - Number(a.stats?.views ?? 0))[0]?.title ?? null };
   if (!list.length) {
     await sb.from("channel_reports").upsert({ channel_id: ch.id, day, headline: "Todavía no hay vídeos publicados con datos", summary: "Cuando haya vídeos publicados, aquí verás cada día cómo van y qué se mejora.", metrics }, { onConflict: "channel_id,day" });
@@ -3714,7 +3775,7 @@ ${rows}
 
 ECONOMÍA: gasto en 30 días ${money.eur_30d} € · ${money.subs_per_day != null ? `${money.subs_per_day} suscriptores al día · ${money.eur_per_sub ?? "?"} € por suscriptor · ${money.months_to_1000} meses hasta 1.000 al ritmo actual` : "aún sin ritmo de suscriptores medido"} · horas de vídeos largos (12 meses): ${money.long_hours_365} de 4.000 · ingresos 30 días: ${money.revenue_30} €. Los canales son para monetizar: los Shorts traen suscriptores y los vídeos largos (desde 300 suscriptores) suman las horas y el dinero.
 
-ERRORES DE LAS ÚLTIMAS 48 H (conviértelos en cambios con area «errores» para que no se repitan; si alguno puede pasar en cualquier canal, añade su regla en global_rules):
+${exp ? `EXPERIMENTO «${exp.name}»: ${(exp.arms_result ?? []).map((a: { label: string; n: number; views48: number | null; pct: number | null; subs_per_1000: number | null }) => `${a.label}: ${a.n} vídeos con 48 h, ${a.views48 ?? "?"} visitas de media, ${a.pct ?? "?"} % visto, ${a.subs_per_1000 ?? "?"} subs/1.000`).join(" · ")}${exp.decided ? ` → DECIDIDO: ${exp.winner}${exp.next ? `; empieza «${exp.next}»` : ""}` : " (en curso: no saques conclusiones hasta que acabe)"}\n\n` : ""}ERRORES DE LAS ÚLTIMAS 48 H (conviértelos en cambios con area «errores» para que no se repitan; si alguno puede pasar en cualquier canal, añade su regla en global_rules):
 ${errs || "ninguno"}
 
 ${playbookBlock(ch)}INFORMES ANTERIORES:

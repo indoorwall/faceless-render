@@ -1336,6 +1336,8 @@ async function stepRender(job: Job) {
       sfx_volume: ch.sfx_volume ?? 55,
       subtitles: { ...(sh ? { max_words: 3, y: 0.64, size: 0.07 } : { max_words: 6, y: 0.86, size: 0.05 }), ...subStyleOf(ch, sh) },
       ...(await titleOverlayOf(v, ch, sh)),
+      // Botón «Suscríbete» animado al final (recordatorio visual que acompaña a la invitación de la voz)
+      subscribe_cta: (({ es: ["Suscríbete", "Suscrito"], ca: ["Subscriu-t'hi", "Subscrit"], en: ["Subscribe", "Subscribed"], fr: ["Abonne-toi", "Abonné"], pt: ["Inscreva-se", "Inscrito"], it: ["Iscriviti", "Iscritto"], de: ["Abonnieren", "Abonniert"] } as Record<string, string[]>)[String(ch.language ?? "es").slice(0, 2)] ?? ["Suscríbete", "Suscrito"]).reduce((o, x, i) => ({ ...o, [i ? "done" : "text"]: x }), {} as Record<string, string>),
       ...(sh ? await chaptersOf(v, ch, scenes ?? []) : {}),
     };
     const base = KEYS["RENDER_URL"].replace(/\/+$/, "");

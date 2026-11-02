@@ -282,7 +282,20 @@ const PLAN = { ganaria: planGanaria, precios: planPrecios, numero: planNumero, p
 export function planFormat(spec) {
   const f = PLAN[spec?.format]; if (!f) throw new Error(`Formato desconocido: ${spec?.format}`);
   const p = f(spec.data, { brand: spec.brand ?? "" });
-  return { ...p, emojis: [...new Set([...p.emojis, ...TEXT_EMOJIS])] };
+  // Botón «Suscríbete» animado en los últimos segundos (aparece, se pulsa y pasa a «Suscrito»)
+  const draw = (ctx, t, E) => {
+    p.draw(ctx, t, E);
+    const a = p.duration - 2.8, b = p.duration - 1.3;
+    if (spec.subscribe === false || t < a) return;
+    const { rr, txt } = kit(ctx, E);
+    const done = t >= b, k = done ? 0.88 + 0.12 * prog(t, b, b + 0.16) : Math.min(pop(t, a, 0.32), t > b - 0.16 ? 0.88 + 0.12 * (1 - prog(t, b - 0.16, b)) : 1);
+    // Zona libre al final de cada formato (fuera de la franja inferior que tapa la interfaz de YouTube)
+    const y = FH * ({ ganaria: 0.4, precios: 0.79, numero: 0.43, piano: 0.62 }[spec.format] ?? 0.79);
+    ctx.save(); ctx.translate(FW / 2, y); ctx.scale(Math.max(0.001, k), Math.max(0.001, k));
+    rr(-170, -42, 340, 84, 16); ctx.fillStyle = done ? "#606060" : "#E62117"; ctx.fill(); ctx.restore();
+    txt(done ? "SUSCRITO" : "SUSCRÍBETE", FW / 2, y + 2, { size: 40, font: "M", scale: k });
+  };
+  return { ...p, draw, emojis: [...new Set([...p.emojis, ...TEXT_EMOJIS])] };
 }
 
 // Validación de los datos (los de la IA nunca se montan sin pasar por aquí)

@@ -3451,6 +3451,12 @@ async function stepResearch(job: Job) {
 }
 
 // ---------- Paso: calendario recomendado de un canal (sin IA, se recalcula cada día) ----------
+// La conexión de YouTube es anterior al permiso de listas: se avisa (una vez al día) en vez de reintentar
+// deno-lint-ignore no-explicit-any
+async function playlistScopeMissing(job: Job, ch: any) {
+  const { count } = await sb.from("activity").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).ilike("message", "Listas de reproducción: falta permiso%").gte("created_at", new Date(Date.now() - 864e5).toISOString());
+  if (!count) await log(job, `Listas de reproducción: falta permiso. Pulsa «Reconectar YouTube» en la ficha de «${ch.name}» y acepta el permiso para gestionar el canal.`, "warn");
+}
 // ---------- Paso: listas de reproducción por serie (quien llega al canal ve más vídeos seguidos) ----------
 // Usa la cuota sobrante del día (cada alta cuesta 50 unidades): las subidas de vídeos siempre van primero
 async function stepPlaylists(job: Job) {
@@ -3477,14 +3483,14 @@ async function stepPlaylists(job: Job) {
       if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
       const r = await fetch("https://www.googleapis.com/youtube/v3/playlists?part=snippet,status", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ snippet: { title: name, description: `${name}: todos los vídeos de la serie en «${ch.name}», del primero al último.`, defaultLanguage: ch.language ?? "es" }, status: { privacyStatus: "public" } }) });
-      if (!r.ok) throw new Error(`YouTube (lista) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      if (!r.ok) { await sb.rpc("yt_quota_take", { p_units: -50 }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (lista) ${r.status}: ${t.slice(0, 200)}`); }
       lists[name] = (await r.json()).id; made++;
       await sb.from("channels").update({ yt_playlists: lists }).eq("id", ch.id);
     }
     if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
     const r = await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ snippet: { playlistId: lists[name], resourceId: { kind: "youtube#video", videoId: v.youtube_video_id } } }) });
-    if (!r.ok && r.status !== 409) throw new Error(`YouTube (añadir a lista) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+    if (!r.ok && r.status !== 409) { await sb.rpc("yt_quota_take", { p_units: -50 }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (añadir a lista) ${r.status}: ${t.slice(0, 200)}`); }
     await sb.from("videos").update({ auto: { ...(v.auto ?? {}), playlisted: lists[name] } }).eq("id", v.id);
     added++;
   }

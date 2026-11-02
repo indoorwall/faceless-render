@@ -7,6 +7,8 @@ const sb = createClient(SB_URL, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { au
 const REDIRECT = `${SB_URL}/functions/v1/youtube-auth`;
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
+  // Gestionar el canal: listas de reproducción por serie
+  "https://www.googleapis.com/auth/youtube",
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/yt-analytics.readonly",
   // Ingresos estimados (panel de dinero). Si el canal aún no está monetizado, simplemente no hay datos

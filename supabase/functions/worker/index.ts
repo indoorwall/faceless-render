@@ -193,17 +193,17 @@ async function runLoop() {
 type Job = any;
 // ---------- Avisos por email (Resend): falta de saldo, vídeos con error o parados y aprobaciones urgentes ----------
 // Cada aviso tiene una clave: el mismo aviso no se repite antes de `hours` horas
-async function notify(key: string, subject: string, body: string, hours = 12) {
-  if (!KEYS["RESEND_API_KEY"] || !KEYS["ALERT_EMAIL"]) return;
+async function notify(key: string, subject: string, body: string, hours = 12): Promise<string> {
+  if (!KEYS["RESEND_API_KEY"] || !KEYS["ALERT_EMAIL"]) return "sin clave de Resend o sin email";
   try {
     const { data: last } = await sb.from("alerts_sent").select("at").eq("key", key).maybeSingle();
-    if (last?.at && Date.now() - new Date(last.at).getTime() < hours * 3600e3) return;
+    if (last?.at && Date.now() - new Date(last.at).getTime() < hours * 3600e3) return "ya avisado";
     const app = "https://faceless-studio-xzen.vercel.app";
     const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${KEYS["RESEND_API_KEY"]}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from: "Faceless Studio <onboarding@resend.dev>", to: [KEYS["ALERT_EMAIL"]], subject, html: `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${body}<p style="margin-top:18px"><a href="${app}" style="background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Abrir la app</a></p></div>` }) });
-    if (r.ok) await sb.from("alerts_sent").upsert({ key, at: new Date().toISOString() });
-    else console.error("Resend", r.status, (await r.text()).slice(0, 200));
-  } catch (e) { console.error("notify", (e as Error).message); }
+    if (r.ok) { await sb.from("alerts_sent").upsert({ key, at: new Date().toISOString() }); return "enviado"; }
+    const t = `Resend ${r.status}: ${(await r.text()).slice(0, 200)}`; console.error(t); return t;
+  } catch (e) { console.error("notify", (e as Error).message); return (e as Error).message; }
 }
 const esc2 = (x: unknown) => String(x ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" } as Record<string, string>)[c]);
 // Qué proveedor se ha quedado sin saldo (por el texto del error)
@@ -257,6 +257,7 @@ async function runStep(job: Job) {
     case "sequels": return stepSequels(job);
     case "playlists": return stepPlaylists(job);
     case "watchdog": return stepWatchdog(job);
+    case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);

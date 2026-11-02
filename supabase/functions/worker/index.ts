@@ -1402,6 +1402,10 @@ async function stepPublish(job: Job) {
   // Actualidad: sale en cuanto está aprobada (la noticia caduca)
   if (!v.publish_at && v.idea_kind === "trend") { v.publish_at = new Date(Date.now() + 10 * 60000).toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); }
   if (!v.publish_at && v.auto?.publish_now !== true) { const slot = await nextSlot(v.channel, v.format ?? v.channel.format ?? "long", undefined, strongVideo(v)); if (slot) { v.publish_at = slot.toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); } }
+  // Vídeos largos: capítulos con tiempos en la descripción (ayudan a aparecer en Google y en YouTube)
+  if (v.format === "long" && !/(^|\n)0?0:00 /.test(String(v.description ?? ""))) {
+    try { const ch2 = await chaptersText(v); if (ch2) { v.description = `${String(v.description ?? "").trim()}\n\nCapítulos:\n${ch2}`.slice(0, 4900); await sb.from("videos").update({ description: v.description }).eq("id", v.id); } } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Capítulos no añadidos: ${(e as Error).message}`, "warn"); }
+  }
   // Cuota: subir un vídeo gasta 1.600 unidades y la miniatura 50 (10.000 al día por proyecto)
   const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
   if (qok !== true) throw new QuotaWait("youtube");
@@ -1431,9 +1435,40 @@ async function stepPublish(job: Job) {
   }
   await sb.from("videos").update({ youtube_video_id: res.id, status: future ? "scheduled" : "published", stage: null, published_at: future ? new Date(v.publish_at).toISOString() : new Date().toISOString() }).eq("id", v.id);
   await log(job, `${future ? "Programado" : "Publicado"} en YouTube: https://youtu.be/${res.id}`);
+  if (v.format === "long") await longVideoTasks(job, v, res.id);
   if (v.channel.clips_per_long > 0 || v.channel.autopilot !== "manual") await kickPlanner(v.channel_id);
 }
 
+
+// Capítulos de un vídeo largo a partir de los tiempos reales de cada escena (6-8 capítulos, títulos con Haiku)
+// deno-lint-ignore no-explicit-any
+async function chaptersText(v: any) {
+  const { data: scenes } = await sb.from("scenes").select("n,audio_duration,narration").eq("video_id", v.id).order("n");
+  const tl = sceneTimeline(scenes ?? []); if (tl.length < 4) return null;
+  const total = tl[tl.length - 1].start + tl[tl.length - 1].dur; if (total < 120) return null;
+  const want = Math.min(8, Math.max(4, Math.round(total / 75)));
+  const groups: { start: number; text: string }[] = [];
+  for (const x of tl) {
+    const target = (groups.length * total) / want;
+    if (!groups.length || (x.start >= target && x.start - groups[groups.length - 1].start >= 30)) groups.push({ start: groups.length ? x.start : 0, text: "" });
+    groups[groups.length - 1].text += " " + String(x.s.narration ?? "");
+  }
+  if (groups.length < 3) return null;
+  const r = await claudeTool(MODEL_CHEAP, "Escribes títulos de capítulos de YouTube: cortos (máx. 40 caracteres), concretos y atractivos, en el idioma del texto, sin numeración ni emojis.", groups.map((g, i) => `Capítulo ${i + 1}: ${g.text.trim().slice(0, 600)}`).join("\n\n"),
+    { name: "capitulos", description: "Títulos de capítulos", input_schema: { type: "object", required: ["titles"], properties: { titles: { type: "array", items: { type: "string" } } } } }, 800);
+  const titles: string[] = r.input?.titles ?? [];
+  const mmss = (t: number) => { const s2 = Math.floor(t); return `${String(Math.floor(s2 / 60)).padStart(2, "0")}:${String(s2 % 60).padStart(2, "0")}`; };
+  return groups.map((g, i) => `${mmss(g.start)} ${clean(titles[i] ?? `Parte ${i + 1}`).slice(0, 60)}`).join("\n");
+}
+// Al publicar un largo: tareas manuales que YouTube no deja hacer por API
+// deno-lint-ignore no-explicit-any
+async function longVideoTasks(job: Job, v: any, ytId: string) {
+  const { data: shorts } = await sb.from("videos").select("title,idea_title,youtube_video_id").eq("channel_id", v.channel_id).eq("format", "short").not("youtube_video_id", "is", null).order("published_at", { ascending: false }).limit(80);
+  const tw = titleWords(`${v.title ?? ""} ${v.idea_title ?? ""}`);
+  const rel = (shorts ?? []).map((x) => ({ x, s: jaccard(tw, titleWords(`${x.title ?? ""} ${x.idea_title ?? ""}`)) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, 5);
+  const list = (rel.length ? rel : (shorts ?? []).slice(0, 3).map((x) => ({ x, s: 0 }))).map(({ x }) => `«${x.title ?? x.idea_title}» (https://youtube.com/shorts/${x.youtube_video_id})`).join(" · ");
+  await log(job, `Tarea para ti (2 min en YouTube Studio): 1) en «${v.title}» usa «Probar y comparar» con las 3 miniaturas; 2) en estos Shorts pon como «Vídeo relacionado» el largo https://youtu.be/${ytId}: ${list || "aún no hay Shorts publicados"}`, "warn");
+}
 // ================= Viralidad: director, análisis del vídeo y miniaturas =================
 const VIRAL_RULES = (short: boolean) => `CRITERIOS DE VIRALIDAD (${short ? "Shorts" : "vídeo largo"}):
 - Gancho: ${short ? "en el segundo 0-3" : "en los primeros 15-30 s"} va la afirmación más sorprendente o la imagen más potente, sin año, lugar ni contexto previo. La segunda frase sigue en plena acción: nada de "Cuentan que…", "Era 1932, en…" ni presentaciones (ahí se va la gente, lo dicen los datos de retención); el año y el lugar, si hacen falta, van dentro de una frase de acción y más tarde. Abre una pregunta que el espectador necesite resolver. Nunca anuncies una sorpresa que la imagen ya ha desvelado.
@@ -1644,7 +1679,7 @@ async function stepThumbs(job: Job) {
   if (!concepts.length) concepts.push(v.script?.thumbnail_prompt || v.title);
   const batch = Number(job.payload?.batch ?? 0);
   const done = thumbs.filter((x) => (x.batch ?? 0) === batch).length;
-  if (done >= 2) return;
+  if (done >= (v.format === "long" ? 3 : 2)) return;
   const concept = batch === 0 ? concepts[done % concepts.length] : `${concepts[done % concepts.length]}. Fresh composition and camera angle, different from previous versions (variation ${batch}-${done})`;
   const prompt = `YouTube thumbnail background, 16:9. ${concept}. One clear subject with a strong emotional expression, placed in the right half; the left 45% is simple and uncluttered so large text can go there. Bold contrast, vivid but natural colors, sharp focus, dramatic lighting. Style: ${ch.style_prompt ?? "cinematic"}. Absolutely no text, letters, logos or watermarks.`;
   let bytes: Uint8Array | null;
@@ -1712,7 +1747,8 @@ async function stepRefillIdeas(job: Job) {
   const allowedF: string[] = (ch.formats?.length ? ch.formats : [ch.format]).filter((f: string) => ["short", "long"].includes(f));
   const wantF = ["short", "long"].includes(job.payload?.format) && allowedF.includes(job.payload.format) ? job.payload.format : allowedF.length === 1 ? allowedF[0] : "mix";
   const longMin = ch.format === "long" ? ch.target_minutes : (ch.long_minutes ?? 8);
-  const fmtLine = wantF === "short" ? "Shorts verticales de 45-60 s (un recopilatorio en Short tiene 3 historias como máximo). Todas las ideas con format: short." : wantF === "long" ? `vídeos largos de ~${longMin} min (un recopilatorio largo tiene 4-6 historias). Todas las ideas con format: long.` : `el canal publica Shorts (45-60 s, recopilatorio de 3 historias como máximo) Y vídeos largos de ~${longMin} min (historias con más profundidad, o recopilatorios de 4-6 historias). Mezcla: unas 3 de cada 5 en Short y 2 de cada 5 en largo; indica el formato de cada idea.`;
+  const searchLine = " La mitad de las ideas de vídeo largo responden a algo que la gente busca en YouTube o Google («¿Por qué…?», «¿Qué pasó con…?», «Cómo…»): su título coincide con esa búsqueda para que el vídeo reciba visitas durante años; la otra mitad son ideas virales.";
+  const fmtLine = wantF === "short" ? "Shorts verticales de 45-60 s (un recopilatorio en Short tiene 3 historias como máximo). Todas las ideas con format: short." : wantF === "long" ? `vídeos largos de ~${longMin} min (un recopilatorio largo tiene 4-6 historias). Todas las ideas con format: long.${searchLine}` : `el canal publica Shorts (45-60 s, recopilatorio de 3 historias como máximo) Y vídeos largos de ~${longMin} min (historias con más profundidad, o recopilatorios de 4-6 historias). Mezcla: unas 3 de cada 5 en Short y 2 de cada 5 en largo; indica el formato de cada idea.${searchLine}`;
   // Canales de listas («5 curiosidades»): cada idea es un tema + exactamente 5 curiosidades poco conocidas
   const list5 = ch.idea_format === "list5";
   const system = list5 ? `Eres el editor jefe de un canal de YouTube faceless de curiosidades. Cada vídeo es UN tema concreto que el público ya conoce y le importa, contado con EXACTAMENTE 5 curiosidades poco conocidas, reales y comprobables (nada de datos que circulan por todas partes: si es un dato típico, lo cambias por otro). Sigue la guía del canal y su reparto de temas. Escribe en ${ch.language === "es" ? "español" : ch.language}.` : `Eres el editor jefe de un canal de YouTube faceless y tu trabajo más importante es decidir qué historias se cuentan. Conoces a fondo la historia y eliges solo hechos REALES y documentados (nada de leyendas presentadas como hechos ni datos que no puedas respaldar con un artículo de Wikipedia). Cada idea tiene que encajar de lleno con la identidad y los temas del canal: si una historia es buena pero no es del canal, la descartas. Buscas lo poco conocido: nada de lo que sale en todos los documentales. Escribe en ${ch.language === "es" ? "español" : ch.language}.`;

@@ -172,6 +172,12 @@ async function runLoop() {
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
         else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
+        const prov = creditProvider(msg);
+        if (prov) await notify(`saldo:${prov}`, `⚠️ Sin saldo en ${prov}`, `<p><b>${esc2(prov)}</b> se ha quedado sin saldo y la producción se ha parado.</p><p>Error: <i>${esc2(msg.slice(0, 200))}</i></p><p>Recárgalo y los vídeos seguirán solos.</p>`, 6);
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage"].includes(job.step)) {
+          const { data: vv } = await sb.from("videos").select("title,idea_title,channel:channels(name)").eq("id", job.video_id).maybeSingle();
+          await notify(`fallo:${job.video_id}`, `❌ Un vídeo ha fallado: ${String(vv?.title ?? vv?.idea_title ?? "").slice(0, 60)}`, `<p>El vídeo <b>${esc2(vv?.title ?? vv?.idea_title)}</b> (${esc2((vv?.channel as { name?: string } | null)?.name)}) ha fallado en el paso <b>${esc2(job.step)}</b>.</p><p>Error: <i>${esc2(msg.slice(0, 300))}</i></p><p>En la app puedes pulsar «Reintentar».</p>`, 48);
+        }
       } else {
         await sb.from("jobs").update({ status: "queued", error: msg, payload: { ...(job.payload ?? {}), batches: null }, run_after: new Date(Date.now() + 90_000 * job.attempts).toISOString() }).eq("id", job.id);
       }
@@ -185,6 +191,27 @@ async function runLoop() {
 
 // deno-lint-ignore no-explicit-any
 type Job = any;
+// ---------- Avisos por email (Resend): falta de saldo, vídeos con error o parados y aprobaciones urgentes ----------
+// Cada aviso tiene una clave: el mismo aviso no se repite antes de `hours` horas
+async function notify(key: string, subject: string, body: string, hours = 12) {
+  if (!KEYS["RESEND_API_KEY"] || !KEYS["ALERT_EMAIL"]) return;
+  try {
+    const { data: last } = await sb.from("alerts_sent").select("at").eq("key", key).maybeSingle();
+    if (last?.at && Date.now() - new Date(last.at).getTime() < hours * 3600e3) return;
+    const app = "https://faceless-studio-xzen.vercel.app";
+    const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${KEYS["RESEND_API_KEY"]}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "Faceless Studio <onboarding@resend.dev>", to: [KEYS["ALERT_EMAIL"]], subject, html: `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5">${body}<p style="margin-top:18px"><a href="${app}" style="background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">Abrir la app</a></p></div>` }) });
+    if (r.ok) await sb.from("alerts_sent").upsert({ key, at: new Date().toISOString() });
+    else console.error("Resend", r.status, (await r.text()).slice(0, 200));
+  } catch (e) { console.error("notify", (e as Error).message); }
+}
+const esc2 = (x: unknown) => String(x ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" } as Record<string, string>)[c]);
+// Qué proveedor se ha quedado sin saldo (por el texto del error)
+function creditProvider(msg: string) {
+  if (!/sin crédito|sin cr[eé]dito|locked|no credits|insufficient_quota|billing|exceeded your current quota|credit balance|quota_exceeded|payment/i.test(msg)) return null;
+  return /openai/i.test(msg) ? "OpenAI (imágenes)" : /fal\\.ai|flux/i.test(msg) ? "fal.ai (imágenes FLUX)" : /eleven|voz|música|efecto/i.test(msg) ? "ElevenLabs (voz y música)" : /claude|anthropic/i.test(msg) ? "Anthropic (Claude)" : "un proveedor";
+}
+
 // Pasos que hacen avanzar el vídeo: solo estos cambian su estado al quedarse sin presupuesto.
 const MAIN_STEPS = new Set(["script", "revise", "voice", "audio", "visuals", "fix_visuals", "render", "render_check", "publish", "direct", "dub", "clips"]);
 
@@ -229,6 +256,7 @@ async function runStep(job: Job) {
     case "trends": return stepTrends(job);
     case "sequels": return stepSequels(job);
     case "playlists": return stepPlaylists(job);
+    case "watchdog": return stepWatchdog(job);
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
     default: throw new UserError(`Paso desconocido: ${job.step}`);
@@ -630,7 +658,7 @@ async function stepScript(job: Job) {
   const scenes = short ? "4-7" : `${Math.round(ch.target_minutes * 3)}-${Math.round(ch.target_minutes * 4)}`;
   const allowed = ch.image_source === "ai" ? `"ai" y "reframe"` : ch.image_source === "stock" ? `"archive", "stock_photo", "stock_video" y "reframe"` : `"ai", "archive", "stock_photo", "stock_video" y "reframe"`;
   const visualRule = `PLANOS: cada escena es un bloque de locución y se divide en planos (shots). Cada plano es un fragmento literal de la narración (line) con su visual; la unión de las line de una escena es su narración completa, sin cambiar ni una palabra. Duración de cada plano: ${short ? "1,5-3,5 s (4-9 palabras)" : "3-6 s (8-15 palabras)"}. Los cambios de plano acompañan lo que se cuenta, nunca cortes sin sentido. Tipos de visual permitidos en este canal: ${allowed}.
-- "ai": recreación generada para lo que no se puede fotografiar. visual_prompt en inglés, UNA sola línea de 25 palabras como máximo, con el sujeto principal claro y dónde está (izquierda, centro, arriba...) para poder reencuadrarla. Como máximo ${short ? 4 : 12} planos "ai" en todo el vídeo: reserva la IA para los momentos clave y usa archive, stock y reframe para el resto.
+- "ai": recreación generada para lo que no se puede fotografiar. visual_prompt en inglés, UNA sola línea de 25 palabras como máximo, con el sujeto principal claro y dónde está (izquierda, centro, arriba...) para poder reencuadrarla. Como máximo ${short ? 6 : 12} planos "ai" en todo el vídeo: reserva la IA para los momentos clave y usa archive, stock y reframe para el resto. ${short ? 'El PRIMER plano del vídeo (el gancho) es siempre de tipo "ai", con un visual_prompt muy cuidado: la imagen más impactante y fiel a la primera frase.' : ""}
 - "archive": foto histórica real de personas, lugares, objetos o documentos reales. archive_query en inglés, 2-5 palabras, como se titularía en Wikimedia Commons (ej. "Wojtek bear Polish army").
 - "stock_photo" / "stock_video": material real genérico (paisajes, ciudades, objetos). stock_query en inglés, 2-4 palabras.
 - "reframe": reutiliza la imagen del plano anterior con un acercamiento a un detalle (cara, manos, objeto): reframe {"x":0-1,"y":0-1,"zoom":1.3-2}, donde x,y es la posición del detalle en esa imagen. Da ritmo sin coste extra.
@@ -1140,10 +1168,10 @@ async function stepVisuals(job: Job) {
   const used = new Set<string>();
   for (const sc of allScenes ?? []) for (const sh of sc.shots ?? []) { if (sh.media_url) used.add(sh.media_url); if (sh.src) used.add(sh.src); }
   // Tope de imágenes IA por vídeo: el resto, archivo, stock gratis o acercamientos
-  const aiCap = fluxOn ? (short ? 10 : 40) : (short ? 4 : 12);
+  const aiCap = fluxOn ? (short ? 10 : 40) : (short ? 6 : 12);
   // deno-lint-ignore no-explicit-any
   let aiUsed = (allScenes ?? []).flatMap((sc: any) => sc.shots ?? []).filter((x: any) => x.gen === "ai" && x.media_url).length;
-  let aiBudget = fluxOn ? 5 : 2; let images = 0; let fluxN = 0;
+  let aiBudget = fluxOn ? 5 : 3; let images = 0; let fluxN = 0; let hookImages = 0;
   // Planos sin búsqueda (el guionista a veces no la escribe): Haiku propone una búsqueda en inglés para cada uno, una sola vez por vídeo
   // deno-lint-ignore no-explicit-any
   const noQuery: any[] = [];
@@ -1169,6 +1197,9 @@ async function stepVisuals(job: Job) {
       if (sh.media_url) { prev = sh; continue; }
       let type = sh.visual_type as string;
       if (type === "reframe" && (!prev || !canReuse(prev.media_url))) type = sh.stock_query || sh.archive_query ? "stock_photo" : "ai";
+      // Gancho: el primer plano del vídeo es siempre una imagen IA en calidad alta (decide si la gente sigue mirando)
+      const isHook = sc.n === 1 && shots.indexOf(sh) === 0;
+      if (isHook && ch.image_source !== "stock" && type !== "archive") type = "ai";
       if (ch.image_source === "ai" && !["ai", "reframe"].includes(type)) type = "ai";
       if (ch.image_source === "stock" && type === "ai") type = "stock_photo";
       if (type === "ai" && !KEYS["OPENAI_API_KEY"] && !fluxOn) type = "stock_photo";
@@ -1209,7 +1240,7 @@ async function stepVisuals(job: Job) {
         try {
           if (viaFlux) bytes = await fluxImage(ctxPrompt(sh, v, ch), short);
           else {
-            try { bytes = await safeImage(ctxPrompt(sh, v, ch), short, SCENE_QUALITY); } catch (e) {
+            try { bytes = await safeImage(ctxPrompt(sh, v, ch), short, isHook ? "medium" : SCENE_QUALITY); if (isHook) hookImages++; } catch (e) {
               // OpenAI sin crédito o caído: si hay FLUX, se usa FLUX y no se vuelve a probar OpenAI en esta ejecución
               if (e instanceof OverBudget || !KEYS["FAL_KEY"] || FLUX_DOWN) throw e;
               OPENAI_DOWN = true; viaFlux = true;
@@ -1229,6 +1260,7 @@ async function stepVisuals(job: Job) {
             await enqueue("visuals", { video_id: v.id, delaySec: 2 * 3600 });
             const { count } = await sb.from("activity").select("id", { count: "exact", head: true }).ilike("message", "Sin saldo de imágenes IA%").gte("created_at", new Date(Date.now() - 6 * 3600e3).toISOString());
             if (!count) await log(job, `Sin saldo de imágenes IA (${String((e as Error).message).slice(0, 90)}). Los vídeos esperan y siguen solos cuando recargues fal.ai.`, "warn");
+            await notify("saldo:imagenes", "⚠️ Sin saldo para las imágenes de IA", `<p>No queda saldo en OpenAI${KEYS["FAL_KEY"] ? " ni en fal.ai" : ""} para generar imágenes. Los vídeos esperan (no bajan de calidad) y siguen solos en cuanto recargues.</p><p>Recarga OpenAI en <a href="https://platform.openai.com/settings/organization/billing">platform.openai.com → Billing</a>.</p>`, 12);
             return;
           }
           bytes = null;
@@ -1260,7 +1292,7 @@ async function stepVisuals(job: Job) {
   }
   const { count: total } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id);
   const { count: left } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id).is("media_url", null);
-  await bumpUsage(v.id, { ai_images_low: images, ...(fluxN ? { flux_images: fluxN } : {}) }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
+  await bumpUsage(v.id, { ai_images_low: images - hookImages, ...(hookImages ? { ai_images: hookImages } : {}), ...(fluxN ? { flux_images: fluxN } : {}) }, { progress: Math.round(45 + 35 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
   if ((left ?? 0) > 0) await enqueue("visuals", { video_id: v.id });
   else {
     // Créditos a partir de las fotos de archivo realmente usadas (también las reaprovechadas)
@@ -1377,6 +1409,8 @@ async function stepRenderCheck(job: Job) {
       await sb.from("videos").update({ video_url: url, status: "final_review", stage: null, progress: 100, duration_sec: Math.round((d.duration ?? 0) * 10) / 10 }).eq("id", v.id);
       await log(job, `Vídeo listo para revisión: ${v.title}`);
       if (v.channel?.autopilot === "auto") await kickPlanner(v.channel_id, 5);
+      // Actualidad en un canal que apruebas tú: aviso inmediato (la noticia caduca)
+      else if (v.idea_kind === "trend") await notify(`urgente:${v.id}`, `⏰ Vídeo de actualidad listo: ${String(v.title ?? "").slice(0, 60)}`, `<p>El Short de actualidad <b>${esc2(v.title)}</b> (${esc2(v.channel?.name)}) ya está montado y <b>se publica en cuanto lo apruebes</b>. Cuanto antes salga, más visitas: la noticia caduca.</p>`, 48);
     } else if (d.status === "failed") {
       throw new UserError(`Render fallido: ${d.error ?? "sin detalle"}`);
     } else {
@@ -3472,6 +3506,19 @@ async function stepResearch(job: Job) {
 async function playlistScopeMissing(job: Job, ch: any) {
   const { count } = await sb.from("activity").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).ilike("message", "Listas de reproducción: falta permiso%").gte("created_at", new Date(Date.now() - 864e5).toISOString());
   if (!count) await log(job, `Listas de reproducción: falta permiso. Pulsa «Reconectar YouTube» en la ficha de «${ch.name}» y acepta el permiso para gestionar el canal.`, "warn");
+}
+
+// ---------- Paso: vigilancia (cada hora): vídeos parados y aprobaciones pendientes ----------
+async function stepWatchdog(_job: Job) {
+  if (!KEYS["RESEND_API_KEY"] || !KEYS["ALERT_EMAIL"]) return;
+  // Vídeos que no avanzan desde hace más de 6 h sin una espera explicada (presupuesto, cuota, saldo)
+  const { data: stuck } = await sb.from("videos").select("id,title,idea_title,status,stage,updated_at,channel:channels(name)").in("status", ["scripting", "producing", "publishing"]).lt("updated_at", new Date(Date.now() - 6 * 3600e3).toISOString()).limit(20);
+  const real = (stuck ?? []).filter((v) => !/esperando|en pausa|volviendo/i.test(String(v.stage ?? "")));
+  for (const v of real.slice(0, 5)) await notify(`parado:${v.id}`, `⏸️ Vídeo parado: ${String(v.title ?? v.idea_title ?? "").slice(0, 60)}`, `<p>El vídeo <b>${esc2(v.title ?? v.idea_title)}</b> (${esc2((v.channel as { name?: string } | null)?.name)}) lleva más de 6 horas sin avanzar en «${esc2(v.stage ?? v.status)}».</p><p>Ábrelo en la app y pulsa «Reintentar», o dímelo y lo miro.</p>`, 24);
+  // Resumen diario de lo que espera tu aprobación desde hace más de 12 h
+  const { data: wait } = await sb.from("videos").select("title,idea_title,status,channel:channels(name)").in("status", ["script_review", "final_review"]).lt("updated_at", new Date(Date.now() - 12 * 3600e3).toISOString()).limit(50);
+  const mine = (wait ?? []).filter((v) => v.status === "final_review" || v.status === "script_review");
+  if (mine.length) await notify("pendientes", `📋 ${mine.length} vídeo${mine.length > 1 ? "s" : ""} esperando tu aprobación`, `<p>Estos vídeos llevan más de 12 horas esperándote:</p><ul>${mine.slice(0, 15).map((v) => `<li>${esc2(v.title ?? v.idea_title)} · <i>${esc2((v.channel as { name?: string } | null)?.name)}</i> (${v.status === "final_review" ? "vídeo" : "guion"})</li>`).join("")}</ul>`, 20);
 }
 // ---------- Paso: listas de reproducción por serie (quien llega al canal ve más vídeos seguidos) ----------
 // Usa la cuota sobrante del día (cada alta cuesta 50 unidades): las subidas de vídeos siempre van primero

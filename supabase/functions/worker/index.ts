@@ -1444,7 +1444,7 @@ async function stepPublish(job: Job) {
 
 // Serie del vídeo y su número dentro del canal (se conserva si el vídeo ya tenía una)
 // deno-lint-ignore no-explicit-any
-async function withSeries(ch: any, v: any, title: string, summary: string) {
+async function withSeries(ch: any, v: any, title: string, summary: string, alts: string[] = []) {
   const list: string[] = (ch.schedule?.series ?? []).map((x: unknown) => String(x)).filter(Boolean);
   const base = String(title).replace(/\s*\|\s*[^|]+#\d+\s*$/, "").trim();
   if (!list.length || !v?.id) return base;
@@ -1459,8 +1459,11 @@ async function withSeries(ch: any, v: any, title: string, summary: string) {
     const { data: fresh } = await sb.from("videos").select("auto").eq("id", v.id).maybeSingle();
     await sb.from("videos").update({ auto: { ...(fresh?.auto ?? {}), series: cur } }).eq("id", v.id);
   }
-  const full = `${base} | ${cur.name} #${cur.n}`;
-  return full.length <= 100 ? full : base;
+  const tag = ` | ${cur.name} #${cur.n}`;
+  if (base.length + tag.length <= 100) return base + tag;
+  // Título demasiado largo para llevar la serie: otra de las propuestas que sí quepa (la más larga que entre)
+  const fit = alts.map((x) => x.replace(/\s*\|\s*[^|]+#\d+\s*$/, "").trim()).filter((x) => x && x.length + tag.length <= 100 && (ch.idea_format !== "list5" || /(^|\D)5(\D|$)|\bcinco\b/i.test(x))).sort((a, b) => b.length - a.length)[0];
+  return fit ? fit + tag : base;
 }
 // Capítulos de un vídeo largo a partir de los tiempos reales de cada escena (6-8 capítulos, títulos con Haiku)
 // deno-lint-ignore no-explicit-any
@@ -3345,7 +3348,7 @@ async function packageVideo(ch: any, s: any, v: any) {
   // Canales «5 curiosidades»: el título lleva el 5 (con número, sus títulos funcionan un 60 % mejor)
   if (ch.idea_format === "list5" && !/(^|\D)5(\D|$)|\bcinco\b/i.test(t)) { const alt = (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()).find((x: string) => /(^|\D)5(\D|$)|\bcinco\b/i.test(x)); if (alt) t = alt; }
   // Serie con número («… | Animales en guerra #4»): da al espectador un motivo para suscribirse y no perderse el siguiente
-  try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200)); } catch (e) { if (e instanceof OverBudget) throw e; }
+  try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200), (r.input?.candidates ?? []).map((x: unknown) => String(x).trim())); } catch (e) { if (e instanceof OverBudget) throw e; }
   return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
 }
 // Rehacer título y descripción de un vídeo ya escrito o montado

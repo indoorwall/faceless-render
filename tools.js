@@ -61,19 +61,23 @@ const charW = (c) => (/[IÍ1.,:;'!¡|]/.test(c) ? 0.36 : /[MWÑ]/.test(c) ? 0.98
 
 // Miniatura 1280x720 JPG: imagen de fondo + texto grande con contorno, la última línea en amarillo
 export async function thumbnail({ image_url, text, upload_url, side = "left", highlight = "#FFD400" }, dir) {
+  // side = "top": texto enorme centrado arriba (estilo canales de animación: «LE AVISARON»)
+  const top = side === "top";
   await mkdir(dir, { recursive: true });
   const W = 1280, H = 720;
   const bg = await fetchTo(image_url, path.join(dir, "bg.img"));
   const lines = text ? splitLines(text) : [];
-  const maxW = W * 0.56;
+  const maxW = W * (top ? 0.94 : 0.56);
   const longest = Math.max(1, ...lines.map((l) => [...l].reduce((a, c) => a + charW(c), 0)));
-  const fs = Math.round(Math.min(lines.length >= 3 ? 118 : 150, maxW / longest));
+  const fs = Math.round(Math.min(top ? (lines.length >= 2 ? 150 : 175) : lines.length >= 3 ? 118 : 150, maxW / longest));
   const lh = Math.round(fs * 1.04);
   const block = lh * lines.length;
-  const y0 = Math.round((H - block) / 2);
-  const x = side === "right" ? `w-tw-${Math.round(W * 0.05)}` : String(Math.round(W * 0.05));
+  const y0 = top ? Math.round(H * 0.035) : Math.round((H - block) / 2);
+  const x = top ? "(w-tw)/2" : side === "right" ? `w-tw-${Math.round(W * 0.05)}` : String(Math.round(W * 0.05));
   // Degradado oscuro en el lado del texto para que se lea siempre
-  const grad = side === "right"
+  const grad = top
+    ? `geq=r=0:g=0:b=0:a='clip(255*(0.42-Y/H)*1.5,0,150)'`
+    : side === "right"
     ? `geq=r=0:g=0:b=0:a='clip(255*(X/W-0.35)*1.6,0,200)'`
     : `geq=r=0:g=0:b=0:a='clip(255*(0.65-X/W)*1.6,0,200)'`;
   const draws = [];

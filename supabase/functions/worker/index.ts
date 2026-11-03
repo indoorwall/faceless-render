@@ -1745,12 +1745,13 @@ async function finishAnalysis(job: Job, v: any, ch: any, r: any, meta: { frames?
 }
 
 // ---------- Paso: miniaturas (3 fondos IA sin texto + texto compuesto en el servidor) ----------
-async function composeThumb(v: Job, bgUrl: string, text: string, idx: string) {
+// deno-lint-ignore no-explicit-any
+async function composeThumb(v: any, bgUrl: string, text: string, idx: string) {
   const path = `${v.id}/thumb_${idx}.jpg`;
   const { data: signed, error } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true });
   if (error || !signed) throw new Error(`No se pudo preparar la subida: ${error?.message}`);
   const base = key("RENDER_URL").replace(/\/+$/, "");
-  const r = await fetch(`${base}/thumbnail`, { method: "POST", headers: { Authorization: `Bearer ${key("RENDER_SECRET")}`, "Content-Type": "application/json" }, body: JSON.stringify({ image_url: bgUrl, text, upload_url: signed.signedUrl, side: "left" }) });
+  const r = await fetch(`${base}/thumbnail`, { method: "POST", headers: { Authorization: `Bearer ${key("RENDER_SECRET")}`, "Content-Type": "application/json" }, body: JSON.stringify({ image_url: bgUrl, text, side: v.script?.thumbnail_layout === "top" ? "top" : "left", upload_url: signed.signedUrl }) });
   if (!r.ok) throw new Error(`Miniatura ${r.status}: ${(await r.text()).slice(0, 200)}`);
   return sb.storage.from("media").getPublicUrl(path).data.publicUrl + `?v=${Date.now()}`;
 }
@@ -1774,7 +1775,11 @@ async function stepThumbs(job: Job) {
   const done = thumbs.filter((x) => (x.batch ?? 0) === batch).length;
   if (done >= (v.format === "long" ? 3 : 2)) return;
   const concept = batch === 0 ? concepts[done % concepts.length] : `${concepts[done % concepts.length]}. Fresh composition and camera angle, different from previous versions (variation ${batch}-${done})`;
-  const prompt = `YouTube thumbnail background, 16:9. ${concept}. One clear subject with a strong emotional expression, placed in the right half; the left 45% is simple and uncluttered so large text can go there. Bold contrast, vivid but natural colors, sharp focus, dramatic lighting. Style: ${ch.style_prompt ?? "cinematic"}. Absolutely no text, letters, logos or watermarks.`;
+  // Diseño «arriba»: texto enorme centrado en la parte superior (como los canales de animación que más crecen)
+  const top = v.script?.thumbnail_layout === "top";
+  const prompt = top
+    ? `YouTube thumbnail, 16:9. ${concept}. The main characters are big and fill the lower two thirds, centered, with exaggerated, instantly readable emotions; the top 30% is a simple, plain background so huge text can go there. Very bold contrast, saturated colors, thick clean outlines, sharp focus. Style: ${v.script?.thumbnail_style ?? ch.style_prompt ?? "cinematic"}. Absolutely no text, letters, logos or watermarks.`
+    : `YouTube thumbnail background, 16:9. ${concept}. One clear subject with a strong emotional expression, placed in the right half; the left 45% is simple and uncluttered so large text can go there. Bold contrast, vivid but natural colors, sharp focus, dramatic lighting. Style: ${v.script?.thumbnail_style ?? ch.style_prompt ?? "cinematic"}. Absolutely no text, letters, logos or watermarks.`;
   let bytes: Uint8Array | null;
   try { bytes = OPENAI_DOWN && KEYS["FAL_KEY"] ? await fluxImage(prompt, false) : await safeImage(prompt, false); } catch (e) {
     // OpenAI sin crédito: la miniatura se hace con FLUX

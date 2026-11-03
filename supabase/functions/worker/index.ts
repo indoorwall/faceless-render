@@ -258,6 +258,7 @@ async function runStep(job: Job) {
     case "playlists": return stepPlaylists(job);
     case "watchdog": return stepWatchdog(job);
     case "comments": return stepComments(job);
+    case "compile": return stepCompile(job);
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
@@ -1349,6 +1350,19 @@ async function stepRender(job: Job) {
   await sb.from("videos").update({ stage: "Montando vídeo", progress: 82 }).eq("id", v.id);
   // Las miniaturas se generan en paralelo, sin retrasar el montaje
   if (!short && !(v.thumbnails ?? []).length && KEYS["OPENAI_API_KEY"] && !job.payload?.no_thumbs) await enqueue("thumbs", { video_id: v.id });
+  // Recopilación: los Shorts ya montados se juntan tal cual en horizontal
+  if (v.auto?.compile?.clips?.length) {
+    const outPath = `${v.id}/final.mp4`;
+    const { data: signed, error: se } = await sb.storage.from("media").createSignedUploadUrl(outPath, { upsert: true });
+    if (se || !signed) throw new Error(`No se pudo preparar la subida: ${se?.message}`);
+    const spec = { id: v.id, kind: "compile", width: 1920, height: 1080, upload_url: signed.signedUrl, clips: v.auto.compile.clips.map((c: { url: string; label: string }) => ({ url: c.url, label: c.label })) };
+    const base = key("RENDER_URL").replace(/\/+$/, "");
+    const r = await fetch(`${base}/jobs`, { method: "POST", headers: { Authorization: `Bearer ${key("RENDER_SECRET")}`, "Content-Type": "application/json" }, body: JSON.stringify(spec) });
+    if (!r.ok && r.status !== 409) throw new Error(`Servidor de render ${r.status}: ${(await r.text()).slice(0, 300)}`);
+    await sb.from("videos").update({ render_id: `own:${v.id}`, stage: "Montando la recopilación", progress: 85 }).eq("id", v.id);
+    await enqueue("render_check", { video_id: v.id, delaySec: 60 });
+    return;
+  }
   const { data: scenes } = await sb.from("scenes").select("*").eq("video_id", v.id).order("n");
   // Montaje propio (FFmpeg) si está configurado; si no, Creatomate
   if (KEYS["RENDER_URL"] && KEYS["RENDER_SECRET"]) {
@@ -3705,6 +3719,54 @@ async function stepComments(job: Job) {
     }
   }
   await log(job, `Comentarios: ${fresh.length} nuevos, ${nReply} con respuesta preparada${nHide ? `, ${nHide} para ocultar` : ""}.${ideaTxt}`);
+}
+
+// ---------- Paso: recopilación (junta Shorts ya publicados en un vídeo largo: suma horas de visualización casi gratis) ----------
+const COMPILE_TOOL = { name: "recopilacion", description: "Recopilación de Shorts del canal en un vídeo largo", input_schema: { type: "object", required: ["title", "description", "thumbnail_text", "thumbnail_concept", "clips"], properties: {
+  title: { type: "string", description: "Título del vídeo largo (máx. 90 caracteres, sin hashtags): promete el tema y la duración, p. ej. «20 curiosidades de animales que no sabías (recopilación)»" },
+  description: { type: "string", description: "2-3 frases para la descripción, sin capítulos (se añaden solos) ni hashtags" },
+  tags: { type: "array", items: { type: "string" }, maxItems: 12 },
+  thumbnail_text: { type: "string", description: "2-4 palabras grandes para la miniatura" },
+  thumbnail_concept: { type: "string", description: "Escena de la miniatura en inglés: sujeto principal con emoción clara, ambiente acogedor" },
+  clips: { type: "array", minItems: 4, items: { type: "object", required: ["video_id", "label"], properties: {
+    video_id: { type: "string" },
+    label: { type: "string", description: "Título corto del capítulo (máx. 45 caracteres, sin emojis ni hashtags)" } } } } } } };
+async function stepCompile(job: Job) {
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch) return;
+  // Shorts ya públicos y con el vídeo guardado (los que aún no han salido se reservan para su estreno)
+  const { data: vids } = await sb.from("videos").select("id,title,duration_sec,stats,video_url,script,published_at,tags").eq("channel_id", ch.id).eq("format", "short").not("youtube_video_id", "is", null).not("video_url", "is", null).lte("published_at", new Date().toISOString()).order("published_at", { ascending: false }).limit(200);
+  const pool = (vids ?? []).filter((v) => Number(v.duration_sec ?? 0) > 10);
+  if (pool.length < 4) throw new UserError("Hacen falta al menos 4 Shorts publicados para una recopilación");
+  const theme = String(job.payload?.theme ?? "").trim();
+  const list = pool.map((v) => `- [${v.id}] «${v.title}» · ${Math.round(Number(v.duration_sec))} s · ${v.stats?.views ?? 0} visitas · ${String(v.script?.scenes?.[0]?.narration ?? "").slice(0, 120)}`).join("\n");
+  const r = await claudeTool(MODEL_FAST, `Montas recopilaciones para el canal de YouTube «${ch.name}» (${ch.niche ?? ""}, en ${ch.language}). Una recopilación junta Shorts ya publicados en un vídeo horizontal largo para ver de seguido (la gente la pone de fondo o para relajarse). Elige Shorts de un mismo tema${theme ? ` (tema pedido: ${theme})` : ""} para que el vídeo tenga sentido, empieza por el que más visitas tiene (engancha al principio) y alterna los fuertes para que nadie se vaya. Usa solo los Shorts de la lista y como mucho uno de cada; no inventes datos en el título ni en la descripción.`,
+    `${playbookBlock(ch)}SHORTS DISPONIBLES:\n${list}`, COMPILE_TOOL, 3000);
+  const o = r.input ?? {};
+  const byId = new Map(pool.map((v) => [v.id, v]));
+  const seen = new Set<string>();
+  const clips = ((o.clips ?? []) as { video_id: string; label: string }[]).filter((c) => byId.has(c.video_id) && !seen.has(c.video_id) && seen.add(c.video_id)).map((c) => ({ v: byId.get(c.video_id)!, label: clean(c.label).replace(/#\S+/g, "").trim().slice(0, 60) }));
+  if (clips.length < 4) throw new UserError("La IA no eligió suficientes Shorts para la recopilación");
+  // Capítulos con tiempos (YouTube los muestra si empiezan en 0:00 y hay al menos 3)
+  let t = 0; const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const chapters = clips.map((c) => { const line = `${mmss(t)} ${c.label}`; t += Number(c.v.duration_sec); return line; }).join("\n");
+  const total = t;
+  // Se estrena el próximo sábado (o domingo) por la mañana, que es cuando más se ven los vídeos largos
+  const now = new Date(); const base = new Date(now.toLocaleString("en-US", { timeZone: "Europe/Madrid" }));
+  let pub: Date | null = null;
+  for (let i = 2; i < 10 && !pub; i++) { const d = new Date(Date.UTC(base.getFullYear(), base.getMonth(), base.getDate() + i)); if ([0, 6].includes(d.getUTCDay())) pub = madridToUtc(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), 11, 0); }
+  const tags = [...new Set([...(o.tags ?? []), ...clips.flatMap((c) => c.v.tags ?? [])].map((x: string) => String(x).trim()).filter(Boolean))].slice(0, 25);
+  const { data: nv, error } = await sb.from("videos").insert({
+    channel_id: ch.id, format: "long", status: "producing", stage: "Preparando la recopilación", progress: 80, idea_kind: "compile",
+    idea_title: clean(o.title), title: clean(o.title).slice(0, 100), idea_reason: `Recopilación de ${clips.length} Shorts ya publicados (${Math.round(total / 60)} min)`,
+    description: `${clean(o.description)}\n\nCapítulos:\n${chapters}`.slice(0, 4900), tags, ai_disclosure: true, publish_at: pub?.toISOString() ?? null,
+    script: { scenes: [], thumbnail_text: clean(o.thumbnail_text), thumbnail_concepts: [clean(o.thumbnail_concept)] },
+    auto: { compile: { clips: clips.map((c) => ({ video_id: c.v.id, label: c.label, url: c.v.video_url })) } },
+  }).select("id").single();
+  if (error || !nv) throw new Error(error?.message ?? "No se pudo crear la recopilación");
+  await enqueue("render", { video_id: nv.id });
+  await enqueue("thumbs", { video_id: nv.id });
+  await log({ ...job, video_id: nv.id }, `Recopilación en marcha: «${clean(o.title)}» con ${clips.length} Shorts (${Math.round(total / 60)} min)`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

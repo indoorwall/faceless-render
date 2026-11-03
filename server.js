@@ -4,7 +4,7 @@
 // POST /frames      (Bearer) → fotogramas del vídeo en base64 para analizarlo
 // POST /thumbnail   (Bearer) → compone una miniatura JPG y la sube
 // GET  /health      → ok (con la versión, para comprobar que el despliegue está al día)
-// spec.kind = "retos" → Motor B (retos con gráficos 2D); si no, montaje documental
+// spec.kind = "retos" → Motor B (retos con gráficos 2D); "compile" → recopilación de Shorts; si no, montaje documental
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,7 @@ import { render, cleanup } from "./render.js";
 import { frames, thumbnail } from "./tools.js";
 
 const PORT = Number(process.env.PORT || 8080);
-const VERSION = "2026-11-02-preguntas-1";
+const VERSION = "2026-11-03-recopilaciones-1";
 const SECRET = process.env.RENDER_SECRET || "";
 const jobs = new Map(); // id -> {status, progress, stage, error, duration, size, created}
 const queue = [];
@@ -56,6 +56,7 @@ async function work() {
     // El motor de retos se carga solo cuando hace falta: si fallara, el documental sigue funcionando
     const out = spec.kind === "retos" ? await (await import("./render-retos.js")).renderRetos(spec, dir, cb)
       : spec.kind === "formato" ? await (await import("./render-formats.js")).renderFormat(spec, dir, cb)
+      : spec.kind === "compile" ? await (await import("./render-compile.js")).renderCompile(spec, dir, cb)
       : await render(spec, dir, cb);
     j.stage = "Subiendo vídeo"; j.progress = 97;
     await upload(out.file, out.size, spec.upload_url);
@@ -83,7 +84,7 @@ http.createServer(async (req, res) => {
     if (!authed(req)) return send(res, 401, { error: "unauthorized" });
     if (req.method === "POST" && url.pathname === "/jobs") {
       const spec = await readJson(req);
-      if (!spec.id || !spec.upload_url || (spec.kind === "retos" ? !spec.project?.challenges?.length : spec.kind === "formato" ? !spec.format || !spec.data : !Array.isArray(spec.scenes))) return send(res, 400, { error: "spec incompleta" });
+      if (!spec.id || !spec.upload_url || (spec.kind === "retos" ? !spec.project?.challenges?.length : spec.kind === "formato" ? !spec.format || !spec.data : spec.kind === "compile" ? !(spec.clips?.length >= 2) : !Array.isArray(spec.scenes))) return send(res, 400, { error: "spec incompleta" });
       if (jobs.get(spec.id)?.status === "running") return send(res, 409, { error: "ya en curso" });
       jobs.set(spec.id, { status: "queued", progress: 0, stage: "En cola de render", created: Date.now() });
       queue.push({ id: spec.id, spec });

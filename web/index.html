@@ -209,7 +209,7 @@ video{width:100%;border-radius:10px;background:#000;max-height:60vh}
   .app{grid-template-columns:1fr}
   .rail{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;flex-direction:row;justify-content:space-around;padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));border-right:0;border-top:1px solid var(--line);z-index:30}
   .brand,.rail .foot{display:none}
-  .nav{flex-direction:column;gap:2px;font-size:11px;padding:6px 8px;position:relative}
+  .nav{flex-direction:column;gap:2px;font-size:10.5px;padding:6px 4px;position:relative}
   .nav .n{position:absolute;top:0;right:2px;font-size:10px;padding:0 5px}
   .flow{grid-template-columns:repeat(3,1fr)}
   .flow div:nth-child(3){border-right:0}
@@ -317,6 +317,7 @@ const STATUS = {
 const ICON = {
   hoy:'<path d="M4 13h4l2 3h4l2-3h4M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
   informes:'<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>',
+  comentarios:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h6M9 14h4"/>',
   canales:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
   dinero:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.6-1-1.7-1.5-3-1.5-1.7 0-3 .9-3 2.2 0 3 6 1.6 6 4.6 0 1.3-1.3 2.2-3 2.2-1.4 0-2.6-.6-3.1-1.6M12 6v2M12 16v2"/>',
   ajustes:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
@@ -471,7 +472,7 @@ async function run(fn, ok){
 
 // ---------- datos ----------
 async function load(){
-  const [c,v,p,a,k,pr,j,rp] = await Promise.all([
+  const [c,v,p,a,k,pr,j,rp,cm] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
     sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,published_at,error,created_at,updated_at,usage,engine,revenue,stats").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("schedule_research").select("lang,data,updated_at"), // estudio global de horarios (por idioma)
@@ -480,8 +481,9 @@ async function load(){
     sb.rpc("get_prices"),
     sb.from("jobs").select("id,step,status,channel_id,video_id,run_after").in("status",["queued","running"]),
     sb.from("channel_reports").select("*").order("day",{ascending:false}).limit(60),
+    sb.from("yt_comments").select("*").in("status",["pending","hide"]).order("published_at",{ascending:false}).limit(200),
   ]);
-  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[];
+  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[]; S.comments=cm.data||[];
   render();
 }
 let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
@@ -492,7 +494,7 @@ function render(){
   const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
   const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
   const unread = (S.reports||[]).filter(r=>!r.read_at).length;
-  const views = {hoy:["Revisar",reviewCount],informes:["Informes",unread],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
+  const views = {hoy:["Revisar",reviewCount],comentarios:["Comentarios",(S.comments||[]).length],informes:["Informes",unread],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
   const scrollY = window.scrollY;
   $("#root").innerHTML = `<div class="app">
     <nav class="rail">
@@ -500,7 +502,7 @@ function render(){
       ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
       <div class="foot">${esc(S.session.user.email)}</div>
     </nav>
-    <main><div class="wrap">${ ({hoy:viewHoy,informes:viewInformes,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+    <main><div class="wrap">${ ({hoy:viewHoy,comentarios:viewComentarios,informes:viewInformes,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
@@ -763,6 +765,36 @@ function viewDinero(){
         </div>
       </section>`; }).join("")}`;
 }
+// --- Vista: Comentarios (cada mañana y cada tarde se leen los nuevos y la IA deja la respuesta preparada)
+function viewComentarios(){
+  const all=S.comments||[];
+  const ago=(d)=>{ const h=Math.round((Date.now()-new Date(d))/36e5); return h<1?"hace un momento":h<24?`hace ${h} h`:`hace ${Math.round(h/24)} d`; };
+  const ytUrl=(c)=>`https://www.youtube.com/watch?v=${encodeURIComponent(c.youtube_video_id)}&lc=${encodeURIComponent(c.id)}`;
+  const card=(c)=>`<div class="card" style="padding:12px 14px" id="cm-${esc(c.id)}">
+      <div class="muted" style="font-size:12.5px;margin-bottom:4px">${esc(c.video_title||"Vídeo")} · ${esc(ago(c.published_at||c.created_at))}${c.likes?` · ❤ ${c.likes}`:""}</div>
+      <div style="margin-bottom:8px"><b>${esc(c.author||"")}</b>: ${esc(c.text||"")}</div>
+      ${c.idea?`<div class="row" style="margin-bottom:8px"><span class="chip st-acc">💡 Se ha convertido en vídeo</span><span>${esc(c.idea)}</span></div>`:""}
+      ${c.status==="hide"
+        ?`<div class="row" style="margin-bottom:8px"><span class="chip st-bad">Para ocultar</span><span class="muted" style="font-size:13px">Insulto o spam: en YouTube, ⋮ → Ocultar usuario del canal</span></div>
+          <div class="row"><a class="btn pri" href="${esc(ytUrl(c))}" target="_blank" rel="noopener">Abrir en YouTube</a><button class="btn" onclick="cmDone('${esc(c.id)}','done')">Hecho</button></div>`
+        :`<textarea id="cmr-${esc(c.id)}" rows="3" style="width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical">${esc(c.suggested_reply||"")}</textarea>
+          <div class="row" style="margin-top:8px"><button class="btn pri" onclick="cmReply('${esc(c.id)}')">Copiar y abrir en YouTube</button><button class="btn" onclick="cmDone('${esc(c.id)}','done')">Contestado</button><button class="btn" onclick="cmDone('${esc(c.id)}','ignored')">Descartar</button></div>`}
+    </div>`;
+  const blocks=S.channels.map(c=>({c,list:all.filter(x=>x.channel_id===c.id)})).filter(b=>b.list.length);
+  return `<div class="head"><div><h1>Comentarios</h1><p>Dos veces al día se leen los comentarios nuevos de los canales y la IA deja la respuesta preparada. Pulsa «Copiar y abrir», pega la respuesta en YouTube y listo; cuando contestas, desaparece sola de aquí. Si alguien pregunta algo que da para un vídeo, se convierte en idea automáticamente.</p></div>
+    <button class="btn" onclick="cmFetch()">Buscar ahora</button></div>
+    ${blocks.length?blocks.map(({c,list})=>`<section class="chblock" style="--c:${esc(c.color||"#888")}"><div class="chblock-h"><div class="chname"><span class="dot"></span><h2>${esc(c.name)}</h2></div><span class="chip">${list.length} por contestar</span></div><div class="list" style="gap:8px">${list.map(card).join("")}</div></section>`).join("")
+      :`<div class="card"><p class="muted" style="margin:0">No hay comentarios pendientes. 🎉</p></div>`}`;
+}
+function cmReply(id){
+  const c=(S.comments||[]).find(x=>x.id===id); if(!c) return;
+  const t=$("#cmr-"+CSS.escape(id))?.value||"";
+  navigator.clipboard?.writeText(t).then(()=>toast("Respuesta copiada: pégala en YouTube"),()=>toast("No se pudo copiar; cópiala a mano"));
+  window.open(`https://www.youtube.com/watch?v=${encodeURIComponent(c.youtube_video_id)}&lc=${encodeURIComponent(c.id)}`,"_blank","noopener");
+  if(t!==c.suggested_reply){ c.suggested_reply=t; sb.from("yt_comments").update({suggested_reply:t}).eq("id",id); }
+}
+async function cmDone(id,status){ await run(async()=>{ const { error } = await sb.from("yt_comments").update({status,updated_at:new Date().toISOString()}).eq("id",id); if(error) throw error; S.comments=(S.comments||[]).filter(x=>x.id!==id); render(); }); }
+async function cmFetch(){ await run(async()=>{ const { error } = await sb.from("jobs").insert({ step:"comments", payload:{} }); if(error) throw error; kick(); setTimeout(load,45000); },"Leyendo comentarios… en un minuto aparecen"); }
 // --- Vista: Informes (cada mañana la IA de cada canal analiza los resultados y decide las mejoras)
 const AREA_TXT={guion:"Guion",ideas:"Ideas",titulos:"Títulos",ritmo:"Ritmo",retos:"Retos",calendario:"Calendario",produccion:"Producción",errores:"Error aprendido"};
 function viewInformes(){
@@ -1432,14 +1464,14 @@ async function saveKey(name){
 async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
 
 // ---------- arranque ----------
-function route(){ const h=location.hash.slice(1); S.view=["hoy","informes","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+function route(){ const h=location.hash.slice(1); S.view=["hoy","comentarios","informes","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{
   const was=!!S.session; S.session=session;
   if(session && !was){
-    const h=location.hash.slice(1); S.view=["hoy","informes","dinero","canales","ajustes"].includes(h)?h:"hoy";
+    const h=location.hash.slice(1); S.view=["hoy","comentarios","informes","dinero","canales","ajustes"].includes(h)?h:"hoy";
     load();
     channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)

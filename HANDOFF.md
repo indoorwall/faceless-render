@@ -168,6 +168,9 @@ Giol quiere llevar muchos canales a la vez para un ingreso pasivo. Todo se confi
 
 - **Estilo visual por canal** (29/10, `channels.render_style`): `sub_style: "box"` (palabra que suena en caja amarilla, fuente Bangers) y `title_template` (título fijo en Shorts, p. ej. «CURIOSIDADES DE {tema}», con `title_accent` en caja roja; el tema lo saca Haiku y se guarda en `script.overlay`). «5 curiosidades» ya lo usa, copiando su Short de gatos con más éxito.
 
+- **Los retos de Pix en automático** (29/10): mecánica `quiz` (preguntas tipo test de historia, geografía, ciencia, cultura general, animales y deportes) con banco `quiz_bank` (Sonnet escribe 30, Haiku las comprueba a ciegas; `used_by` evita repetir por canal). Temas que rotan en los Shorts (`RETO_THEMES`: historia → Pix → geografía → visuales → ciencia → cultura) y largos con mezcla de todo. Título, texto de portada y descripción con `packageRetos` (si no hay presupuesto, espera; nunca título genérico). Calendario: 3 Shorts/día (12:30, 17:30, 20:30) y un largo cada dos días (`long_per_week: 3.5`, 19:00).
+- **Otros arreglos del 29/10:** imágenes (búsqueda por plano con Haiku, Wikimedia y Pixabay sin Pexels, máximo 2 usos seguidos de una imagen), títulos de curiosidad según el guion, `PIXABAY_API_KEY`, voz elegible de la biblioteca de ElevenLabs (`voice_search`/`voice_pick`), estudio de títulos (`packaging_study`/`repackage`).
+
 ## Pendiente (por orden)
 0. **Playable World:** a Giol le encanta el formato y ya están los 6 juegos. Queda valorar los efectos sintetizados frente a ElevenLabs y, si hace falta, añadir más variantes por juego (más escenas, más objetos o laberintos con obstáculos).
 0. **YouTube:** la programación y la cuota ya están hechas (29/10). Falta redactar el texto del formulario «YouTube API Services Audit and Quota Extension» para pasar de 10.000 unidades (≈6 subidas al día).

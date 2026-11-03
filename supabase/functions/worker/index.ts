@@ -257,6 +257,7 @@ async function runStep(job: Job) {
     case "sequels": return stepSequels(job);
     case "playlists": return stepPlaylists(job);
     case "watchdog": return stepWatchdog(job);
+    case "comments": return stepComments(job);
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
@@ -3607,6 +3608,105 @@ async function stepSequels(job: Job) {
   await log({ ...job, video_id: nv.id }, `Secuela en marcha: «${v.title}» hizo ${hit.n} visitas a las 48 h y lleva ${hit.now} (lo normal en el canal: ${median}), así que tendrá parte ${part}`);
 }
 
+// ---------- Paso: comentarios (lee los nuevos, prepara la respuesta y convierte las preguntas buenas en vídeos) ----------
+const COMMENTS_TOOL = { name: "comentarios", description: "Qué hacer con cada comentario nuevo", input_schema: { type: "object", required: ["items"], properties: {
+  items: { type: "array", items: { type: "object", required: ["id", "action"], properties: {
+    id: { type: "string" },
+    action: { type: "string", enum: ["reply", "hide", "skip"], description: "reply: merece respuesta (casi todos los que tienen texto); hide: insulto, spam o enlace sospechoso; skip: no hay nada que contestar" },
+    reply: { type: "string", description: "Respuesta lista para publicar como el canal: en el idioma del comentario, cercana y breve (máx. 280 caracteres), 1-2 emojis como mucho, y cuando encaje termina con una pregunta para seguir la conversación. Si preguntan algo, contéstalo con datos reales y comprobables; si no lo sabes seguro, no lo inventes." } } } },
+  idea: { type: "object", description: "SOLO si un comentario pregunta o pide algo que da para un Short NUEVO, bueno y que no esté ya en la lista de vídeos del canal. Como mucho una.", required: ["comment_id", "title", "angle", "hook", "wiki_title"], properties: {
+    comment_id: { type: "string" },
+    title: { type: "string", description: "Idea del vídeo, sin emojis" },
+    angle: { type: "string", description: "Qué se contará (datos nuevos, no repetir el vídeo original)" },
+    hook: { type: "string", description: "Primera frase del vídeo" },
+    wiki_title: { type: "string", description: "Título EXACTO del artículo de Wikipedia (español o inglés) que lo documenta" } } } } } };
+async function stepComments(job: Job) {
+  if (!job.channel_id) {
+    const { data: chs } = await sb.from("channels").select("id,youtube_channel_id").neq("status", "archived");
+    for (const c of chs ?? []) if (c.youtube_channel_id) await enqueue("comments", { channel_id: c.id });
+    return;
+  }
+  const { data: ch } = await sb.from("channels").select("*").eq("id", job.channel_id).single();
+  if (!ch?.youtube_channel_id || !KEYS["YOUTUBE_API_KEY"]) return;
+  if (!(await sb.rpc("yt_quota_take", { p_units: 1 })).data) return;
+  const d = await yt("commentThreads", { part: "snippet,replies", allThreadsRelatedToChannelId: ch.youtube_channel_id, maxResults: "100", order: "time", textFormat: "plainText" });
+  // deno-lint-ignore no-explicit-any
+  const threads = (d.items ?? []).map((t: any) => {
+    const s = t.snippet?.topLevelComment?.snippet ?? {};
+    // deno-lint-ignore no-explicit-any
+    const replies = (t.replies?.comments ?? []).map((r: any) => r.snippet ?? {});
+    return { id: String(t.id), video: String(s.videoId ?? ""), author: String(s.authorDisplayName ?? ""), text: String(s.textDisplay ?? "").slice(0, 1500), likes: Number(s.likeCount ?? 0), at: String(s.publishedAt ?? ""),
+      mine: s.authorChannelId?.value === ch.youtube_channel_id,
+      // deno-lint-ignore no-explicit-any
+      answered: replies.some((r: any) => r.authorChannelId?.value === ch.youtube_channel_id),
+      // deno-lint-ignore no-explicit-any
+      thread: replies.map((r: any) => `${r.authorDisplayName}: ${String(r.textDisplay ?? "").slice(0, 300)}`) };
+  }).filter((t: { video: string }) => t.video);
+  if (!threads.length) return;
+  // Los que ya contestaste en YouTube salen solos de la lista
+  const answered = threads.filter((t: { answered: boolean }) => t.answered).map((t: { id: string }) => t.id);
+  if (answered.length) await sb.from("yt_comments").update({ status: "done", updated_at: new Date().toISOString() }).in("id", answered).in("status", ["new", "pending"]);
+  const { data: known } = await sb.from("yt_comments").select("id").in("id", threads.map((t: { id: string }) => t.id));
+  const seen = new Set((known ?? []).map((k) => k.id));
+  const since = Date.now() - 14 * 864e5;
+  const fresh = threads.filter((t: { id: string; mine: boolean; answered: boolean; at: string }) => !seen.has(t.id) && !t.mine && !t.answered && new Date(t.at).getTime() >= since).slice(0, 40);
+  if (!fresh.length) return;
+  // Título de cada vídeo (primero los de la base; si falta alguno, a YouTube)
+  const vidIds = [...new Set(fresh.map((t: { video: string }) => t.video))] as string[];
+  const { data: ours } = await sb.from("videos").select("id,title,youtube_video_id,script").in("youtube_video_id", vidIds);
+  const titles = new Map((ours ?? []).map((v) => [v.youtube_video_id, String(v.title ?? "")]));
+  const missing = vidIds.filter((v) => !titles.get(v));
+  if (missing.length && (await sb.rpc("yt_quota_take", { p_units: 1 })).data) {
+    try { const vd = await yt("videos", { part: "snippet", id: missing.slice(0, 50).join(",") }); for (const it of vd.items ?? []) titles.set(it.id, String(it.snippet?.title ?? "")); } catch (_) { /* sin título */ }
+  }
+  await sb.from("yt_comments").insert(fresh.map((t: { id: string; video: string; author: string; text: string; likes: number; at: string }) => ({ id: t.id, channel_id: ch.id, youtube_video_id: t.video, video_title: titles.get(t.video) ?? null, author: t.author, text: t.text, likes: t.likes, published_at: t.at || null })));
+  // Lo que cuenta cada vídeo, para que la respuesta no contradiga el vídeo
+  const told = new Map((ours ?? []).map((v) => [v.youtube_video_id, (v.script?.scenes ?? []).map((s: { narration?: string }) => s.narration ?? "").join(" ").slice(0, 700)]));
+  const { data: mineV } = await sb.from("videos").select("idea_title,title").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(150);
+  const list = (mineV ?? []).map((v) => v.title || v.idea_title).filter(Boolean).slice(0, 150).join(" · ");
+  const canIdea = ch.production_type !== "challenges" && ch.autopilot !== "manual";
+  const body = vidIds.map((vid) => {
+    const cs = fresh.filter((t: { video: string }) => t.video === vid);
+    return `VÍDEO «${titles.get(vid) ?? vid}»${told.get(vid) ? `\nLo que cuenta: ${told.get(vid)}` : ""}\n${cs.map((t: { id: string; author: string; text: string; likes: number; thread: string[] }) => `- [${t.id}] ${t.author} (${t.likes} likes): ${t.text}${t.thread.length ? `\n    respuestas: ${t.thread.join(" | ")}` : ""}`).join("\n")}`;
+  }).join("\n\n");
+  const r = await claudeTool(MODEL_FAST, `Llevas la comunidad del canal de YouTube «${ch.name}» (${ch.niche ?? ""}). Para cada comentario nuevo decides si contestar y escribes la respuesta tal cual se publicará como el canal. Contestar bien hace que la gente vuelva y se suscriba: sé cercano, agradecido y concreto; nada de respuestas genéricas ni de pedir la suscripción en cada respuesta. Nunca inventes datos.${canIdea ? " Además, si alguien pregunta o pide algo que daría para un Short nuevo, propón esa idea (máximo una)." : ""}`,
+    `${playbookBlock(ch)}${canIdea ? `VÍDEOS QUE YA TIENE EL CANAL (no repitas): ${list}\n\n` : ""}COMENTARIOS NUEVOS:\n${body}`, COMMENTS_TOOL, 6000);
+  const o = r.input ?? {};
+  const now = new Date().toISOString();
+  let nReply = 0, nHide = 0;
+  for (const it of (o.items ?? []) as { id: string; action: string; reply?: string }[]) {
+    if (!fresh.some((t: { id: string }) => t.id === it.id)) continue;
+    const st = it.action === "reply" && it.reply ? "pending" : it.action === "hide" ? "hide" : "ignored";
+    if (st === "pending") nReply++; if (st === "hide") nHide++;
+    await sb.from("yt_comments").update({ status: st, suggested_reply: st === "pending" ? clean(it.reply) : null, updated_at: now }).eq("id", it.id);
+  }
+  await sb.from("yt_comments").update({ status: "ignored", updated_at: now }).in("id", fresh.map((t: { id: string }) => t.id)).eq("status", "new");
+  let ideaTxt = "";
+  const idea = o.idea;
+  if (canIdea && idea?.title && idea?.wiki_title && fresh.some((t: { id: string }) => t.id === idea.comment_id)) {
+    // Una idea de comentarios al día por canal como mucho
+    const { count } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("idea_kind", "comment").gte("created_at", new Date(Date.now() - 864e5).toISOString());
+    if ((count ?? 0) === 0) {
+      const c = fresh.find((t: { id: string }) => t.id === idea.comment_id);
+      const parent = (ours ?? []).find((v) => v.youtube_video_id === c.video);
+      const wiki = clean(idea.wiki_title);
+      const { data: nv, error } = await sb.from("videos").insert({
+        channel_id: ch.id, format: "short", status: "scripting", priority: 7, idea_kind: "comment", parent_id: parent?.id ?? null,
+        idea_title: clean(idea.title), idea_hook: clean(idea.hook),
+        idea_angle: `Lo ha pedido el público en los comentarios de «${titles.get(c.video) ?? ""}»: «${c.text.slice(0, 300)}». ${clean(idea.angle)} Al final, menciona que la idea salió de un comentario e invita a dejar la próxima pregunta.`,
+        idea_reason: `Pregunta de ${c.author} en los comentarios`,
+        idea_evidence: [{ title: wiki, url: `https://es.wikipedia.org/wiki/${encodeURIComponent(wiki.replace(/ /g, "_"))}` }],
+      }).select("id").single();
+      if (!error && nv) {
+        await sb.from("yt_comments").update({ idea: clean(idea.title), idea_video_id: nv.id }).eq("id", c.id);
+        await enqueue("script", { video_id: nv.id });
+        ideaTxt = ` Idea nueva sacada de un comentario: «${clean(idea.title)}».`;
+      }
+    }
+  }
+  await log(job, `Comentarios: ${fresh.length} nuevos, ${nReply} con respuesta preparada${nHide ? `, ${nHide} para ocultar` : ""}.${ideaTxt}`);
+}
+
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------
 const TREND_TOOL = { name: "tendencia", description: "Tema de actualidad elegido", input_schema: { type: "object", required: ["pick"], properties: {
   pick: { type: "boolean", description: "true solo si hay un tema que cumple TODOS los criterios" },
@@ -3674,7 +3774,7 @@ type Arm = { key: string; label: string; prompt?: string; words?: number };
 async function assignExperiment(ch: any, v: any): Promise<Arm | null> {
   const ex = ch.experiments?.active; if (!ex?.id || !Array.isArray(ex.arms) || ex.arms.length < 2) return null;
   // Actualidad y secuelas no entran: van con otras prisas y otro gancho
-  if (["trend", "sequel"].includes(v.idea_kind) || v.engine === "challenges") return null;
+  if (["trend", "sequel", "comment"].includes(v.idea_kind) || v.engine === "challenges") return null;
   if (v.auto?.exp?.id === ex.id) return ex.arms.find((a: Arm) => a.key === v.auto.exp.arm) ?? null;
   const { count } = await sb.from("videos").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("auto->exp->>id", ex.id);
   const arm: Arm = ex.arms[(count ?? 0) % ex.arms.length];

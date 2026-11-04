@@ -262,6 +262,10 @@ async function runStep(job: Job) {
     case "reschedule": return stepReschedule(job);
     case "visual_check": return stepVisualCheck(job);
     case "voice_design": return stepVoiceDesign(job);
+    case "explore": return stepExplore(job);
+    case "explore_search": return stepExploreSearch(job);
+    case "explore_adapt": return stepExploreAdapt(job);
+    case "explore_refresh": return stepExploreRefresh(job);
     // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
     case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
@@ -4027,6 +4031,160 @@ async function stepVoiceDesign(job: Job) {
   }
   await sb.from("channels").update({ voice_options: { ...(ch.voice_options ?? {}), designed, designed_at: new Date().toISOString() } }).eq("id", ch.id);
   await log(job, `Voces propias diseñadas para «${ch.name}»: ${designed.map((x) => x.name).join(", ")}`);
+}
+
+// ======================================================================================================
+// Explorar: analiza canales de otros (como vidIQ / Social Blade), busca canales en auge en cualquier idioma
+// y propone cómo adaptarlos al español. Usa la API pública de YouTube (clave YOUTUBE_RESEARCH_API_KEY si existe,
+// para no gastar la cuota de las subidas; si no, la normal con un límite diario).
+// ======================================================================================================
+async function ytx(path: string, params: Record<string, string>, units: number) {
+  const own = KEYS["YOUTUBE_RESEARCH_API_KEY"];
+  if (!own && !(await sb.rpc("yt_quota_take", { p_units: units })).data) throw new UserError("Hoy no queda cuota de YouTube para explorar (se usa para las subidas). Añade una clave propia de investigación en Ajustes (YOUTUBE_RESEARCH_API_KEY) o prueba mañana.");
+  const u = new URL(`https://www.googleapis.com/youtube/v3/${path}`);
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  u.searchParams.set("key", own || KEYS["YOUTUBE_API_KEY"]);
+  const r = await fetch(u);
+  if (!r.ok) { const t = (await r.text()).slice(0, 200); if (/quota/i.test(t)) throw new UserError("YouTube no tiene más cuota hoy para explorar."); throw new Error(`YouTube ${r.status}: ${t}`); }
+  return r.json();
+}
+const isoSecs = (x: string) => { const m = String(x ?? "").match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/); if (!m) return 0; const [d, h, mi, s] = m.slice(1).map((v) => Number(v ?? 0)); return d * 86400 + h * 3600 + mi * 60 + s; };
+// RPM orientativo (€ por 1.000 visitas) de vídeos largos según el idioma del público; los Shorts pagan mucho menos
+const RPM_LONG: Record<string, [number, number]> = { en: [3, 8], de: [3, 6], fr: [2, 5], ja: [2, 5], ko: [2, 4], es: [1, 3], pt: [0.8, 2], it: [1.5, 4], zh: [1, 3], ru: [0.3, 1], hi: [0.2, 0.8], ar: [0.5, 2], id: [0.3, 1], tr: [0.3, 1] };
+const RPM_SHORT: [number, number] = [0.03, 0.1];
+// deno-lint-ignore no-explicit-any
+async function analyzeExt(channelId: string, opts: { watched?: boolean } = {}): Promise<any> {
+  const c = (await ytx("channels", { part: "snippet,statistics,contentDetails", id: channelId }, 1)).items?.[0];
+  if (!c) throw new UserError("No encuentro ese canal en YouTube");
+  const uploads = c.contentDetails?.relatedPlaylists?.uploads;
+  // deno-lint-ignore no-explicit-any
+  let vids: any[] = [];
+  if (uploads) {
+    const pl = await ytx("playlistItems", { part: "contentDetails", playlistId: uploads, maxResults: "50" }, 1);
+    const ids = (pl.items ?? []).map((i: { contentDetails: { videoId: string } }) => i.contentDetails.videoId);
+    if (ids.length) vids = (await ytx("videos", { part: "snippet,statistics,contentDetails", id: ids.join(",") }, 1)).items ?? [];
+  }
+  const now = Date.now();
+  const V = vids.map((it) => {
+    const age = Math.max(0.5, (now - new Date(it.snippet?.publishedAt).getTime()) / 864e5);
+    const views = Number(it.statistics?.viewCount ?? 0), dur = isoSecs(it.contentDetails?.duration);
+    return { id: it.id, title: String(it.snippet?.title ?? ""), at: it.snippet?.publishedAt, views, likes: Number(it.statistics?.likeCount ?? 0), comments: Number(it.statistics?.commentCount ?? 0), dur, short: dur > 0 && dur <= 180, age: Math.round(age * 10) / 10, vpd: Math.round(views / age), thumb: it.snippet?.thumbnails?.medium?.url ?? it.snippet?.thumbnails?.default?.url ?? null };
+  });
+  const sorted = [...V].map((v) => v.views).sort((a, b) => a - b);
+  const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+  for (const v of V) (v as { x?: number }).x = median ? Math.round((v.views / median) * 10) / 10 : null as unknown as number;
+  const last30 = V.filter((v) => v.age <= 30);
+  const lang = String(c.snippet?.defaultLanguage ?? vids[0]?.snippet?.defaultAudioLanguage ?? vids[0]?.snippet?.defaultLanguage ?? "").slice(0, 2).toLowerCase() || null;
+  // Visitas al mes: con fotos diarias, la diferencia real; si no, lo que han hecho los vídeos de los últimos 30 días (mínimo)
+  const { data: snaps } = await sb.from("ext_snapshots").select("day,subs,views").eq("channel_id", channelId).order("day");
+  const totalViews = Number(c.statistics?.viewCount ?? 0), subs = Number(c.statistics?.subscriberCount ?? 0);
+  let monthViews = last30.reduce((a, v) => a + v.views, 0), monthHow = "vídeos de los últimos 30 días (mínimo)";
+  let subsPerDay: number | null = null;
+  const first = (snaps ?? []).find((s) => (now - new Date(s.day).getTime()) / 864e5 >= 3);
+  if (first) { const days = Math.max(1, (now - new Date(first.day).getTime()) / 864e5); monthViews = Math.round(((totalViews - Number(first.views)) / days) * 30); subsPerDay = Math.round(((subs - Number(first.subs)) / days) * 10) / 10; monthHow = `crecimiento real medido (${Math.round(days)} días)`; }
+  const shortShare = V.length ? V.filter((v) => v.short).length / V.length : 0;
+  const mvShort = monthViews * shortShare, mvLong = monthViews - mvShort;
+  const rl = RPM_LONG[lang ?? ""] ?? [1, 3];
+  const revenue = subs >= 1000 ? [Math.round((mvLong * rl[0] + mvShort * RPM_SHORT[0]) / 1000), Math.round((mvLong * rl[1] + mvShort * RPM_SHORT[1]) / 1000)] : [0, 0];
+  const span = V.length >= 2 ? Math.max(1, Math.max(...V.map((v) => v.age)) - Math.min(...V.map((v) => v.age))) : 30;
+  const data = {
+    subs, total_views: totalViews, videos: Number(c.statistics?.videoCount ?? 0), created: c.snippet?.publishedAt, country: c.snippet?.country ?? null, lang,
+    description: String(c.snippet?.description ?? "").slice(0, 600),
+    per_week: Math.round((V.length / span) * 7 * 10) / 10, short_share: Math.round(shortShare * 100), median_views: median,
+    month_views: monthViews, month_how: monthHow, subs_per_day: subsPerDay, revenue_month_eur: revenue, monetizable: subs >= 1000,
+    avg_short: Math.round(V.filter((v) => v.short).reduce((a, v) => a + v.views, 0) / Math.max(1, V.filter((v) => v.short).length)),
+    avg_long: Math.round(V.filter((v) => !v.short).reduce((a, v) => a + v.views, 0) / Math.max(1, V.filter((v) => !v.short).length)),
+    top: [...V].sort((a, b) => b.views - a.views).slice(0, 12), recent: V.slice(0, 15),
+  };
+  const row = { id: channelId, title: c.snippet?.title ?? null, handle: c.snippet?.customUrl ?? null, thumb: c.snippet?.thumbnails?.default?.url ?? null, country: data.country, lang, yt_created_at: c.snippet?.publishedAt ?? null, data, analyzed_at: new Date().toISOString(), ...(opts.watched != null ? { watched: opts.watched } : {}) };
+  await sb.from("ext_channels").upsert(row);
+  await sb.from("ext_snapshots").upsert({ channel_id: channelId, day: new Date().toISOString().slice(0, 10), subs, views: totalViews, videos: data.videos });
+  return row;
+}
+async function resolveChannel(q: string): Promise<string> {
+  const s = q.trim();
+  const uc = s.match(/(UC[\w-]{22})/); if (uc) return uc[1];
+  const vid = s.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/);
+  if (vid) { const v = (await ytx("videos", { part: "snippet", id: vid[1] }, 1)).items?.[0]; if (v?.snippet?.channelId) return v.snippet.channelId; }
+  const h = s.match(/@([\w.\-À-ɏ一-鿿]+)/u)?.[1] ?? (/^[\w.\-]+$/.test(s) ? s : null);
+  if (h) { const c = (await ytx("channels", { part: "id", forHandle: `@${h}` }, 1)).items?.[0]; if (c?.id) return c.id; }
+  const r = await ytx("search", { part: "snippet", type: "channel", q: s.replace(/https?:\/\/\S+/g, "").trim() || s, maxResults: "1" }, 100);
+  const id = r.items?.[0]?.snippet?.channelId ?? r.items?.[0]?.id?.channelId;
+  if (!id) throw new UserError("No encuentro ese canal. Pega el enlace del canal (youtube.com/@nombre) o de uno de sus vídeos.");
+  return id;
+}
+async function stepExplore(job: Job) {
+  const id = job.payload?.channel_id ? String(job.payload.channel_id) : await resolveChannel(String(job.payload?.q ?? ""));
+  const row = await analyzeExt(id, job.payload?.watch ? { watched: true } : {});
+  await log(job, `Explorar: analizado «${row.title}» (${row.data.subs} suscriptores)`);
+}
+// Canales en auge: los vídeos con más visitas del periodo sobre un tema e idioma, agrupados por canal
+async function stepExploreSearch(job: Job) {
+  const { data: S } = await sb.from("ext_searches").select("*").eq("id", job.payload?.search_id).single();
+  if (!S) return;
+  try {
+    const after = new Date(Date.now() - Number(S.period_days ?? 30) * 864e5).toISOString();
+    const params: Record<string, string> = { part: "snippet", type: "video", order: "viewCount", maxResults: "50", publishedAfter: after, q: String(S.q ?? "") };
+    if (S.lang) params.relevanceLanguage = S.lang;
+    if (S.region) params.regionCode = S.region;
+    if (job.payload?.duration) params.videoDuration = String(job.payload.duration);
+    const r = await ytx("search", params, 100);
+    const ids = (r.items ?? []).map((i: { id: { videoId: string } }) => i.id?.videoId).filter(Boolean);
+    const vids = ids.length ? (await ytx("videos", { part: "snippet,statistics,contentDetails", id: ids.join(",") }, 1)).items ?? [] : [];
+    // deno-lint-ignore no-explicit-any
+    const byCh = new Map<string, any>();
+    for (const v of vids) {
+      const cid = v.snippet?.channelId; if (!cid) continue;
+      const e = byCh.get(cid) ?? { id: cid, title: v.snippet?.channelTitle, views: 0, n: 0, top: null };
+      const views = Number(v.statistics?.viewCount ?? 0); e.views += views; e.n++;
+      if (!e.top || views > e.top.views) e.top = { id: v.id, title: v.snippet?.title, views, short: isoSecs(v.contentDetails?.duration) <= 180, at: v.snippet?.publishedAt };
+      byCh.set(cid, e);
+    }
+    const cids = [...byCh.keys()].slice(0, 50);
+    if (cids.length) {
+      const cs = (await ytx("channels", { part: "snippet,statistics", id: cids.join(",") }, 1)).items ?? [];
+      for (const c of cs) { const e = byCh.get(c.id); if (!e) continue; e.subs = Number(c.statistics?.subscriberCount ?? 0); e.videos = Number(c.statistics?.videoCount ?? 0); e.created = c.snippet?.publishedAt; e.thumb = c.snippet?.thumbnails?.default?.url ?? null; e.country = c.snippet?.country ?? null; }
+    }
+    const res = [...byCh.values()].map((e) => ({ ...e, ratio: e.subs ? Math.round((e.top?.views ?? 0) / e.subs * 10) / 10 : null, young: e.created ? (Date.now() - new Date(e.created).getTime()) / 864e5 < 365 : false }))
+      // Primero los canales pequeños o nuevos que pegan fuerte (lo replicable), luego el resto
+      .sort((a, b) => (Number(b.young) - Number(a.young)) || ((b.ratio ?? 0) - (a.ratio ?? 0)));
+    await sb.from("ext_searches").update({ results: res, status: "done" }).eq("id", S.id);
+    await log(job, `Explorar: búsqueda «${S.q}» (${S.lang ?? "todos"}) → ${res.length} canales`);
+  } catch (e) {
+    await sb.from("ext_searches").update({ status: "failed", error: (e as Error).message }).eq("id", S.id);
+    if (!(e instanceof UserError)) throw e;
+  }
+}
+const ADAPT_TOOL = { name: "adaptacion", description: "Cómo adaptar el canal al español", input_schema: { type: "object", required: ["resumen", "por_que_funciona", "encaja", "concepto", "ideas"], properties: {
+  resumen: { type: "string", description: "Qué hace el canal (2-3 frases, en español)" },
+  por_que_funciona: { type: "array", items: { type: "string" }, maxItems: 5 },
+  encaja: { type: "string", enum: ["sí", "con cambios", "no"], description: "Si se puede hacer con nuestro sistema (guion IA, voz IA, imágenes de archivo o IA, montaje automático)" },
+  motivo_encaje: { type: "string" },
+  concepto: { type: "object", properties: { nombre: { type: "string" }, nicho: { type: "string" }, formato: { type: "string" }, diferencia: { type: "string", description: "Qué lo hace propio y no una copia" } } },
+  ideas: { type: "array", maxItems: 10, items: { type: "object", required: ["titulo", "angulo"], properties: { titulo: { type: "string" }, angulo: { type: "string" }, basado_en: { type: "string", description: "Vídeo del canal que lo inspira" } } } },
+  riesgos: { type: "array", items: { type: "string" }, maxItems: 4 } } } };
+async function stepExploreAdapt(job: Job) {
+  const { data: E } = await sb.from("ext_channels").select("*").eq("id", job.payload?.channel_id).single();
+  if (!E?.data) throw new UserError("Analiza el canal primero");
+  const d = E.data;
+  const { data: mine } = await sb.from("channels").select("name,niche").neq("status", "archived");
+  const r = await claudeTool(MODEL_FAST, "Eres un estratega de YouTube. Analizas canales de cualquier idioma y propones cómo llevar lo que funciona al mercado hispanohablante con un canal faceless producido con IA, sin copiar: mismo tipo de valor, enfoque propio.",
+    `CANAL: «${E.title}» (${d.lang ?? "idioma ?"}, ${d.country ?? "país ?"}), ${d.subs} suscriptores, ${d.total_views} visitas, creado ${String(d.created ?? "").slice(0, 10)}, ${d.per_week} vídeos/semana, ${d.short_share} % Shorts.\nDescripción: ${d.description}\nVÍDEOS MÁS VISTOS:\n${(d.top ?? []).map((v: { title: string; views: number; short: boolean; age: number }) => `- ${v.title} — ${v.views} visitas (${v.short ? "Short" : "largo"}, hace ${Math.round(v.age)} días)`).join("\n")}\nÚLTIMOS:\n${(d.recent ?? []).slice(0, 8).map((v: { title: string; views: number }) => `- ${v.title} — ${v.views}`).join("\n")}\n\nNuestros canales actuales: ${(mine ?? []).map((m) => `${m.name} (${m.niche})`).join("; ")}. Si encaja en uno de ellos, dilo en el concepto. Traduce al español los títulos que cites. Llama a adaptacion.`, ADAPT_TOOL, 4000);
+  await sb.from("ext_channels").update({ adapt: { ...(r.input ?? {}), at: new Date().toISOString() } }).eq("id", E.id);
+  await log(job, `Explorar: propuesta de adaptación al español de «${E.title}»`);
+}
+// Cada día: foto de los canales que sigues (suscriptores y visitas) para medir su crecimiento real
+async function stepExploreRefresh(job: Job) {
+  const { data: W } = await sb.from("ext_channels").select("id").eq("watched", true);
+  const ids = (W ?? []).map((w) => w.id);
+  for (let i = 0; i < ids.length; i += 50) {
+    const cs = (await ytx("channels", { part: "statistics", id: ids.slice(i, i + 50).join(",") }, 1)).items ?? [];
+    const day = new Date().toISOString().slice(0, 10);
+    for (const c of cs) await sb.from("ext_snapshots").upsert({ channel_id: c.id, day, subs: Number(c.statistics?.subscriberCount ?? 0), views: Number(c.statistics?.viewCount ?? 0), videos: Number(c.statistics?.videoCount ?? 0) });
+  }
+  // Una vez por semana, análisis completo de cada canal seguido (vídeos nuevos y estimaciones)
+  if (new Date().getUTCDay() === 1) for (const id of ids) { try { await analyzeExt(id); } catch (_) { /* sigue con el resto */ } }
+  if (ids.length) await log(job, `Explorar: actualizados ${ids.length} canales seguidos`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

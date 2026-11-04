@@ -676,6 +676,16 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   const sfxRule = ch.sfx_enabled ? `sfx: efecto de sonido para el arranque de la escena, elegido SOLO de este catálogo: ${Object.keys(SFX_LIB).join(", ")}. Úsalo con criterio profesional: en el gancho, en revelaciones y en cambios de bloque, como máximo en 1 de cada 3 escenas; en el resto deja "".` : `sfx: deja siempre "".`;
   const musicRule = ch.music_mode === "video" ? `music_prompt: prompt en inglés para una banda sonora instrumental de fondo hecha a medida de este vídeo (género, mood, tempo en BPM, instrumentos, evolución), discreta para no tapar la voz${ch.music_style ? `, coherente con el sello sonoro del canal: ${ch.music_style}` : ""}.` : `music_prompt: deja "".`;
   // Guionista y director en uno: escribe, se revisa con ojo de director y entrega solo la versión final (una sola llamada a Opus)
+  // Lo que ha funcionado DE VERDAD en YouTube (visitas y retención reales), no lo que dice una nota
+  let real = "";
+  try {
+    const { data: pub } = await sb.from("videos").select("title,script,stats,published_at").eq("channel_id", ch.id).eq("format", "short").not("youtube_video_id", "is", null).lte("published_at", new Date(Date.now() - 36 * 3600e3).toISOString()).order("published_at", { ascending: false }).limit(40);
+    const rows = (pub ?? []).map((p) => ({ t: String(p.title ?? "").replace(/#\S+/g, "").trim(), hook: String(p.script?.scenes?.[0]?.shots?.[0]?.line ?? p.script?.scenes?.[0]?.narration ?? "").slice(0, 140), views: Number(p.stats?.views ?? 0), pct: p.stats?.analytics?.avg_pct })).filter((r) => r.views > 0).sort((a, b) => b.views - a.views);
+    if (rows.length >= 6) {
+      const fmt = (r: { t: string; hook: string; views: number; pct?: number }) => `«${r.t}» — ${r.views} visitas${r.pct != null ? `, ${Math.round(r.pct)} % visto` : ""}. Empezaba: «${r.hook}»`;
+      real = `\n\nRESULTADOS REALES EN YOUTUBE DE ESTE CANAL (lo que manda; imita lo que tienen los primeros, evita lo de los últimos):\nDespegaron:\n- ${rows.slice(0, 3).map(fmt).join("\n- ")}\nSe quedaron en el suelo:\n- ${rows.slice(-3).map(fmt).join("\n- ")}`;
+    }
+  } catch (_) { /* sin datos */ }
   // Lo que más ha fallado últimamente en este canal (análisis de vídeos montados y crítico de guiones): el guionista lo evita desde el principio
   let fails = "";
   try {
@@ -689,7 +699,7 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
     if (uniq.length) fails = `\n\nFALLOS QUE MÁS SE REPITEN EN ESTE CANAL (evítalos desde el primer borrador):\n- ${uniq.join("\n- ")}`;
   } catch (_) { /* sin historial */ }
   const system = `Eres a la vez el guionista senior y el director de contenidos de un canal de YouTube faceless que se hace viral. Escribes con voz propia, datos verificados y estructura variada (no uses siempre la misma plantilla). Prioridad absoluta: retención, rebote y compartidos. La afirmación más sorprendente va en la primera frase, sin contexto previo; bucles de curiosidad abiertos y cerrados a lo largo del vídeo; cada frase se gana su sitio; cierre con emoción o giro final. Básate en la DOCUMENTACIÓN que se te da (artículos de Wikipedia) y en hechos que conozcas con seguridad; cita como fuentes solo esos artículos. Si un dato no está documentado o es dudoso, cuéntalo como testimonio o no lo uses. Nunca inventes cifras. Antes de entregar, repasa tu propio guion con ojo de director implacable contra los criterios de viralidad, la guía y los aprendizajes del canal, y corrige todo lo que falle, pero haz esa revisión en silencio: no escribas borradores, notas ni explicaciones; tu respuesta empieza directamente por <json> y contiene solo la versión final, lista para producir. Si el canal tiene guía, es obligatoria y prevalece sobre cualquier regla general de este mensaje (duración de escenas, estructura, gancho, cierre, estilo visual). Responde SOLO con JSON dentro de <json></json>.`;
-  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}Canal: ${ch.name} — ${ch.niche}\nIdioma de la narración: ${ch.language}\nTono: ${ch.tone ?? "divulgativo, cercano, con criterio"}\nAudiencia: ${ch.audience ?? "-"}\nFormato: ${short ? "Short vertical de ${Math.round(words / 2.4)}-${Math.round(words * 1.1 / 2.3)} s: MÁXIMO ${Math.round(words * 1.1)} palabras de narración en total (con más se alarga y la gente se va)" : `vídeo largo de ~${ch.target_minutes} min`} (~${words} palabras de narración en total, ${scenes} escenas)\n\nIdea aprobada: ${v.idea_title}\nÁngulo: ${v.idea_angle ?? "-"}\n${v.idea_hook ? `Gancho propuesto (úsalo o mejóralo): ${v.idea_hook}\n` : ""}${v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? `VÍDEO RECOPILATORIO: cuenta estas ${(v.idea_stories ?? []).length} historias, de menos a más impactante, unidas por el hilo del título. El gancho anuncia el hilo y promete la más fuerte sin destriparla. Cada historia arranca con su propio mini-gancho, transiciones rápidas sin relleno, y la mejor al final.\n${(v.idea_stories ?? []).map((x: { title: string; hook: string }, k: number) => `${k + 1}. ${x.title}: ${x.hook}`).join("\n")}\n` : ""}${v.script_notes ? `Indicaciones del autor (obligatorias): ${v.script_notes}\n` : ""}${v.review_feedback && v.script ? `\nVersión anterior rechazada. Corrige según este feedback: ${v.review_feedback}\nGuion anterior: ${JSON.stringify(v.script).slice(0, 12000)}\n` : ""}\n${VIRAL_RULES(short)}\n\n${QUALITY_RUBRIC(short)}${fails}\n\nReglas de escenas: cada escena dura 6-15 s de locución. ${visualRule}\nEstilo visual del canal para las imágenes IA: ${ch.style_prompt ?? "cinematic documentary, realistic lighting"}. ${sfxRule} Para ElevenLabs v3 puedes usar etiquetas de emoción puntuales como [pause] o [excited] dentro de narration, con moderación.\n${musicRule}\n\n${short ? `Los Shorts no llevan miniatura: deja thumbnail_concepts, thumbnail_texts y thumbnail_prompt vacíos.` : `Miniaturas: 3 conceptos distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de 2-4 palabras que complementan el título sin repetirlo.`}\nDeja stock_query, archive_query o visual_prompt vacíos cuando no correspondan al tipo de plano, y reframe en null salvo en los planos reframe.\nAUTOEVALUACIÓN OBLIGATORIA antes de responder: repasa el guion criterio por criterio de los CRITERIOS DE CALIDAD como lo haría un crítico exigente, y corrige en el propio guion todo lo que falle (sobre todo los FALLOS QUE MÁS SE REPITEN). self_score: la nota que le pondría ese crítico independiente (se comprobará; si la inflas, el guion se rehace y el vídeo cuesta el doble). self_check: 2-4 frases cortas con lo que has corregido al revisarlo.\n\nDevuelve:\n<json>{"title":"título final <55 caracteres","title_options":["",""],"thumbnail_text":"","thumbnail_concepts":["","",""],"thumbnail_texts":["","",""],"thumbnail_prompt":"","self_score":0,"self_check":[""],"music_prompt":"","sources":[{"title":"","url":""}],"scenes":[{"n":1,"sfx":"","keywords":[""],"shots":[{"line":"","visual_type":"ai","visual_prompt":"","stock_query":"","archive_query":"","reframe":null}]}]}</json>`;
+  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}Canal: ${ch.name} — ${ch.niche}\nIdioma de la narración: ${ch.language}\nTono: ${ch.tone ?? "divulgativo, cercano, con criterio"}\nAudiencia: ${ch.audience ?? "-"}\nFormato: ${short ? "Short vertical de ${Math.round(words / 2.4)}-${Math.round(words * 1.1 / 2.3)} s: MÁXIMO ${Math.round(words * 1.1)} palabras de narración en total (con más se alarga y la gente se va)" : `vídeo largo de ~${ch.target_minutes} min`} (~${words} palabras de narración en total, ${scenes} escenas)\n\nIdea aprobada: ${v.idea_title}\nÁngulo: ${v.idea_angle ?? "-"}\n${v.idea_hook ? `Gancho propuesto (úsalo o mejóralo): ${v.idea_hook}\n` : ""}${v.idea_kind === "compilation" && (v.idea_stories ?? []).length ? `VÍDEO RECOPILATORIO: cuenta estas ${(v.idea_stories ?? []).length} historias, de menos a más impactante, unidas por el hilo del título. El gancho anuncia el hilo y promete la más fuerte sin destriparla. Cada historia arranca con su propio mini-gancho, transiciones rápidas sin relleno, y la mejor al final.\n${(v.idea_stories ?? []).map((x: { title: string; hook: string }, k: number) => `${k + 1}. ${x.title}: ${x.hook}`).join("\n")}\n` : ""}${v.script_notes ? `Indicaciones del autor (obligatorias): ${v.script_notes}\n` : ""}${v.review_feedback && v.script ? `\nVersión anterior rechazada. Corrige según este feedback: ${v.review_feedback}\nGuion anterior: ${JSON.stringify(v.script).slice(0, 12000)}\n` : ""}\n${VIRAL_RULES(short)}\n\n${QUALITY_RUBRIC(short)}${fails}${real}\n\nReglas de escenas: cada escena dura 6-15 s de locución. ${visualRule}\nEstilo visual del canal para las imágenes IA: ${ch.style_prompt ?? "cinematic documentary, realistic lighting"}. ${sfxRule} Para ElevenLabs v3 puedes usar etiquetas de emoción puntuales como [pause] o [excited] dentro de narration, con moderación.\n${musicRule}\n\n${short ? `Los Shorts no llevan miniatura: deja thumbnail_concepts, thumbnail_texts y thumbnail_prompt vacíos.` : `Miniaturas: 3 conceptos distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de 2-4 palabras que complementan el título sin repetirlo.`}\nDeja stock_query, archive_query o visual_prompt vacíos cuando no correspondan al tipo de plano, y reframe en null salvo en los planos reframe.\nAUTOEVALUACIÓN OBLIGATORIA antes de responder: repasa el guion criterio por criterio de los CRITERIOS DE CALIDAD como lo haría un crítico exigente, y corrige en el propio guion todo lo que falle (sobre todo los FALLOS QUE MÁS SE REPITEN). self_score: la nota que le pondría ese crítico independiente (se comprobará; si la inflas, el guion se rehace y el vídeo cuesta el doble). self_check: 2-4 frases cortas con lo que has corregido al revisarlo.\n\nDevuelve:\n<json>{"title":"título final <55 caracteres","title_options":["",""],"thumbnail_text":"","thumbnail_concepts":["","",""],"thumbnail_texts":["","",""],"thumbnail_prompt":"","self_score":0,"self_check":[""],"music_prompt":"","sources":[{"title":"","url":""}],"scenes":[{"n":1,"sfx":"","keywords":[""],"shots":[{"line":"","visual_type":"ai","visual_prompt":"","stock_query":"","archive_query":"","reframe":null}]}]}</json>`;
   // Opus por la API de lotes (mitad de precio) y con la documentación de Wikipedia en vez de búsquedas web de pago
   const redo = !!(v.review_feedback && v.script);
   let docs: { title: string; url: string; text: string }[] = [];
@@ -1682,7 +1692,7 @@ async function stepDirect(job: Job) {
   // Reescrituras desactivadas mientras se calibra el crítico: cuestan ~0,20 € cada una y no subían la nota de 5 (ch.director_rewrites = true para activarlas)
   if (round >= 1 || !ch.director_rewrites) {
     await finish({ ...original, director: { ...(original.director ?? {}), score_before: isFinite(first) ? first : crit?.score, score_after: crit?.score ?? original.director?.score_after, critic: crit, rounds: round, at: new Date().toISOString() } });
-    await log(job, `El guion se queda en ${crit?.score ?? "?"}/10${round ? " tras una reescritura" : ""}: te espera para que lo revises`, "warn");
+    await log(job, `Crítico (orientativo): «${original.title}» ${crit?.score ?? "?"}/10${round ? " tras una reescritura" : ""}`);
     return;
   }
   const weak: string[] = crit?.issues ?? [];
@@ -2785,8 +2795,9 @@ async function stepRetosGenerate(job: Job) {
       const keys = (last ?? []).map((x) => x.retos?.theme).filter(Boolean) as string[];
       const uses = (k: string) => keys.filter((x) => x === k).length;
       // Peso de cada tema: el que fija el informe diario según los resultados, o el de serie
-      const w = (t: { key: string; weight?: number }) => Math.max(0.2, Number(ch.schedule?.theme_weights?.[t.key] ?? t.weight ?? 1));
-      const order = RETO_THEMES.map((t, i) => ({ t, i })).filter((x) => x.t.key !== keys[0]).sort((a, b) => uses(a.t.key) / w(a.t) - uses(b.t.key) / w(b.t) || a.i - b.i);
+      // Peso 0 = tema retirado (no funciona en el canal)
+      const w = (t: { key: string; weight?: number }) => { const x = Number(ch.schedule?.theme_weights?.[t.key] ?? t.weight ?? 1); return x <= 0 ? 0 : Math.max(0.2, x); };
+      const order = RETO_THEMES.map((t, i) => ({ t, i })).filter((x) => x.t.key !== keys[0] && w(x.t) > 0).sort((a, b) => uses(a.t.key) / w(a.t) - uses(b.t.key) / w(b.t) || a.i - b.i);
       theme = order[0]?.t ?? RETO_THEMES[0];
     }
   }
@@ -3034,7 +3045,8 @@ async function planChannel(job: Job, ch: any) {
     for (const v of V.filter((x) => x.status === "script_review" && !x.auto?.script)) {
       let score: number | null = null, why = "";
       if (v.engine === "challenges") { const val = v.retos?.kind === "formato" ? validateFormat(v.retos.format, v.retos.data) : validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
-      else { score = Number(v.script?.director?.score_after ?? v.script?.director?.score_before ?? NaN); if (!isFinite(score)) { score = null; why = "el guion no tiene nota del director"; } else if (score < minQ) why = `nota del guion ${score}/10 (mínimo ${minQ})`; }
+      // La nota del crítico es orientativa (no predice las visitas reales): solo frena un guion desastroso (por debajo de script_min, 3 por defecto)
+      else { score = Number(v.script?.director?.score_after ?? v.script?.director?.score_before ?? NaN); if (!isFinite(score)) score = 7; else if (score < Number(ch.script_min ?? 3)) why = `nota del guion ${score}/10, demasiado baja`; }
       const pol = await policyCheck(v, ch);
       if (!pol.ok) why = pol.block.join(" · ");
       if (!why && score != null) {
@@ -3056,15 +3068,11 @@ async function planChannel(job: Job, ch: any) {
             if (!v.auto?.analyze_requested) { await enqueue("analyze", { video_id: v.id }); await setAuto(v, { analyze_requested: new Date().toISOString() }, { analysis: { status: "running" } }); }
             continue;
           }
-          score = Number(v.analysis.score ?? 0); if (score < minQ) why = `nota del vídeo ${score}/10 (mínimo ${minQ})`;
-          // Segunda oportunidad automática: se reescribe con lo que dijo el análisis (reaprovechando voz e imágenes que sirvan) y se vuelve a analizar
-          if (why && !v.auto?.final_retry) {
-            const a = v.analysis ?? {};
-            const fb = [a.script_feedback, ...(Array.isArray(a.issues) ? a.issues : []).filter((i: { severity?: string }) => i && i.severity !== "baja").map((i: { t?: number; problem?: string; fix?: string }) => `${i.t != null ? `(${i.t}s) ` : ""}${i.problem} → ${i.fix}`)].filter(Boolean).join("\n").slice(0, 6000);
-            await setAuto(v, { final_retry: { score, at: new Date().toISOString() }, analyze_requested: null }, { review_feedback: fb || `Sube la nota del vídeo (${score}/10): gancho, historia con protagonista y clímax, imágenes que correspondan con la voz.`, status: "scripting", stage: "Mejorando con el análisis", analysis: null });
-            await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» sacó ${score}/10 (mínimo ${minQ}); se rehace solo con lo que dijo el análisis`, "warn");
-            continue;
-          }
+          // La nota del análisis no predice las visitas (El Principito sacó 4,5 y fue de los mejores): solo frenan fallos objetivos graves
+          score = Number(v.analysis.score ?? 0);
+          const grave = (Array.isArray(v.analysis.issues) ? v.analysis.issues : []).filter((i: { area?: string; severity?: string }) => i && i.severity === "alta" && i.area === "rigor");
+          if (grave.length) why = `posible dato falso o exagerado: ${String(grave[0].problem ?? "").slice(0, 140)}`;
+          else if (score < Number(ch.final_min ?? 3)) why = `nota del vídeo ${score}/10, demasiado baja`;
         }
         const pol = await policyCheck(v, ch); if (!pol.ok) why = pol.block.join(" · ");
         if (why) { await setAuto(v, { final: { held: why, at: new Date().toISOString() } }); await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» te espera (${why})`, "warn"); continue; }
@@ -4197,8 +4205,9 @@ ${(prevRep ?? []).map((r) => `${r.day}: ${r.headline}\n  cambios: ${(r.changes ?
   const auto = changes.filter((c: { auto: boolean }) => c.auto);
   if (auto.length) await enqueue("learn", { channel_id: ch.id, payload: { source: "informe", material: `Informe del ${day}. Cambios decididos a partir de los datos:\n${auto.map((c: { area: string; change: string; reason: string }) => `- [${c.area}] ${c.change} (por qué: ${c.reason})`).join("\n")}` } });
   if (challenges && o.theme_weights && typeof o.theme_weights === "object") {
-    const tw: Record<string, number> = {};
-    for (const [k, val] of Object.entries(o.theme_weights)) if (RETO_THEMES.some((t) => t.key === k)) tw[k] = Math.min(3, Math.max(0.3, Number(val) || 1));
+    const tw: Record<string, number> = { ...(ch.schedule?.theme_weights ?? {}) };
+    // Los temas retirados a mano (peso 0) no los reactiva el informe diario
+    for (const [k, val] of Object.entries(o.theme_weights)) if (RETO_THEMES.some((t) => t.key === k) && ch.schedule?.theme_weights?.[k] !== 0) tw[k] = Math.min(3, Math.max(0.3, Number(val) || 1));
     if (Object.keys(tw).length) await sb.from("channels").update({ schedule: { ...(ch.schedule ?? {}), theme_weights: tw } }).eq("id", ch.id);
   }
   await log(job, `Informe del día listo para ${ch.name}: ${clean(o.headline).slice(0, 100)}${auto.length ? ` · ${auto.length} mejoras aplicadas` : ""}`);

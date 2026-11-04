@@ -1473,6 +1473,12 @@ async function stepPublish(job: Job) {
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
+  // Vídeo rehecho que no llegó a tiempo: el original ya es público, así que no se borra ni se sube otro igual
+  if (v.auto?.replace && v.youtube_video_id && !v.auto.replace.deleted && v.auto.replace.publish_at && new Date(v.auto.replace.publish_at).getTime() <= Date.now()) {
+    await sb.from("videos").update({ status: "final_review", stage: null, auto: { ...v.auto, final: { held: "la versión nueva no llegó a tiempo: el original ya se publicó y no se sustituye", at: new Date().toISOString() } } }).eq("id", v.id);
+    await log(job, `«${v.title}»: la versión rehecha llegó tarde (el original ya es público); no se sustituye`, "warn");
+    return;
+  }
   // Vídeo rehecho: se borra la versión anterior de YouTube y se sube la nueva a la misma hora (si aún no ha pasado)
   if (v.auto?.replace && v.youtube_video_id) {
     if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) throw new QuotaWait("youtube");

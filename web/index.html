@@ -490,6 +490,8 @@ async function load(){
     sb.from("channel_ideas").select("*").eq("status","new").order("created_at",{ascending:false}).limit(6),
   ]);
   S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[]; S.comments=cm.data||[]; S.ext=xc.data||[]; S.extSearch=xs.data||[]; S.chIdeas=ci.data||[];
+  // Canal analizado desde un enlace: su ficha se abre sola en cuanto termina
+  if(S.exPendingAt){ const nx=S.ext.find(x=>x.analyzed_at&&new Date(x.analyzed_at).getTime()>=S.exPendingAt-5000); if(nx){ S.exOpen=nx.id; S.exPendingAt=null; if(S.view==="explorar") setTimeout(()=>window.scrollTo(0,0),50); } }
   render();
 }
 let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
@@ -855,7 +857,7 @@ function exDetail(x){
   </section>`;
 }
 async function exAnalyze(id){ const q=id?null:($("#ex-q")?.value||"").trim(); if(!id&&!q) return toast("Pega el enlace de un canal"); const watch=!id&&$("#ex-w")?.checked;
-  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"explore",payload:id?{channel_id:id}:{q,watch}}); if(error) throw error; if(id) S.exOpen=id; kick(); setTimeout(load,15000); setTimeout(load,35000); },"Analizando el canal… en unos segundos aparece aquí"); }
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"explore",payload:id?{channel_id:id}:{q,watch}}); if(error) throw error; if(id) S.exOpen=id; else S.exPendingAt=Date.now(); kick(); setTimeout(load,8000); setTimeout(load,20000); setTimeout(load,40000); },"Analizando el canal… su ficha se abre aquí en unos segundos"); }
 async function exSearch(){ const q=($("#ex-t")?.value||"").trim(); if(!q) return toast("Escribe un tema");
   await run(async()=>{ const {data,error}=await sb.from("ext_searches").insert({q,lang:$("#ex-l").value||null,period_days:Number($("#ex-p").value)}).select("id").single(); if(error) throw error;
     const {error:e2}=await sb.from("jobs").insert({step:"explore_search",payload:{search_id:data.id,duration:$("#ex-d").value||undefined}}); if(e2) throw e2; kick(); setTimeout(load,15000); setTimeout(load,35000); },"Buscando canales en auge…"); }

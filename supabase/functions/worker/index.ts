@@ -213,7 +213,7 @@ function creditProvider(msg: string) {
 }
 
 // Pasos que hacen avanzar el vídeo: solo estos cambian su estado al quedarse sin presupuesto.
-const MAIN_STEPS = new Set(["script", "revise", "voice", "audio", "visuals", "fix_visuals", "render", "render_check", "publish", "direct", "dub", "clips"]);
+const MAIN_STEPS = new Set(["script", "revise", "voice", "audio", "visuals", "fix_visuals", "visual_check", "render", "render_check", "publish", "direct", "dub", "clips"]);
 
 async function runStep(job: Job) {
   switch (job.step) {
@@ -260,6 +260,7 @@ async function runStep(job: Job) {
     case "comments": return stepComments(job);
     case "compile": return stepCompile(job);
     case "reschedule": return stepReschedule(job);
+    case "visual_check": return stepVisualCheck(job);
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
@@ -654,6 +655,8 @@ async function researchPack(v: any) {
 async function stepScript(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel;
+  // Guion nuevo: la revisión de imágenes vuelve a empezar
+  if (v.auto?.vcheck) { v.auto = { ...v.auto, vcheck: 0 }; await sb.from("videos").update({ auto: v.auto }).eq("id", v.id); }
   const short = ch.format === "short";
   // Experimento en curso: a cada Short normal le toca la variante A o B por turnos
   const arm = short ? await assignExperiment(ch, v) : null;
@@ -703,7 +706,9 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
   s.director = { merged: true, score_before: score, score_after: score, changes: s.self_check ?? [], title_options: s.title_options ?? [], at: new Date().toISOString() };
   const usage = { ...(v.usage ?? {}) };
   for (const [k, n] of Object.entries(usageOf(r))) addUsage(usage, k, n);
-  await sb.from("videos").update({ script: s, title: s.title, description: s.description, tags: s.tags ?? [], sources: s.sources ?? [], status: "script_review", stage: null, progress: 0, error: null, usage }).eq("id", v.id);
+  // Antes de pasar a revisión, un crítico independiente lo puntúa (y el director lo reescribe si no llega a 8)
+  await sb.from("videos").update({ script: s, title: s.title, description: s.description, tags: s.tags ?? [], sources: s.sources ?? [], stage: "Revisando el guion (crítico)", error: null, usage }).eq("id", v.id);
+  await enqueue("direct", { video_id: v.id, payload: { round: 0 } });
   if (redo && v.review_feedback) await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "feedback", material: `El autor rechazó el guion de «${v.title ?? v.idea_title}» y pidió: ${String(v.review_feedback).slice(0, 3000)}` } });
   await log(job, `Guion listo para revisar: ${s.title}${score ? ` (${score}/10)` : ""}`);
 }
@@ -800,7 +805,8 @@ async function stepRevise(job: Job) {
   if (r.input.title) s.title = clean(r.input.title);
   if (r.input.thumbnail_text) s.thumbnail_text = clean(r.input.thumbnail_text);
   s.director = { merged: true, revised: true, score_before: cur.director?.score_after ?? null, score_after: cur.director?.score_after ?? null, changes: r.input.summary ?? [], title_options: cur.director?.title_options ?? [], at: new Date().toISOString() };
-  await sb.from("videos").update({ script: s, title: s.title, status: "script_review", stage: null, progress: 0, error: null }).eq("id", v.id);
+  await sb.from("videos").update({ script: s, title: s.title, stage: "Revisando el guion (crítico)", error: null }).eq("id", v.id);
+  await enqueue("direct", { video_id: v.id, payload: { round: 0 } });
   await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "feedback", material: `El autor pidió cambios en el guion de «${cur.title ?? v.idea_title}»: ${fb.slice(0, 3000)}` } });
   await log(job, `Cambios aplicados al guion (${(r.input.changes ?? []).length} retoques): ${s.title}`);
 }
@@ -1311,7 +1317,7 @@ async function stepVisuals(job: Job) {
       const baseDesc = String(v.description ?? "").split("\n\nImágenes de archivo:")[0];
       await sb.from("videos").update({ description: `${baseDesc}\n\nImágenes de archivo:\n${lines.join("\n")}`.trim() }).eq("id", v.id);
     }
-    await enqueue("render", { video_id: v.id }); await log(job, "Visuales terminados");
+    await enqueue("visual_check", { video_id: v.id }); await log(job, "Visuales terminados");
   }
 }
 
@@ -1606,10 +1612,33 @@ async function claudeTool(model: string, system: string, content: any, tool: any
 }
 
 // ---------- Paso: director (revisa el guion para que sea viral y lo reescribe) ----------
+// Un crítico independiente puntúa el guion con los mismos criterios que el análisis del vídeo montado.
+// Si no llega a 8, el director lo reescribe con esos fallos y se vuelve a puntuar (hasta 2 reescrituras, una por paso para no agotar el tiempo).
+const CRITIC_TOOL = { name: "evaluar", description: "Nota del guion", input_schema: { type: "object", required: ["score", "issues"], properties: {
+  score: { type: "number", description: "0-10, muy exigente: 8+ solo si el guion está listo para hacerse viral tal cual" },
+  issues: { type: "array", maxItems: 6, items: { type: "string" }, description: "Fallos concretos y cómo arreglarlos (frase exacta → cambio)" } } } };
+// deno-lint-ignore no-explicit-any
+async function criticScore(v: any, ch: any, script: any, short: boolean) {
+  const rubric = `CRITERIOS (los mismos con los que se juzgará el vídeo montado; si falla uno importante, la nota no pasa de 6):
+- Gancho: la primera frase crea una pregunta o sorpresa concreta y NO destripa el final ni la cifra clave.
+- Historia: UNA sola historia con protagonista con nombre, objetivo, obstáculo, giro y clímax; nada de resumen de Wikipedia ni lista de datos sueltos${short ? "" : " (en vídeo largo, varias escenas pero un hilo claro)"}.
+- Claridad: se entiende a la primera quién, dónde y cuándo; nada de frases crípticas, telegráficas ni contradicciones.
+- Cierre: frase final memorable o giro; la invitación a seguir el canal es coherente (si dice «parte 2» o «#N», cuadra con la serie) y no genérica.
+- Título: como mucho 55 caracteres sin contar la etiqueta de serie que va tras «|», despierta curiosidad, no cuenta el desenlace.
+- Rigor: nada inventado ni exagerado («perdió Normandía» si no fue así).
+- Actualidad: si el vídeo menciona un tema del momento (p. ej. un videojuego), el enlace con la historia tiene que ser natural y estar justificado en una frase, no un parche.
+- Visuales: cada plano describe algo que se puede mostrar y que corresponde EXACTAMENTE a lo que dice la voz (lugar, época, objeto); nada de planos genéricos.`;
+  const g = await claudeTool(MODEL_FAST, `Eres un crítico de guiones para YouTube, independiente del guionista y del director. Eres muy exigente y concreto.`,
+    `${ch.style_guide ? `GUÍA DEL CANAL:\n${String(ch.style_guide).slice(0, 5000)}\n\n` : ""}${playbookBlock(ch)}${rubric}\n\nCanal: ${ch.name} — ${ch.niche}. Formato: ${short ? "Short vertical" : "vídeo largo"}.\nGUION:\n${JSON.stringify({ title: script.title, scenes: (script.scenes ?? []).map((x: { shots?: { line: string; visual_type: string; visual_prompt?: string; archive_query?: string; stock_query?: string }[] }) => ({ shots: (x.shots ?? []).map((y) => `[${y.visual_type}: ${String(y.archive_query || y.stock_query || y.visual_prompt || "").slice(0, 80)}] ${y.line}`) })) })}\n\nPuntúalo y llama a evaluar.`, CRITIC_TOOL, 1500);
+  await bumpUsage(v.id, usageOf(g));
+  return { score: Number(g.input?.score ?? 0), issues: (Array.isArray(g.input?.issues) ? g.input.issues : []).map((x: unknown) => String(x)) as string[] };
+}
 async function stepDirect(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel; const short = ch.format === "short";
   const original = v.script;
+  const round = Number(job.payload?.round ?? 0);
+  const th = Math.max(8, Number(ch.director_threshold ?? 8));
   const finish = async (script: unknown, extra: Record<string, unknown> = {}) => {
     // deno-lint-ignore no-explicit-any
     const sc = script as any;
@@ -1617,22 +1646,24 @@ async function stepDirect(job: Job) {
     if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
   };
   if (!original?.scenes?.length) throw new UserError("No hay guion que revisar");
-  if (job.attempts >= 2) { await finish(original); await log(job, "El director tardó demasiado. Queda el borrador del guionista.", "warn"); return; }
-  // Filtro barato: si el borrador ya cumple lo aprendido, el director (Opus) no interviene
-  let weak: string[] = [];
-  try {
-    const g = await claudeTool(MODEL_CHEAP, `Evalúas borradores de guion para YouTube con los criterios del canal. Eres exigente: solo das 8 o más si el guion está listo para hacerse viral sin cambios.`, `${ch.style_guide ? `GUÍA DEL CANAL:\n${String(ch.style_guide).slice(0, 5000)}\n\n` : ""}${playbookBlock(ch)}${VIRAL_RULES(short)}\n\nBORRADOR:\n${JSON.stringify({ title: original.title, scenes: (original.scenes ?? []).map((x: { shots?: { line: string; visual_type: string }[]; keywords?: string[] }) => ({ shots: (x.shots ?? []).map((y) => `${y.visual_type}: ${y.line}`), keywords: x.keywords })) })}\n\nPuntúalo y llama a evaluar.`, { name: "evaluar", description: "Nota del borrador", input_schema: { type: "object", required: ["score", "weak_points"], properties: { score: { type: "number" }, weak_points: { type: "array", items: { type: "string" }, maxItems: 5 } } } }, 1200);
-    await bumpUsage(v.id, usageOf(g));
-    const score = Number(g.input.score ?? 0);
-    weak = g.input.weak_points ?? [];
-    if (score >= Number(ch.director_threshold ?? 8)) {
-      await finish({ ...original, director: { skipped: true, score_before: score, score_after: score, changes: [], weak_points: weak, at: new Date().toISOString() } });
-      await log(job, `El director no ha tenido que intervenir: el borrador ya saca ${score}/10`);
-      return;
-    }
-  } catch (_) { /* si el filtro falla, revisa el director */ }
+  if (job.attempts >= 2) { await finish(original); await log(job, "El director tardó demasiado. Queda la última versión del guion.", "warn"); return; }
+  // 1) Nota del crítico independiente
+  let crit: { score: number; issues: string[] } | null = null;
+  try { crit = await criticScore(v, ch, original, short); } catch (e) { if (e instanceof OverBudget) throw e; }
+  const first = Number(original.director?.score_before ?? crit?.score ?? NaN);
+  if (crit && crit.score >= th) {
+    await finish({ ...original, director: { ...(original.director ?? {}), skipped: round === 0, score_before: isFinite(first) ? first : crit.score, score_after: crit.score, critic: crit, rounds: round, at: new Date().toISOString() } });
+    await log(job, round ? `Guion mejorado: el crítico le da ${crit.score}/10 tras ${round} reescritura${round > 1 ? "s" : ""}` : `El director no ha tenido que intervenir: el guion ya saca ${crit.score}/10`);
+    return;
+  }
+  if (round >= 2) {
+    await finish({ ...original, director: { ...(original.director ?? {}), score_before: isFinite(first) ? first : crit?.score, score_after: crit?.score ?? original.director?.score_after, critic: crit, rounds: round, at: new Date().toISOString() } });
+    await log(job, `El guion se queda en ${crit?.score ?? "?"}/10 tras 2 reescrituras: te espera para que lo revises`, "warn");
+    return;
+  }
+  const weak: string[] = crit?.issues ?? [];
   const system = `Eres el director de contenidos de canales de YouTube que se hacen virales. Revisas el borrador del guionista con ojo implacable y lo reescribes para maximizar retención, rebote y compartidos, sin perder rigor. Respetas la guía del canal (es obligatoria). Mantienes el formato JSON exacto del borrador. Responde SOLO con JSON dentro de <json></json>.`;
-  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}${VIRAL_RULES(short)}\n${weak.length ? `\nPuntos débiles detectados en una primera lectura: ${weak.join(" · ")}\n` : ""}\nCanal: ${ch.name} — ${ch.niche}. Idioma: ${ch.language}. Formato: ${short ? "Short vertical" : `vídeo largo de ~${ch.target_minutes} min`}.\nTipos de plano permitidos: ${ch.image_source === "ai" ? "ai y reframe" : ch.image_source === "stock" ? "archive, stock_photo, stock_video y reframe" : "ai, archive, stock_photo, stock_video y reframe"}.\n${v.review_feedback ? `Feedback del autor que el guion debe cumplir: ${v.review_feedback}\n` : ""}\nBORRADOR DEL GUIONISTA:\n${JSON.stringify(original)}\n\nTareas:\n1. Puntúa el borrador de 0 a 10 en potencial viral.\n2. Reescribe lo necesario (gancho, orden, frases sobrantes, planos, keywords, cierre, título, texto de miniatura). No inventes datos nuevos: usa solo los hechos del borrador y sus fuentes.\n3. Propón 3 conceptos de miniatura distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de miniatura alternativos.\nDevuelve: <json>{"review":{"score_before":0,"score_after":0,"changes":["qué has cambiado y por qué, frases cortas"],"title_options":["","",""]},"script":{...mismo formato del borrador, completo...,"thumbnail_concepts":["","",""],"thumbnail_texts":["","",""]}}</json>`;
+  const user = `${ch.style_guide ? `GUÍA DEL CANAL (obligatoria):\n${String(ch.style_guide).slice(0, 8000)}\n\n` : ""}${playbookBlock(ch)}${VIRAL_RULES(short)}\n${weak.length ? `\nFALLOS QUE HA VISTO EL CRÍTICO (arréglalos todos, uno a uno): ${weak.join(" · ")}\n` : ""}\nCanal: ${ch.name} — ${ch.niche}. Idioma: ${ch.language}. Formato: ${short ? "Short vertical" : `vídeo largo de ~${ch.target_minutes} min`}.\nTipos de plano permitidos: ${ch.image_source === "ai" ? "ai y reframe" : ch.image_source === "stock" ? "archive, stock_photo, stock_video y reframe" : "ai, archive, stock_photo, stock_video y reframe"}.\n${v.review_feedback ? `Feedback del autor que el guion debe cumplir: ${v.review_feedback}\n` : ""}\nBORRADOR DEL GUIONISTA:\n${JSON.stringify(original)}\n\nTareas:\n1. Puntúa el borrador de 0 a 10 en potencial viral.\n2. Reescribe lo necesario (gancho, orden, frases sobrantes, planos, keywords, cierre, título, texto de miniatura). No inventes datos nuevos: usa solo los hechos del borrador y sus fuentes.\n3. Propón 3 conceptos de miniatura distintos (escena en inglés, sin texto, sujeto claro con emoción fuerte, alto contraste, el sujeto en la mitad derecha y la izquierda despejada para el texto) y 3 textos de miniatura alternativos.\nDevuelve: <json>{"review":{"score_before":0,"score_after":0,"changes":["qué has cambiado y por qué, frases cortas"],"title_options":["","",""]},"script":{...mismo formato del borrador, completo...,"thumbnail_concepts":["","",""],"thumbnail_texts":["","",""]}}</json>`;
   try {
     // El director respeta la variante del experimento del vídeo (si no, desharía la prueba)
     const exArm = (ch.experiments?.active?.arms ?? []).find((a: Arm) => v.auto?.exp?.id === ch.experiments?.active?.id && a.key === v.auto?.exp?.arm);
@@ -1649,15 +1680,20 @@ async function stepDirect(job: Job) {
     // deno-lint-ignore no-explicit-any
     s.scenes = s.scenes.map((sc: any, i: number) => normalizeScene({ ...sc, n: i + 1, sfx: ch.sfx_enabled ? (sc.sfx ?? "") : "" }));
     for (const k of ["sources", "description", "tags", "music_prompt"]) if (!s[k] || (Array.isArray(s[k]) && !s[k].length)) s[k] = original[k];
-    s.director = { ...(out.review ?? {}), at: new Date().toISOString() };
-    await finish(s);
-    await log(job, `Director: guion ${out.review?.score_before ?? "?"} → ${out.review?.score_after ?? "?"}/10`);
+    // El título lo decide el empaquetado (estudio del nicho, serie, palabras obligatorias); el director solo puede proponer
+    if (original.title) { if (s.title && s.title !== original.title) s.title_suggested = s.title; s.title = original.title; }
+    s.director = { ...(out.review ?? {}), score_before: isFinite(first) ? first : crit?.score, critic_before: crit, at: new Date().toISOString() };
+    // La nueva versión se vuelve a puntuar en el siguiente paso (la nota que cuenta es la del crítico, no la del propio director)
+    await sb.from("videos").update({ script: s, title: s.title, description: s.description, tags: s.tags ?? [], sources: s.sources ?? [], stage: `Mejorando el guion (ronda ${round + 1})` }).eq("id", v.id);
+    await enqueue("direct", { video_id: v.id, payload: { round: round + 1 } });
+    await log(job, `Director: el crítico le daba ${crit?.score ?? "?"}/10; guion reescrito (ronda ${round + 1}), se vuelve a puntuar`);
     // Lo que ha tenido que corregir el director se convierte en aprendizaje para el guionista
-    if ((out.review?.changes ?? []).length) await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "director", material: `El director corrigió el guion de «${s.title}» (${out.review?.score_before}→${out.review?.score_after}/10):\n- ${out.review.changes.join("\n- ")}` } });
+    if ((out.review?.changes ?? []).length) await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "director", material: `El director corrigió el guion de «${s.title}» (crítico: ${crit?.score ?? "?"}/10):\n- ${out.review.changes.join("\n- ")}${weak.length ? `\nFallos que vio el crítico:\n- ${weak.join("\n- ")}` : ""}` } });
   } catch (e) {
-    // Si el director falla, el borrador sigue siendo válido
-    await finish(original);
-    await log(job, `El director no pudo revisar el guion (${(e as Error).message}). Queda el borrador.`, "warn");
+    if (e instanceof OverBudget) throw e;
+    // Si el director falla, la última versión sigue siendo válida
+    await finish({ ...original, director: { ...(original.director ?? {}), score_after: crit?.score ?? original.director?.score_after, critic: crit, rounds: round } });
+    await log(job, `El director no pudo revisar el guion (${(e as Error).message}). Queda la última versión (${crit?.score ?? "?"}/10).`, "warn");
   }
 }
 
@@ -2992,6 +3028,14 @@ async function planChannel(job: Job, ch: any) {
             continue;
           }
           score = Number(v.analysis.score ?? 0); if (score < minQ) why = `nota del vídeo ${score}/10 (mínimo ${minQ})`;
+          // Segunda oportunidad automática: se reescribe con lo que dijo el análisis (reaprovechando voz e imágenes que sirvan) y se vuelve a analizar
+          if (why && !v.auto?.final_retry) {
+            const a = v.analysis ?? {};
+            const fb = [a.script_feedback, ...(Array.isArray(a.issues) ? a.issues : []).filter((i: { severity?: string }) => i && i.severity !== "baja").map((i: { t?: number; problem?: string; fix?: string }) => `${i.t != null ? `(${i.t}s) ` : ""}${i.problem} → ${i.fix}`)].filter(Boolean).join("\n").slice(0, 6000);
+            await setAuto(v, { final_retry: { score, at: new Date().toISOString() }, analyze_requested: null }, { review_feedback: fb || `Sube la nota del vídeo (${score}/10): gancho, historia con protagonista y clímax, imágenes que correspondan con la voz.`, status: "scripting", stage: "Mejorando con el análisis", analysis: null });
+            await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» sacó ${score}/10 (mínimo ${minQ}); se rehace solo con lo que dijo el análisis`, "warn");
+            continue;
+          }
         }
         const pol = await policyCheck(v, ch); if (!pol.ok) why = pol.block.join(" · ");
         if (why) { await setAuto(v, { final: { held: why, at: new Date().toISOString() } }); await log({ ...J, video_id: v.id }, `Piloto automático: «${v.title}» te espera (${why})`, "warn"); continue; }
@@ -3826,6 +3870,65 @@ async function stepReschedule(job: Job) {
   if (!r.ok) { const t = (await r.text()).slice(0, 200); if (/quota/i.test(t)) throw new QuotaWait("youtube"); throw new Error(`YouTube (cambiar fecha) ${r.status}: ${t}`); }
   await sb.from("videos").update({ publish_at: at.toISOString() }).eq("id", v.id);
   await log(job, `Fecha cambiada en YouTube: «${v.title}» saldrá el ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}`);
+}
+
+// ---------- Paso: revisar las imágenes ANTES de montar (cada plano tiene que mostrar lo que dice la voz) ----------
+// Lo que no encaja (otro país, otra época, logos ajenos, gente actual en una historia antigua…) se rehace con una imagen IA hecha para esa frase.
+const VCHECK_TOOL = { name: "revisar_imagenes", description: "Qué imágenes no corresponden con la voz", input_schema: { type: "object", required: ["bad"], properties: {
+  bad: { type: "array", items: { type: "object", required: ["id", "why", "prompt"], properties: {
+    id: { type: "string" },
+    why: { type: "string", description: "Por qué no encaja, en pocas palabras" },
+    prompt: { type: "string", description: "Prompt en inglés para una imagen nueva que muestre EXACTAMENTE lo que dice la voz (lugar, época, personas, objetos), realista y documental, sin texto" } } } } } } };
+async function stepVisualCheck(job: Job) {
+  const v = await getVideo(job.video_id);
+  const ch = v.channel;
+  const round = Number(v.auto?.vcheck ?? 0);
+  const goRender = () => enqueue("render", { video_id: v.id });
+  if (round >= 2 || v.engine === "challenges") return goRender();
+  const { data: scenes } = await sb.from("scenes").select("id,n,shots").eq("video_id", v.id).order("n");
+  const thumb = (u: string) => u.includes("/storage/v1/object/public/") ? u.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/").replace(/\?.*$/, "") + "?width=512&quality=60" : u;
+  // deno-lint-ignore no-explicit-any
+  const items: { id: string; line: string; url: string; sc: any; i: number }[] = [];
+  for (const sc of scenes ?? []) (sc.shots ?? []).forEach((sh: { media_url?: string; media_kind?: string; visual_type?: string; line?: string; vfix?: number }, i: number) => {
+    if (!sh.media_url || sh.media_kind !== "image" || sh.visual_type === "reframe" || (sh.vfix ?? 0) >= 1) return;
+    items.push({ id: `${sc.n}.${i}`, line: String(sh.line ?? ""), url: thumb(sh.media_url), sc, i });
+  });
+  if (!items.length) return goRender();
+  await sb.from("videos").update({ stage: "Revisando que cada imagen encaje con la voz", progress: 78 }).eq("id", v.id);
+  // deno-lint-ignore no-explicit-any
+  const content: any[] = [{ type: "text", text: `Vídeo «${v.title ?? v.idea_title}» del canal «${ch.name}» (${ch.niche}). Para cada plano verás lo que dice la voz y la imagen que se muestra en ese momento. Marca SOLO las que un espectador vería claramente como incorrectas: otro país, otra época, otro animal u objeto, personas actuales en una historia antigua, escudos, carteles, logos o textos que no tienen nada que ver, o algo que no guarda relación con la frase. Una imagen genérica pero coherente (p. ej. un barco de la época cuando se habla de un barco) está bien.` }];
+  for (const it of items.slice(0, 30)) content.push({ type: "text", text: `[${it.id}] voz: «${it.line.slice(0, 200)}»` }, { type: "image", source: { type: "url", url: it.url } });
+  content.push({ type: "text", text: "Llama a revisar_imagenes con las que no encajan (lista vacía si todas están bien)." });
+  let bad: { id: string; why: string; prompt: string }[] = [];
+  try {
+    const r = await claudeTool(MODEL_FAST, "Revisas el montaje de vídeos documentales: compruebas que cada imagen corresponde con lo que dice la voz en ese momento. Eres riguroso con la época, el lugar y los objetos.", content, VCHECK_TOOL, 3000);
+    await bumpUsage(v.id, usageOf(r));
+    bad = Array.isArray(r.input?.bad) ? r.input.bad : [];
+  } catch (e) {
+    if (e instanceof OverBudget) throw e;
+    await log(job, `No se pudieron revisar las imágenes (${(e as Error).message}); se monta igual`, "warn");
+    return goRender();
+  }
+  const byId = new Map(items.map((x) => [x.id, x]));
+  const touched = new Map<string, { id: string; shots: unknown[] }>();
+  let n = 0;
+  for (const b of bad) {
+    const it = byId.get(String(b.id)); if (!it || !b.prompt) continue;
+    const entry = touched.get(it.sc.id) ?? { id: it.sc.id, shots: [...(it.sc.shots ?? [])] };
+    // deno-lint-ignore no-explicit-any
+    const sh: any = entry.shots[it.i];
+    entry.shots[it.i] = { ...sh, visual_type: "ai", visual_prompt: clean(b.prompt), archive_query: null, stock_query: null, media_url: null, media_kind: null, credit: null, gen: null, vfix: (sh.vfix ?? 0) + 1, vfix_why: clean(b.why) };
+    // Los acercamientos que dependían de esa imagen se recalculan
+    // deno-lint-ignore no-explicit-any
+    for (let k = it.i + 1; k < entry.shots.length && (entry.shots[k] as any).visual_type === "reframe"; k++) entry.shots[k] = { ...(entry.shots[k] as object), media_url: null };
+    touched.set(it.sc.id, entry); n++;
+  }
+  await sb.from("videos").update({ auto: { ...(v.auto ?? {}), vcheck: round + 1 } }).eq("id", v.id);
+  if (!n) { await log(job, `Imágenes revisadas: las ${items.length} encajan con la voz`); return goRender(); }
+  for (const e of touched.values()) await sb.from("scenes").update({ shots: e.shots, media_url: null, media_kind: null }).eq("id", e.id);
+  await log(job, `Imágenes revisadas: ${n} de ${items.length} no encajaban con la voz y se rehacen (${bad.slice(0, 3).map((b) => b.why).join("; ")})`, "warn");
+  await sb.from("videos").update({ stage: "Rehaciendo las imágenes que no encajaban", progress: 60 }).eq("id", v.id);
+  await enqueue("visuals", { video_id: v.id });
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

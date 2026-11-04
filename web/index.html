@@ -209,7 +209,8 @@ video{width:100%;border-radius:10px;background:#000;max-height:60vh}
   .app{grid-template-columns:1fr}
   .rail{position:fixed;top:auto;bottom:0;left:0;right:0;height:auto;flex-direction:row;justify-content:space-around;padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));border-right:0;border-top:1px solid var(--line);z-index:30}
   .brand,.rail .foot{display:none}
-  .nav{flex-direction:column;gap:2px;font-size:10.5px;padding:6px 4px;position:relative}
+  .nav{flex-direction:column;gap:2px;font-size:10.5px;padding:6px 4px;position:relative;flex:none;min-width:52px}
+  .rail{overflow-x:auto;justify-content:flex-start!important;gap:2px;scrollbar-width:none}
   .nav .n{position:absolute;top:0;right:2px;font-size:10px;padding:0 5px}
   .flow{grid-template-columns:repeat(3,1fr)}
   .flow div:nth-child(3){border-right:0}
@@ -301,6 +302,7 @@ const KEY_INFO = {
   PEXELS_API_KEY:["Pexels","Fotos y vídeo de stock gratis","https://www.pexels.com/api/", false],
   PIXABAY_API_KEY:["Pixabay","Fotos y vídeo de stock gratis (alternativa a Pexels)","https://pixabay.com/api/docs/", false],
   YOUTUBE_API_KEY:["YouTube Data API","Análisis de vídeos y nichos","https://console.cloud.google.com/apis/credentials", false],
+  YOUTUBE_RESEARCH_API_KEY:["YouTube (solo Explorar)","Opcional: clave de OTRO proyecto de Google Cloud para que Explorar no gaste la cuota de las subidas","https://console.cloud.google.com/apis/credentials", false],
   GOOGLE_CLIENT_ID:["Google OAuth · Client ID","Publicar en YouTube","https://console.cloud.google.com/apis/credentials", false],
   GOOGLE_CLIENT_SECRET:["Google OAuth · Client secret","Publicar en YouTube","https://console.cloud.google.com/apis/credentials", false],
   FISH_AUDIO_API_KEY:["Fish Audio","Voz en off alternativa (s2-pro), más barata","https://fish.audio/app/api-keys/", false],
@@ -317,6 +319,7 @@ const STATUS = {
 const ICON = {
   hoy:'<path d="M4 13h4l2 3h4l2-3h4M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>',
   informes:'<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>',
+  explorar:'<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6M11 8v6"/>',
   comentarios:'<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/><path d="M9 11h6M9 14h4"/>',
   canales:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
   dinero:'<circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.6-1-1.7-1.5-3-1.5-1.7 0-3 .9-3 2.2 0 3 6 1.6 6 4.6 0 1.3-1.3 2.2-3 2.2-1.4 0-2.6-.6-3.1-1.6M12 6v2M12 16v2"/>',
@@ -472,7 +475,7 @@ async function run(fn, ok){
 
 // ---------- datos ----------
 async function load(){
-  const [c,v,p,a,k,pr,j,rp,cm] = await Promise.all([
+  const [c,v,p,a,k,pr,j,rp,cm,xc,xs] = await Promise.all([
     sb.from("channels").select("*").neq("status","archived").order("created_at"),
     sb.from("videos").select("id,channel_id,status,stage,progress,auto,derived,parent_id,idea_title,idea_angle,idea_reason,idea_evidence,idea_kind,idea_stories,idea_hook,format,target_minutes,title,thumbnail_url,video_url,duration_sec,youtube_video_id,publish_at,published_at,error,created_at,updated_at,usage,engine,revenue,stats").neq("status","idea_rejected").order("created_at",{ascending:false}).limit(400),
     sb.from("schedule_research").select("lang,data,updated_at"), // estudio global de horarios (por idioma)
@@ -482,8 +485,10 @@ async function load(){
     sb.from("jobs").select("id,step,status,channel_id,video_id,run_after,payload").in("status",["queued","running"]),
     sb.from("channel_reports").select("*").order("day",{ascending:false}).limit(60),
     sb.from("yt_comments").select("*").in("status",["pending","hide"]).order("published_at",{ascending:false}).limit(200),
+    sb.from("ext_channels").select("*").order("analyzed_at",{ascending:false}).limit(60),
+    sb.from("ext_searches").select("*").order("created_at",{ascending:false}).limit(4),
   ]);
-  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[]; S.comments=cm.data||[];
+  S.channels=c.data||[]; S.videos=v.data||[]; S.proposals=[]; S.research=p.data||[]; S.activity=a.data||[]; S.keys=k.data||[]; S.prices=pr.data||null; S.jobs=j.data||[]; S.reports=rp.data||[]; S.comments=cm.data||[]; S.ext=xc.data||[]; S.extSearch=xs.data||[];
   render();
 }
 let reloadT; const reload = () => { clearTimeout(reloadT); reloadT=setTimeout(load,400); };
@@ -494,7 +499,7 @@ function render(){
   const reviewCount = S.videos.filter(v=>["idea_review","script_review","final_review"].includes(v.status)).length;
   const missing = S.keys.filter(k=>!k.is_set && KEY_INFO[k.name]?.[3]).length;
   const unread = (S.reports||[]).filter(r=>!r.read_at).length;
-  const views = {hoy:["Revisar",reviewCount],comentarios:["Comentarios",(S.comments||[]).length],informes:["Informes",unread],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
+  const views = {hoy:["Revisar",reviewCount],comentarios:["Comentarios",(S.comments||[]).length],explorar:["Explorar",0],informes:["Informes",unread],dinero:["Dinero",0],canales:["Canales",0],ajustes:["Ajustes",missing]};
   const scrollY = window.scrollY;
   $("#root").innerHTML = `<div class="app">
     <nav class="rail">
@@ -502,7 +507,7 @@ function render(){
       ${Object.entries(views).map(([k,[l,n]])=>`<a class="nav ${S.view===k?"on":""}" href="#${k}">${icon(k)}<span>${l}</span>${n?`<span class="n">${n}</span>`:""}</a>`).join("")}
       <div class="foot">${esc(S.session.user.email)}</div>
     </nav>
-    <main><div class="wrap">${ ({hoy:viewHoy,comentarios:viewComentarios,informes:viewInformes,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
+    <main><div class="wrap">${ ({hoy:viewHoy,comentarios:viewComentarios,explorar:viewExplorar,informes:viewInformes,dinero:viewDinero,canales:viewCanales,ajustes:viewAjustes}[S.view]||viewHoy)() }</div></main>
   </div>`;
   window.scrollTo(0, scrollY);
   if(S.open) renderSheet();
@@ -795,6 +800,65 @@ function cmReply(id){
 }
 async function cmDone(id,status){ await run(async()=>{ const { error } = await sb.from("yt_comments").update({status,updated_at:new Date().toISOString()}).eq("id",id); if(error) throw error; S.comments=(S.comments||[]).filter(x=>x.id!==id); render(); }); }
 async function cmFetch(){ await run(async()=>{ const { error } = await sb.from("jobs").insert({ step:"comments", payload:{} }); if(error) throw error; kick(); setTimeout(load,45000); },"Leyendo comentarios… en un minuto aparecen"); }
+// --- Vista: Explorar (analizar canales de otros, encontrar canales en auge en cualquier idioma y adaptarlos al español)
+const EX_LANGS=[["","Cualquier idioma"],["es","Español"],["en","Inglés"],["pt","Portugués"],["zh","Chino"],["ja","Japonés"],["ko","Coreano"],["de","Alemán"],["fr","Francés"],["it","Italiano"],["hi","Hindi"],["ar","Árabe"],["ru","Ruso"]];
+const nK=(x)=>{ x=Number(x)||0; return x>=1e6?(x/1e6).toFixed(x>=1e7?0:1).replace(".",",")+" M":x>=1e3?(x/1e3).toFixed(x>=1e4?0:1).replace(".",",")+" k":String(Math.round(x)); };
+function viewExplorar(){
+  const xs=S.ext||[], open=xs.find(x=>x.id===S.exOpen);
+  const busyJob=(step)=>(S.jobs||[]).some(j=>j.step===step&&["queued","running"].includes(j.status));
+  const chCard=(x)=>{ const d=x.data||{}; return `<button class="card click" style="text-align:left;padding:12px 14px" onclick="S.exOpen='${esc(x.id)}';render();window.scrollTo(0,0)">
+      <div class="row" style="gap:10px;align-items:center">${x.thumb?`<img src="${esc(x.thumb)}" alt="" style="width:40px;height:40px;border-radius:50%">`:""}<div style="min-width:0;flex:1"><b>${esc(x.title||x.id)}</b>${x.watched?` <span class="chip st-acc">Siguiendo</span>`:""}<div class="muted" style="font-size:12.5px">${nK(d.subs)} suscriptores · ${nK(d.month_views)} visitas/mes · ${esc((EX_LANGS.find(l=>l[0]===x.lang)||[,x.lang||"?"])[1])}</div></div></div></button>`; };
+  const search=(S.extSearch||[]).map(q=>`<section class="card" style="padding:12px 14px"><div class="row" style="justify-content:space-between"><b>«${esc(q.q)}» · ${esc((EX_LANGS.find(l=>l[0]===(q.lang||""))||[,""])[1])} · ${q.period_days} días</b><span class="chip ${q.status==="done"?"st-ok":q.status==="failed"?"st-bad":""}">${q.status==="done"?`${(q.results||[]).length} canales`:q.status==="failed"?"Error":"Buscando…"}</span></div>
+      ${q.error?`<div class="muted" style="font-size:13px">${esc(q.error)}</div>`:""}
+      ${(q.results||[]).length?`<div class="ilist" style="margin-top:8px">${q.results.slice(0,15).map(r=>`<div class="irow" style="gap:10px;align-items:center">${r.thumb?`<img src="${esc(r.thumb)}" alt="" style="width:30px;height:30px;border-radius:50%">`:""}<span style="flex:1;min-width:0"><b>${esc(r.title)}</b>${r.young?` <span class="chip st-acc">Canal nuevo</span>`:""}${r.ratio>=2?` <span class="chip st-ok" title="Visitas de su mejor vídeo frente a sus suscriptores">×${String(r.ratio).replace(".",",")}</span>`:""}<br><span class="muted" style="font-size:12.5px">${nK(r.subs)} suscr. · mejor vídeo: <a href="https://youtu.be/${esc(r.top?.id)}" target="_blank" rel="noopener">${esc(String(r.top?.title||"").slice(0,70))}</a> (${nK(r.top?.views)}${r.top?.short?", Short":""})</span></span><button class="btn sm" onclick="exAnalyze('${esc(r.id)}')">Analizar</button></div>`).join("")}</div>`:""}</section>`).join("");
+  const detail=open?exDetail(open):"";
+  return `<div class="head"><div><h1>Explorar</h1><p>Analiza cualquier canal de YouTube (visitas, suscriptores, ingresos estimados y sus vídeos que más funcionan), encuentra canales que están creciendo en cualquier idioma y llévalos al español.</p></div></div>
+    ${detail}
+    <div class="fgrid">
+      <section class="card" style="padding:14px"><div class="label">Analizar un canal</div>
+        <label class="f">Enlace del canal o de un vídeo<input id="ex-q" placeholder="https://youtube.com/@canal"></label>
+        <div class="row"><button class="btn pri" ${busyJob("explore")?"disabled":""} onclick="exAnalyze()">${busyJob("explore")?"Analizando…":"Analizar"}</button><label class="check"><input type="checkbox" id="ex-w"> Seguirlo cada día</label></div></section>
+      <section class="card" style="padding:14px"><div class="label">Buscar canales en auge</div>
+        <label class="f">Tema<input id="ex-t" placeholder="history, curiosidades, war stories…"></label>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <select id="ex-l">${EX_LANGS.map(([k,l])=>`<option value="${k}">${l}</option>`).join("")}</select>
+          <select id="ex-p"><option value="7">Últimos 7 días</option><option value="30" selected>Últimos 30 días</option><option value="90">Últimos 90 días</option></select>
+          <select id="ex-d"><option value="">Todos los formatos</option><option value="short">Cortos (&lt;4 min)</option><option value="medium">Medios (4–20 min)</option><option value="long">Largos (&gt;20 min)</option></select>
+          <button class="btn pri" onclick="exSearch()">Buscar</button></div>
+        <div class="muted" style="font-size:12px;margin-top:6px">Cada búsqueda gasta 100 unidades de cuota de YouTube (analizar un canal, unas 3). Con una clave propia para Explorar en Ajustes no se toca la cuota de las subidas.</div></section>
+    </div>
+    ${search?`<div class="label" style="margin:16px 0 8px">Búsquedas</div><div class="list" style="gap:10px">${search}</div>`:""}
+    <div class="label" style="margin:16px 0 8px">Canales analizados</div>
+    ${xs.length?`<div class="grid">${[...xs].sort((a,b)=>Number(b.watched)-Number(a.watched)).map(chCard).join("")}</div>`:`<div class="card"><p class="muted" style="margin:0">Aún no has analizado ningún canal.</p></div>`}`;
+}
+function exDetail(x){
+  const d=x.data||{}, a=x.adapt;
+  const tile=(l,b,s2)=>`<div class="tile"><span>${l}</span><b>${b}</b>${s2?`<span>${s2}</span>`:""}</div>`;
+  const vrow=(v)=>`<div class="irow" style="gap:10px;align-items:center">${v.thumb?`<img src="${esc(v.thumb)}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:4px">`:""}<span style="flex:1;min-width:0"><a href="https://youtu.be/${esc(v.id)}" target="_blank" rel="noopener">${esc(v.title)}</a><br><span class="muted" style="font-size:12.5px">${nK(v.views)} visitas · ${nK(v.vpd)}/día · ${v.short?"Short":Math.round(v.dur/60)+" min"} · hace ${Math.round(v.age)} d</span></span>${v.x>=3?`<span class="chip st-ok" title="Veces la mediana del canal">×${String(v.x).replace(".",",")}</span>`:""}</div>`;
+  return `<section class="card" style="padding:16px;margin-bottom:16px;border-color:var(--accent)">
+    <div class="row" style="justify-content:space-between;align-items:center;gap:10px"><div class="row" style="gap:10px;align-items:center">${x.thumb?`<img src="${esc(x.thumb)}" alt="" style="width:48px;height:48px;border-radius:50%">`:""}<div><h2 style="margin:0">${esc(x.title)}</h2><a class="muted" style="font-size:13px" href="https://youtube.com/channel/${esc(x.id)}" target="_blank" rel="noopener">${esc(x.handle||x.id)}</a></div></div>
+      <div class="row" style="gap:6px"><button class="btn sm" onclick="exWatch('${esc(x.id)}',${!x.watched})">${x.watched?"Dejar de seguir":"Seguir cada día"}</button><button class="btn sm" onclick="exAnalyze('${esc(x.id)}')">Actualizar</button><button class="btn sm ghost" onclick="S.exOpen=null;render()">Cerrar</button></div></div>
+    <div class="tiles" style="margin-top:12px">${tile("Suscriptores",nK(d.subs),d.subs_per_day!=null?`${d.subs_per_day>=0?"+":""}${String(d.subs_per_day).replace(".",",")}/día`:"")}${tile("Visitas totales",nK(d.total_views),`${nK(d.videos)} vídeos`)}${tile("Visitas al mes",nK(d.month_views),esc(d.month_how||""))}${tile("Ingresos/mes (estimado)",d.monetizable?`${nK(d.revenue_month_eur?.[0])}–${nK(d.revenue_month_eur?.[1])} €`:"No monetiza",d.monetizable?"según idioma y formato":"menos de 1.000 suscr.")}${tile("Ritmo",`${String(d.per_week).replace(".",",")}/semana`,`${d.short_share} % Shorts`)}${tile("Creado",d.created?new Date(d.created).toLocaleDateString("es-ES",{month:"short",year:"numeric"}):"?",`${esc(d.country||"")} ${esc((EX_LANGS.find(l=>l[0]===x.lang)||[,x.lang||""])[1])}`)}</div>
+    <div class="muted" style="font-size:12px;margin:6px 0 10px">Media por vídeo: Shorts ${nK(d.avg_short)} · largos ${nK(d.avg_long)} · mediana ${nK(d.median_views)}. Los ingresos son una estimación (YouTube no los publica): visitas del mes × lo que suele pagar ese idioma y formato.</div>
+    <div class="fgrid"><div><div class="label">Sus vídeos más vistos</div><div class="ilist">${(d.top||[]).slice(0,8).map(vrow).join("")}</div></div>
+      <div><div class="label">Últimos vídeos</div><div class="ilist">${(d.recent||[]).slice(0,8).map(vrow).join("")}</div></div></div>
+    <div class="label" style="margin-top:14px">Adaptarlo al español</div>
+    ${a?`<div class="card" style="padding:12px 14px"><p style="margin:0 0 6px">${esc(a.resumen||"")}</p>
+      <div class="row" style="margin-bottom:6px"><span class="chip ${a.encaja==="sí"?"st-ok":a.encaja==="no"?"st-bad":"st-warn"}">Encaja con nuestro sistema: ${esc(a.encaja||"?")}</span><span class="muted" style="font-size:13px">${esc(a.motivo_encaje||"")}</span></div>
+      ${(a.por_que_funciona||[]).length?`<b style="font-size:13.5px">Por qué funciona</b><ul style="margin:4px 0 8px;padding-left:18px">${a.por_que_funciona.map(t=>`<li>${esc(t)}</li>`).join("")}</ul>`:""}
+      ${a.concepto?`<b style="font-size:13.5px">Propuesta: ${esc(a.concepto.nombre||"")}</b><div style="font-size:13.5px">${esc(a.concepto.nicho||"")} · ${esc(a.concepto.formato||"")}<br><span class="muted">${esc(a.concepto.diferencia||"")}</span></div>`:""}
+      ${(a.ideas||[]).length?`<b style="font-size:13.5px;display:block;margin-top:8px">Ideas de vídeo</b><ol style="margin:4px 0 0;padding-left:20px">${a.ideas.map(i=>`<li><b>${esc(i.titulo)}</b> — <span class="muted">${esc(i.angulo)}</span></li>`).join("")}</ol>`:""}
+      ${(a.riesgos||[]).length?`<div class="muted" style="font-size:13px;margin-top:8px">Riesgos: ${a.riesgos.map(esc).join(" · ")}</div>`:""}</div>`
+      :`<button class="btn pri" ${(S.jobs||[]).some(j=>j.step==="explore_adapt"&&["queued","running"].includes(j.status))?"disabled":""} onclick="exAdapt('${esc(x.id)}')">Proponer cómo hacerlo en español</button> <span class="muted" style="font-size:12.5px">La IA estudia sus vídeos y propone un canal o vídeos propios (≈3 céntimos).</span>`}
+  </section>`;
+}
+async function exAnalyze(id){ const q=id?null:($("#ex-q")?.value||"").trim(); if(!id&&!q) return toast("Pega el enlace de un canal"); const watch=!id&&$("#ex-w")?.checked;
+  await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"explore",payload:id?{channel_id:id}:{q,watch}}); if(error) throw error; if(id) S.exOpen=id; kick(); setTimeout(load,15000); setTimeout(load,35000); },"Analizando el canal… en unos segundos aparece aquí"); }
+async function exSearch(){ const q=($("#ex-t")?.value||"").trim(); if(!q) return toast("Escribe un tema");
+  await run(async()=>{ const {data,error}=await sb.from("ext_searches").insert({q,lang:$("#ex-l").value||null,period_days:Number($("#ex-p").value)}).select("id").single(); if(error) throw error;
+    const {error:e2}=await sb.from("jobs").insert({step:"explore_search",payload:{search_id:data.id,duration:$("#ex-d").value||undefined}}); if(e2) throw e2; kick(); setTimeout(load,15000); setTimeout(load,35000); },"Buscando canales en auge…"); }
+async function exAdapt(id){ await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"explore_adapt",payload:{channel_id:id}}); if(error) throw error; kick(); setTimeout(load,30000); setTimeout(load,60000); },"La IA está estudiando el canal (1 minuto)"); }
+async function exWatch(id,on){ await run(async()=>{ const {error}=await sb.from("ext_channels").update({watched:on}).eq("id",id); if(error) throw error; const x=(S.ext||[]).find(e=>e.id===id); if(x) x.watched=on; render(); },on?"Lo seguirás cada día: su crecimiento real aparecerá en unos días":"Dejado de seguir"); }
 // --- Vista: Informes (cada mañana la IA de cada canal analiza los resultados y decide las mejoras)
 const AREA_TXT={guion:"Guion",ideas:"Ideas",titulos:"Títulos",ritmo:"Ritmo",retos:"Retos",calendario:"Calendario",produccion:"Producción",errores:"Error aprendido"};
 function viewInformes(){
@@ -1528,14 +1592,14 @@ async function saveKey(name){
 async function copyText(t){ try{ await navigator.clipboard.writeText(t); toast("Copiado"); }catch(e){ const r=document.createRange(); r.selectNodeContents($("#ruri")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selecciónalo y cópialo"); } }
 
 // ---------- arranque ----------
-function route(){ const h=location.hash.slice(1); S.view=["hoy","comentarios","informes","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
+function route(){ const h=location.hash.slice(1); S.view=["hoy","comentarios","explorar","informes","dinero","canales","ajustes"].includes(h)?h:"hoy"; closeSheet(); render(); }
 window.addEventListener("hashchange", route);
 
 let channel;
 sb.auth.onAuthStateChange((_e, session)=>{
   const was=!!S.session; S.session=session;
   if(session && !was){
-    const h=location.hash.slice(1); S.view=["hoy","comentarios","informes","dinero","canales","ajustes"].includes(h)?h:"hoy";
+    const h=location.hash.slice(1); S.view=["hoy","comentarios","explorar","informes","dinero","canales","ajustes"].includes(h)?h:"hoy";
     load();
     channel = sb.channel("live").on("postgres_changes",{event:"*",schema:"public",table:"videos"},reload)
       .on("postgres_changes",{event:"*",schema:"public",table:"jobs"},reload)

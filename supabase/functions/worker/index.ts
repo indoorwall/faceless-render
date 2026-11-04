@@ -1749,6 +1749,11 @@ async function stepAnalyze(job: Job) {
 }
 // deno-lint-ignore no-explicit-any
 async function finishAnalysis(job: Job, v: any, ch: any, r: any, meta: { frames?: number; duration?: number }) {
+  // A veces la IA devuelve una lista como texto roto: se intenta leer y, si no, se deja vacía (si no, la app no puede abrir el vídeo)
+  for (const [k, sch] of Object.entries((ANALYSIS_TOOL.input_schema as { properties: Record<string, { type?: string }> }).properties ?? {})) {
+    if (sch?.type !== "array" || r.input?.[k] == null || Array.isArray(r.input[k])) continue;
+    try { const x = JSON.parse(String(r.input[k])); r.input[k] = Array.isArray(x) ? x : []; } catch { r.input[k] = []; }
+  }
   await bumpUsage(v.id, { ...usageOf(r), analyses: 1 }, { analysis: { ...r.input, status: "done", video_url: v.video_url, frames: meta.frames ?? null, duration: meta.duration ?? null, analyzed_at: new Date().toISOString() } });
   await log(job, `Análisis de «${v.title}»: ${r.input.score}/10, potencial ${r.input.viral_potential}`);
   if (ch.autopilot === "auto") await kickPlanner(ch.id, 5);

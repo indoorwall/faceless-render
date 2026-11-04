@@ -879,6 +879,9 @@ async function rescheduleVideo(id){
     const v=S.videos.find(x=>x.id===id); if(v) v.publish_at=at.toISOString(); if(S.open?.v?.id===id) S.open.v.publish_at=at.toISOString();
     kick(); setTimeout(load,25000); render(); },"Cambiando la fecha…");
 }
+// Lista de problemas del análisis, aunque venga mal formada
+const arr=(x)=>Array.isArray(x)?x:[];
+const iss=(a)=>Array.isArray(a?.issues)?a.issues.filter(i=>i&&typeof i==="object"):[];
 function sheetShell(title, sub, body, foot){
   const el=$("#sheet");
   el.innerHTML = `<div class="sheet-h"><div style="min-width:0"><div class="row">${sub}</div><h2 style="margin-top:6px">${esc(title)}</h2></div><button class="btn ghost" onclick="closeSheet()" aria-label="Cerrar">✕</button></div>
@@ -976,7 +979,7 @@ function renderSheet(first){
     foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
   } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
     body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
-      <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>
+      <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>${v.status==="publishing"?resched(v):""}
       ${(()=>{ const urls=[...new Set(o.scenes.flatMap(sc=>(sc.shots||[]).filter(sh=>sh.media_url&&sh.media_kind==="image").map(sh=>sh.media_url).concat(sc.media_url&&sc.media_kind==="image"?[sc.media_url]:[])))]; return urls.length?`<div class="thumbs">${urls.map(u=>`<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div>`:""; })()}`;
   } else if(v.status==="failed"){
     body=`<div class="card" style="border-color:var(--bad)"><div class="label" style="color:var(--bad)">Qué ha fallado</div><div class="mono" style="word-break:break-word">${esc(v.error)}</div></div>`;
@@ -1088,10 +1091,10 @@ function analysisBlock(v){
     <div class="an-top"><div class="an-score" style="color:${scoreColor(a.score)}">${Number(a.score).toFixed(1).replace(".0","")}<small>de 10</small></div>
       <div style="min-width:0"><div class="label">Análisis viral · potencial ${esc(a.viral_potential)}</div><div style="margin-top:4px">${esc(a.verdict)}</div></div></div>
     <div class="bars">${Object.keys(AREAS).filter(k=>sc[k]!=null).map(k=>`<span>${AREAS[k]}</span><b><i style="width:${sc[k]*10}%;background:${scoreColor(sc[k])}"></i></b><span class="mono">${sc[k]}</span>`).join("")}</div>
-    ${(a.issues||[]).length?`<div><div class="label">Qué cambiar</div>${a.issues.map(i=>`<div class="issue">${i.t!=null?`<button class="t" onclick="seek(${Number(i.t)})">${Number(i.t).toFixed(1)}s</button>`:`<span></span>`}<div><b class="sev-${esc(i.severity)}">${AREAS[i.area]||esc(i.area)}</b> · ${esc(i.problem)}</div><div class="fix">→ ${esc(i.fix)}</div></div>`).join("")}</div>`:""}
-    ${(a.strengths||[]).length?`<div><div class="label">Lo que funciona</div><ul style="margin:4px 0 0;padding-left:18px;font-size:13.5px">${a.strengths.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
-    ${(a.hook_options||[]).length?`<div><div class="label">Ganchos alternativos <small class="muted">(toca uno para usarlo al rehacer)</small></div><div class="opts" id="hooks">${a.hook_options.map((h,i)=>`<button type="button" data-h="${i}" onclick="pickHook(this)">${esc(h)}</button>`).join("")}</div></div>`:""}
-    ${(a.title_options||[]).length?`<div><div class="label">Títulos alternativos <small class="muted">(toca para usarlo)</small></div><div class="opts">${a.title_options.map(t=>`<button type="button" onclick="$('#f-title').value=this.textContent;toast('Título cambiado')">${esc(t)}</button>`).join("")}</div></div>`:""}
+    ${iss(a).length?`<div><div class="label">Qué cambiar</div>${iss(a).map(i=>`<div class="issue">${i.t!=null?`<button class="t" onclick="seek(${Number(i.t)})">${Number(i.t).toFixed(1)}s</button>`:`<span></span>`}<div><b class="sev-${esc(i.severity)}">${AREAS[i.area]||esc(i.area)}</b> · ${esc(i.problem)}</div><div class="fix">→ ${esc(i.fix)}</div></div>`).join("")}</div>`:""}
+    ${arr(a.strengths).length?`<div><div class="label">Lo que funciona</div><ul style="margin:4px 0 0;padding-left:18px;font-size:13.5px">${arr(a.strengths).map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
+    ${arr(a.hook_options).length?`<div><div class="label">Ganchos alternativos <small class="muted">(toca uno para usarlo al rehacer)</small></div><div class="opts" id="hooks">${arr(a.hook_options).map((h,i)=>`<button type="button" data-h="${i}" onclick="pickHook(this)">${esc(h)}</button>`).join("")}</div></div>`:""}
+    ${arr(a.title_options).length?`<div><div class="label">Títulos alternativos <small class="muted">(toca para usarlo)</small></div><div class="opts">${arr(a.title_options).map(t=>`<button type="button" onclick="$('#f-title').value=this.textContent;toast('Título cambiado')">${esc(t)}</button>`).join("")}</div></div>`:""}
     <div class="row" style="flex-wrap:wrap;gap:8px"><button class="btn pri" onclick="applyAnalysis()">Aplicar y rehacer el vídeo</button><button class="btn" onclick="analysisToGuide()">Añadir lo aprendido a la guía</button>${a.video_url===v.video_url?"":`<button class="btn ghost" onclick="analyzeVideo()">Analizar otra vez</button>`}</div>
   </div>`;
 }
@@ -1106,13 +1109,13 @@ async function analyzeVideo(){
 async function applyAnalysis(){
   const v=S.open.v, a=v.analysis||{};
   const extra=$("#f-fb")?.value.trim();
-  const fb=[a.script_feedback, HOOK?`Usa exactamente este gancho como primera frase: «${HOOK}»`:"", ...(a.issues||[]).filter(i=>i.severity!=="baja").map(i=>`${i.t!=null?`(${i.t}s) `:""}${i.problem} → ${i.fix}`), extra].filter(Boolean).join("\n");
+  const fb=[a.script_feedback, HOOK?`Usa exactamente este gancho como primera frase: «${HOOK}»`:"", ...iss(a).filter(i=>i.severity!=="baja").map(i=>`${i.t!=null?`(${i.t}s) `:""}${i.problem} → ${i.fix}`), extra].filter(Boolean).join("\n");
   HOOK=null;
   await run(async()=>{ const {error}=await sb.from("videos").update({review_feedback:fb.slice(0,6000),status:"scripting"}).eq("id",v.id); if(error) throw error; await kick(); closeSheet(); }, "Reescribiendo el guion con el análisis…");
 }
 async function analysisToGuide(){
   const v=S.open.v, a=v.analysis||{};
-  const fb=`Análisis del vídeo «${v.title}» (${a.score}/10, potencial ${a.viral_potential}).\n${a.verdict}\nReglas para todos los vídeos:\n${(a.guide_rules||[]).map(r=>"- "+r).join("\n")}\nProblemas detectados:\n${(a.issues||[]).map(i=>`- ${AREAS[i.area]||i.area}: ${i.problem} → ${i.fix}`).join("\n")}\nLo que funciona:\n${(a.strengths||[]).map(x=>"- "+x).join("\n")}`;
+  const fb=`Análisis del vídeo «${v.title}» (${a.score}/10, potencial ${a.viral_potential}).\n${a.verdict}\nReglas para todos los vídeos:\n${arr(a.guide_rules).map(r=>"- "+r).join("\n")}\nProblemas detectados:\n${iss(a).map(i=>`- ${AREAS[i.area]||i.area}: ${i.problem} → ${i.fix}`).join("\n")}\nLo que funciona:\n${arr(a.strengths).map(x=>"- "+x).join("\n")}`;
   await run(async()=>{ const {error}=await sb.from("jobs").insert({step:"guide",channel_id:v.channel_id,payload:{feedback:fb}}); if(error) throw error; await kick(); }, "Actualizando la guía del canal…");
 }
 function thumbBlock(v,c){

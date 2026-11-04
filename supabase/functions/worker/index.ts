@@ -1642,7 +1642,8 @@ async function stepDirect(job: Job) {
   const finish = async (script: unknown, extra: Record<string, unknown> = {}) => {
     // deno-lint-ignore no-explicit-any
     const sc = script as any;
-    await sb.from("videos").update({ script: sc, title: sc.title, description: sc.description, tags: sc.tags ?? [], sources: sc.sources ?? [], status: "script_review", stage: null, progress: 0, ...extra }).eq("id", v.id);
+    // Nota nueva: el piloto automático lo vuelve a evaluar aunque antes lo hubiera dejado esperando
+    await sb.from("videos").update({ script: sc, title: sc.title, description: sc.description, tags: sc.tags ?? [], sources: sc.sources ?? [], status: "script_review", stage: null, progress: 0, auto: { ...(v.auto ?? {}), script: null }, ...extra }).eq("id", v.id);
     if (ch.autopilot !== "manual") await kickPlanner(ch.id, 5);
   };
   if (!original?.scenes?.length) throw new UserError("No hay guion que revisar");

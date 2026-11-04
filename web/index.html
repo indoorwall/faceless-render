@@ -858,6 +858,42 @@ async function openVideo(id){
   S.open = { kind:"video", v:data, scenes, draft: data.script ? JSON.parse(JSON.stringify(data.script)) : null };
   renderSheet(true);
 }
+// Vídeos por día del canal (para repartir mejor), de hoy a 7 días
+function dayCounts(v){
+  const days=[...Array(8)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+i); return d; });
+  const mine=S.videos.filter(x=>x.channel_id===v.channel_id&&x.id!==v.id&&["scheduled","publishing"].includes(x.status)&&x.publish_at);
+  return `<div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${days.map(d=>{ const n=mine.filter(x=>{ const t=new Date(x.publish_at); return t>=d&&t<new Date(d.getTime()+864e5); }).length; return `<span class="chip ${n>=3?"st-warn":""}" title="Otros vídeos de este canal ese día">${d.toLocaleDateString("es-ES",{weekday:"short",day:"numeric"})}: ${n}</span>`; }).join("")}</div>`;
+}
+// Subida manual: tú lo subes a YouTube (sin gastar cuota) y aquí queda reservado su día y hora
+function showManual(){
+  const v=S.open?.v; if(!v) return;
+  const loc=(d)=>new Date(new Date(d).getTime()-new Date(d).getTimezoneOffset()*6e4).toISOString().slice(0,16);
+  const def=v.publish_at&&new Date(v.publish_at)>Date.now()?v.publish_at:new Date(Date.now()+864e5).setHours(12,30,0,0);
+  const el=document.createElement("div");
+  el.className="card"; el.id="manual-card"; el.style.cssText="padding:12px 14px;margin:0 0 12px;border-color:var(--accent)";
+  el.innerHTML=`<div class="label" style="margin-bottom:6px">Lo subo yo a YouTube</div>
+    <p class="muted" style="margin:0 0 8px;font-size:13px">Descarga el vídeo y la miniatura, súbelo en YouTube Studio y prográmalo para el día y la hora de abajo. Aquí quedará reservado ese hueco: los vídeos automáticos no se pondrán encima y no se gasta cuota.</p>
+    ${dlBlock(v)}
+    <label class="f" style="margin-top:8px">Día y hora en que lo publicas<input type="datetime-local" id="mu-at" value="${loc(def)}"></label>
+    <label class="f">Enlace del vídeo en YouTube <small>Opcional, puedes ponerlo después: con él llegan sus analíticas</small><input type="url" id="mu-yt" placeholder="https://youtube.com/shorts/…"></label>
+    ${dayCounts(v)}
+    <div class="row" style="margin-top:10px;gap:8px"><button class="btn pri" onclick="saveManual()">Guardar</button><button class="btn ghost" onclick="document.getElementById('manual-card').remove()">Cancelar</button></div>`;
+  const b=$("#sheet .sheet-b"); $("#manual-card")?.remove(); b.prepend(el); b.scrollTop=0;
+}
+async function saveManual(){
+  const v=S.open.v; const val=$("#mu-at")?.value; if(!val) return toast("Elige el día y la hora");
+  const at=new Date(val); const raw=($("#mu-yt")?.value||"").trim();
+  const m=raw?(raw.match(/(?:youtu\.be\/|v=|shorts\/|live\/|embed\/|video\/)([\w-]{11})/)||raw.match(/^([\w-]{11})$/)):null;
+  if(raw&&!m) return toast("No reconozco ese enlace de YouTube");
+  const patch={ status: at>Date.now()?"scheduled":"published", stage:null, publish_at:at.toISOString(), published_at:at.toISOString(), auto:{...(v.auto||{}), manual_upload:{at:new Date().toISOString()}}, ...(m?{youtube_video_id:m[1]}:{}) };
+  if($("#f-title")) Object.assign(patch,{ title:$("#f-title").value.trim()||v.title, description:$("#f-desc")?.value??v.description, tags:($("#f-tags")?.value??"").split(",").map(t=>t.trim()).filter(Boolean) });
+  await run(async()=>{
+    const {error}=await sb.from("videos").update(patch).eq("id",v.id); if(error) throw error;
+    // Si estaba esperando para subirse solo, se cancela esa subida
+    await sb.from("jobs").update({status:"done",error:"Subido a mano"}).eq("video_id",v.id).in("step",["publish","reschedule"]).eq("status","queued");
+    closeSheet(); load();
+  },`Guardado: ${whenTxt(at)} queda reservado para este vídeo`);
+}
 // Cambiar el día de un vídeo programado (si ya está en YouTube, también se cambia allí)
 function resched(v){
   if(!["scheduled","publishing","final_review"].includes(v.status) || !v.publish_at || new Date(v.publish_at)<=Date.now()) return "";
@@ -873,7 +909,7 @@ function resched(v){
     <div class="label" style="margin-bottom:6px">Cambiar el día</div>${pendTxt}
     <div class="row" style="gap:8px;flex-wrap:wrap"><input type="datetime-local" id="rs-at" value="${loc(v.publish_at)}" style="font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)"><button class="btn pri" onclick="rescheduleVideo('${v.id}')">Guardar fecha</button></div>
     <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${cnt.map(({d,n})=>`<span class="chip ${n>=3?"st-warn":""}" title="Vídeos de este canal ese día">${d.toLocaleDateString("es-ES",{weekday:"short",day:"numeric"})}: ${n}</span>`).join("")}</div>
-    <div class="muted" style="font-size:12.5px;margin-top:6px">${v.youtube_video_id?"Ya está subido: la fecha también se cambia en YouTube (tarda un minuto).":"Aún no está subido: se subirá programado para la nueva fecha."}</div></div>`;
+    <div class="muted" style="font-size:12.5px;margin-top:6px">${v.auto?.manual_upload?"Lo subiste tú: cambia también la fecha en YouTube Studio; aquí queda reservada la nueva.":v.youtube_video_id?"Ya está subido: la fecha también se cambia en YouTube (tarda un minuto).":"Aún no está subido: se subirá programado para la nueva fecha."}</div></div>`;
 }
 async function rescheduleVideo(id){
   const val=$("#rs-at")?.value; if(!val) return toast("Elige una fecha");
@@ -979,10 +1015,10 @@ function renderSheet(first){
       <p class="why" style="margin:0">Privacidad al publicar: <b>${{private:"privado",unlisted:"oculto",public:"público"}[c.publish_privacy]}</b> (se cambia en el canal). ${c.youtube_connected?"":`<span style="color:var(--warn)">Este canal aún no está conectado a YouTube.</span> Descárgalo, súbelo a mano y márcalo como publicado.`}</p>
       ${c.youtube_connected?"":`<label class="f">Enlace del vídeo en YouTube <small>Opcional: con él la IA aprende de sus visitas</small><input type="url" id="f-yt" placeholder="https://youtu.be/…"></label>`}
       <label class="f">Si no te convence <small>Describe qué cambiar y se reescribe el guion</small><textarea id="f-fb" rows="2"></textarea></label>`;
-    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
+    foot=`<button class="btn ghost danger" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="rerender('${v.id}')" title="Vuelve a montar con la misma voz, música e imágenes">Volver a montar</button><button class="btn" onclick="backToScript()">Volver al guion</button>${c.youtube_connected?`<button class="btn" onclick="showManual()" title="Tú lo subes a YouTube (no gasta cuota); la plataforma guarda el día y la hora para no pisarlo">Lo subo yo</button><button class="btn pri" onclick="publish()">Dar el ok y publicar</button>`:`<button class="btn" onclick="connectYT('${c.id}')">Conectar YouTube</button><button class="btn pri" onclick="markPublished()">Marcar como publicado</button>`}`;
   } else if(v.status==="producing"||v.status==="scripting"||v.status==="publishing"){
     body=`<div class="card"><div class="spread"><span id="pstage" class="mono">${esc(v.stage||STATUS[v.status][0])}${v.status==="producing"?" · "+v.progress+"%":""}</span></div>${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}
-      <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>${v.status==="publishing"?resched(v):""}
+      <p class="why" style="margin:0">${{scripting:"Documentándose en Wikipedia, escribiendo el guion y revisándolo para que sea viral. Va por lotes a mitad de precio: suele tardar entre unos minutos y una hora.",producing:"Voz, banda sonora, efectos, visuales y montaje. Aparecerá en Revisar cuando esté listo.",publishing:"Subiendo el vídeo a YouTube."}[v.status]}</p></div>${v.status==="publishing"?resched(v)+`<button class="btn" style="margin-top:4px" onclick="showManual()">Lo subo yo a mano (no gasta cuota)</button>`:""}
       ${(()=>{ const urls=[...new Set(o.scenes.flatMap(sc=>(sc.shots||[]).filter(sh=>sh.media_url&&sh.media_kind==="image").map(sh=>sh.media_url).concat(sc.media_url&&sc.media_kind==="image"?[sc.media_url]:[])))]; return urls.length?`<div class="thumbs">${urls.map(u=>`<img src="${esc(u)}" alt="" loading="lazy">`).join("")}</div>`:""; })()}`;
   } else if(v.status==="failed"){
     body=`<div class="card" style="border-color:var(--bad)"><div class="label" style="color:var(--bad)">Qué ha fallado</div><div class="mono" style="word-break:break-word">${esc(v.error)}</div></div>`;

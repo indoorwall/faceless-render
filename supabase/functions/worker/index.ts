@@ -261,6 +261,8 @@ async function runStep(job: Job) {
     case "compile": return stepCompile(job);
     case "reschedule": return stepReschedule(job);
     case "visual_check": return stepVisualCheck(job);
+    // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
+    case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
@@ -1677,10 +1679,10 @@ async function stepDirect(job: Job) {
     await log(job, round ? `Guion mejorado: el crítico le da ${crit.score}/10 tras ${round} reescritura${round > 1 ? "s" : ""}` : `El director no ha tenido que intervenir: el guion ya saca ${crit.score}/10`);
     return;
   }
-  // Como mucho una reescritura (cada una encarece el vídeo): si aún no llega, te espera
-  if (round >= 1) {
+  // Reescrituras desactivadas mientras se calibra el crítico: cuestan ~0,20 € cada una y no subían la nota de 5 (ch.director_rewrites = true para activarlas)
+  if (round >= 1 || !ch.director_rewrites) {
     await finish({ ...original, director: { ...(original.director ?? {}), score_before: isFinite(first) ? first : crit?.score, score_after: crit?.score ?? original.director?.score_after, critic: crit, rounds: round, at: new Date().toISOString() } });
-    await log(job, `El guion se queda en ${crit?.score ?? "?"}/10 tras una reescritura: te espera para que lo revises`, "warn");
+    await log(job, `El guion se queda en ${crit?.score ?? "?"}/10${round ? " tras una reescritura" : ""}: te espera para que lo revises`, "warn");
     return;
   }
   const weak: string[] = crit?.issues ?? [];

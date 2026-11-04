@@ -170,11 +170,11 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "failed", error: msg }).eq("id", job.id);
         // El análisis y las miniaturas son opcionales: si fallan, el vídeo sigue su curso
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "reschedule"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
         const prov = creditProvider(msg);
         if (prov) await notify(`saldo:${prov}`, `⚠️ Sin saldo en ${prov}`, `<p><b>${esc2(prov)}</b> se ha quedado sin saldo y la producción se ha parado.</p><p>Error: <i>${esc2(msg.slice(0, 200))}</i></p><p>Recárgalo y los vídeos seguirán solos.</p>`, 6);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage"].includes(job.step)) {
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage", "reschedule"].includes(job.step)) {
           const { data: vv } = await sb.from("videos").select("title,idea_title,channel:channels(name)").eq("id", job.video_id).maybeSingle();
           await notify(`fallo:${job.video_id}`, `❌ Un vídeo ha fallado: ${String(vv?.title ?? vv?.idea_title ?? "").slice(0, 60)}`, `<p>El vídeo <b>${esc2(vv?.title ?? vv?.idea_title)}</b> (${esc2((vv?.channel as { name?: string } | null)?.name)}) ha fallado en el paso <b>${esc2(job.step)}</b>.</p><p>Error: <i>${esc2(msg.slice(0, 300))}</i></p><p>En la app puedes pulsar «Reintentar».</p>`, 48);
         }
@@ -259,6 +259,7 @@ async function runStep(job: Job) {
     case "watchdog": return stepWatchdog(job);
     case "comments": return stepComments(job);
     case "compile": return stepCompile(job);
+    case "reschedule": return stepReschedule(job);
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
     case "dub": return stepDub(job);
     case "clips": return stepClips(job);
@@ -3784,6 +3785,34 @@ async function stepCompile(job: Job) {
   await enqueue("render", { video_id: nv.id });
   await enqueue("thumbs", { video_id: nv.id });
   await log({ ...job, video_id: nv.id }, `Recopilación en marcha: «${clean(o.title)}» con ${clips.length} Shorts (${Math.round(total / 60)} min)`);
+}
+
+// ---------- Paso: cambiar la fecha de un vídeo programado (también en YouTube si ya está subido) ----------
+async function stepReschedule(job: Job) {
+  const v = await getVideo(job.video_id);
+  const at = new Date(String(job.payload?.publish_at ?? ""));
+  if (isNaN(at.getTime())) throw new UserError("Fecha no válida");
+  if (at.getTime() < Date.now() + 15 * 60000) throw new UserError("La nueva fecha tiene que ser al menos 15 minutos en el futuro");
+  // Aún no está en YouTube: basta con cambiar la fecha aquí (se subirá programado para la nueva)
+  if (!v.youtube_video_id) {
+    await sb.from("videos").update({ publish_at: at.toISOString() }).eq("id", v.id);
+    await log(job, `Nueva fecha para «${v.title}»: ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}`);
+    return;
+  }
+  if (v.status === "published" || (v.publish_at && new Date(v.publish_at).getTime() < Date.now())) throw new UserError("Este vídeo ya es público: no se puede cambiar su fecha");
+  const token = await ytAccess(v.channel_id);
+  if (!token) throw new UserError("Conecta el canal de YouTube para cambiar la fecha");
+  if (!(await sb.rpc("yt_quota_take", { p_units: 51 })).data) throw new QuotaWait("youtube");
+  // Se lee el estado actual y se reenvía entero con la nueva fecha (si faltara algún campo, YouTube lo pondría por defecto)
+  const cur = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "status", id: v.youtube_video_id });
+  const st = cur.items?.[0]?.status;
+  if (!st) throw new UserError("No se encuentra el vídeo en YouTube");
+  if (st.privacyStatus !== "private") throw new UserError("Este vídeo ya es público en YouTube: no se puede cambiar su fecha");
+  const status = { privacyStatus: "private", publishAt: at.toISOString(), selfDeclaredMadeForKids: st.selfDeclaredMadeForKids ?? false, license: st.license, embeddable: st.embeddable, publicStatsViewable: st.publicStatsViewable, ...(st.containsSyntheticMedia != null ? { containsSyntheticMedia: st.containsSyntheticMedia } : {}) };
+  const r = await fetch("https://www.googleapis.com/youtube/v3/videos?part=status", { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ id: v.youtube_video_id, status }) });
+  if (!r.ok) throw new Error(`YouTube (cambiar fecha) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  await sb.from("videos").update({ publish_at: at.toISOString() }).eq("id", v.id);
+  await log(job, `Fecha cambiada en YouTube: «${v.title}» saldrá el ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

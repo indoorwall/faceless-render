@@ -1450,6 +1450,17 @@ async function stepRenderCheck(job: Job) {
 }
 
 // ---------- Paso: publicar en YouTube ----------
+// Palabras que el título debe llevar sí o sí (p. ej. «GTA 6» en los vídeos que aprovechan una búsqueda): se piden en el ángulo de la idea
+// deno-lint-ignore no-explicit-any
+function titleMust(v: any): string | null { return String(v.idea_angle ?? "").match(/T[IÍ]TULO FINAL DEBE CONTENER «([^»]+)»/i)?.[1] ?? null; }
+// deno-lint-ignore no-explicit-any
+function withMust(v: any, t: string, alts: string[] = []): string {
+  const m = titleMust(v); if (!m) return t;
+  const has = (x: string) => x.toLowerCase().includes(m.toLowerCase());
+  if (has(t)) return t;
+  const alt = alts.find((x) => has(x) && x.length <= 100); if (alt) return alt;
+  return `${m}: ${t}`.slice(0, 100);
+}
 async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
@@ -1478,7 +1489,7 @@ async function stepPublish(job: Job) {
   if (qok !== true) throw new QuotaWait("youtube");
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
-    snippet: { title: (v.title ?? v.idea_title).slice(0, 100), description: v.description ?? "", tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
+    snippet: { title: withMust(v, String(v.title ?? v.idea_title)).slice(0, 100), description: v.description ?? "", tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
     status: { privacyStatus: future ? "private" : v.channel.publish_privacy, publishAt: future ? new Date(v.publish_at).toISOString() : undefined, selfDeclaredMadeForKids: false, containsSyntheticMedia: v.ai_disclosure },
   };
   const head = await fetch(v.video_url, { method: "HEAD" });
@@ -3423,6 +3434,7 @@ async function packageVideo(ch: any, s: any, v: any) {
   if (ch.idea_format === "list5" && !/(^|\D)5(\D|$)|\bcinco\b/i.test(t)) { const alt = (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()).find((x: string) => /(^|\D)5(\D|$)|\bcinco\b/i.test(x)); if (alt) t = alt; }
   // Serie con número («… | Animales en guerra #4»): da al espectador un motivo para suscribirse y no perderse el siguiente
   try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200), (r.input?.candidates ?? []).map((x: unknown) => String(x).trim())); } catch (e) { if (e instanceof OverBudget) throw e; }
+  t = withMust(v, t, (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()));
   return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
 }
 // Rehacer título y descripción de un vídeo ya escrito o montado

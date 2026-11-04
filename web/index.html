@@ -858,6 +858,27 @@ async function openVideo(id){
   S.open = { kind:"video", v:data, scenes, draft: data.script ? JSON.parse(JSON.stringify(data.script)) : null };
   renderSheet(true);
 }
+// Cambiar el día de un vídeo programado (si ya está en YouTube, también se cambia allí)
+function resched(v){
+  if(!["scheduled","publishing","final_review"].includes(v.status) || !v.publish_at || new Date(v.publish_at)<=Date.now()) return "";
+  const loc=(d)=>new Date(new Date(d).getTime()-new Date(d).getTimezoneOffset()*6e4).toISOString().slice(0,16);
+  // Cuántos vídeos salen cada día de la próxima semana en este canal, para repartirlos mejor
+  const days=[...Array(8)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+i); return d; });
+  const mine=S.videos.filter(x=>x.channel_id===v.channel_id&&["scheduled","publishing","final_review"].includes(x.status)&&x.publish_at);
+  const cnt=days.map(d=>({d,n:mine.filter(x=>{ const t=new Date(x.publish_at); return t>=d&&t<new Date(d.getTime()+864e5); }).length}));
+  return `<div class="card" style="padding:12px 14px;margin:10px 0">
+    <div class="label" style="margin-bottom:6px">Cambiar el día</div>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><input type="datetime-local" id="rs-at" value="${loc(v.publish_at)}" style="font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)"><button class="btn pri" onclick="rescheduleVideo('${v.id}')">Guardar fecha</button></div>
+    <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${cnt.map(({d,n})=>`<span class="chip ${n>=3?"st-warn":""}" title="Vídeos de este canal ese día">${d.toLocaleDateString("es-ES",{weekday:"short",day:"numeric"})}: ${n}</span>`).join("")}</div>
+    <div class="muted" style="font-size:12.5px;margin-top:6px">${v.youtube_video_id?"Ya está subido: la fecha también se cambia en YouTube (tarda un minuto).":"Aún no está subido: se subirá programado para la nueva fecha."}</div></div>`;
+}
+async function rescheduleVideo(id){
+  const val=$("#rs-at")?.value; if(!val) return toast("Elige una fecha");
+  const at=new Date(val); if(at.getTime()<Date.now()+15*6e4) return toast("Tiene que ser al menos 15 minutos en el futuro");
+  await run(async()=>{ const { error } = await sb.from("jobs").insert({ step:"reschedule", video_id:id, payload:{ publish_at:at.toISOString() } }); if(error) throw error;
+    const v=S.videos.find(x=>x.id===id); if(v) v.publish_at=at.toISOString(); if(S.open?.v?.id===id) S.open.v.publish_at=at.toISOString();
+    kick(); setTimeout(load,25000); render(); },"Cambiando la fecha…");
+}
 function sheetShell(title, sub, body, foot){
   const el=$("#sheet");
   el.innerHTML = `<div class="sheet-h"><div style="min-width:0"><div class="row">${sub}</div><h2 style="margin-top:6px">${esc(title)}</h2></div><button class="btn ghost" onclick="closeSheet()" aria-label="Cerrar">✕</button></div>
@@ -963,7 +984,7 @@ function renderSheet(first){
   } else {
     body=`${v.video_url?`<video src="${esc(v.video_url)}" controls playsinline preload="metadata"></video>${dlBlock(v)}`:""}
       ${dubButtons(v)}${clipButton(v)}
-      <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>${perfBlock(v)}`;
+      <dl class="kv"><dt>Estado</dt><dd>${STATUS[v.status]?.[0]||v.status}</dd>${v.youtube_video_id?`<dt>YouTube</dt><dd><a href="https://youtu.be/${esc(v.youtube_video_id)}" target="_blank" rel="noopener">youtu.be/${esc(v.youtube_video_id)}</a></dd>`:""}${v.publish_at?`<dt>Publicación</dt><dd>${new Date(v.publish_at).toLocaleString("es-ES")}</dd>`:""}<dt>Duración</dt><dd>${dur(v.duration_sec)}</dd></dl>${resched(v)}${perfBlock(v)}`;
   }
   const cost=costOf(usage);
   if(cost&&cost.total>=0.005) body += `<div style="font-size:13.5px"><b>Coste real: ${eur(cost.total)}</b> <span class="muted">(${cost.parts.map(([l,x])=>`${l} ${eur(x)}`).join(" · ")})</span></div>`;

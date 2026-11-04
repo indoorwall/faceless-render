@@ -3807,6 +3807,8 @@ async function stepReschedule(job: Job) {
     await log(job, `Nueva fecha para «${v.title}»: ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}`);
     return;
   }
+  // Subido a mano por el dueño: la fecha de YouTube la cambia él en Studio; aquí solo se reserva el hueco
+  if (v.auto?.manual_upload) { await sb.from("videos").update({ publish_at: at.toISOString(), published_at: at.toISOString() }).eq("id", v.id); return; }
   if (v.status === "published" || (v.publish_at && new Date(v.publish_at).getTime() < Date.now())) throw new UserError("Este vídeo ya es público: no se puede cambiar su fecha");
   const token = await ytAccess(v.channel_id);
   if (!token) throw new UserError("Conecta el canal de YouTube para cambiar la fecha");

@@ -484,7 +484,7 @@ async function load(){
     sb.rpc("get_prices"),
     sb.from("jobs").select("id,step,status,channel_id,video_id,run_after,payload").in("status",["queued","running"]),
     sb.from("channel_reports").select("*").order("day",{ascending:false}).limit(60),
-    sb.from("yt_comments").select("*").in("status",["pending","hide"]).order("published_at",{ascending:false}).limit(200),
+    sb.from("yt_comments").select("*").in("status",["pending","hide","new"]).order("published_at",{ascending:false}).limit(200),
     sb.from("ext_channels").select("*").order("analyzed_at",{ascending:false}).limit(60),
     sb.from("ext_searches").select("*").order("created_at",{ascending:false}).limit(4),
     sb.from("channel_ideas").select("*").eq("status","new").order("created_at",{ascending:false}).limit(6),
@@ -785,6 +785,8 @@ function viewComentarios(){
       ${c.status==="hide"
         ?`<div class="row" style="margin-bottom:8px"><span class="chip st-bad">Para ocultar</span><span class="muted" style="font-size:13px">Insulto o spam: en YouTube, ⋮ → Ocultar usuario del canal</span></div>
           <div class="row"><a class="btn pri" href="${esc(ytUrl(c))}" target="_blank" rel="noopener">Abrir en YouTube</a><button class="btn" onclick="cmDone('${esc(c.id)}','done')">Hecho</button></div>`
+        :c.status==="new"?`<div class="muted" style="font-size:13px;margin-bottom:8px">La respuesta aún se está preparando (o falta presupuesto hoy). Puedes contestar tú directamente.</div>
+          <div class="row"><a class="btn pri" href="https://www.youtube.com/watch?v=${encodeURIComponent(c.youtube_video_id)}&lc=${encodeURIComponent(c.id)}" target="_blank" rel="noopener">Abrir en YouTube</a><button class="btn" onclick="cmDone('${esc(c.id)}','done')">Contestado</button><button class="btn" onclick="cmDone('${esc(c.id)}','ignored')">Descartar</button></div>`
         :`<textarea id="cmr-${esc(c.id)}" rows="3" style="width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);resize:vertical">${esc(c.suggested_reply||"")}</textarea>
           <div class="row" style="margin-top:8px"><button class="btn pri" onclick="cmReply('${esc(c.id)}')">Copiar y abrir en YouTube</button><button class="btn" onclick="cmDone('${esc(c.id)}','done')">Contestado</button><button class="btn" onclick="cmDone('${esc(c.id)}','ignored')">Descartar</button></div>`}
     </div>`;

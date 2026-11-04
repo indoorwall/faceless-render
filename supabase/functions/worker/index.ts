@@ -3818,8 +3818,9 @@ async function stepComments(job: Job) {
   // Los que ya contestaste en YouTube salen solos de la lista
   const answered = threads.filter((t: { answered: boolean }) => t.answered).map((t: { id: string }) => t.id);
   if (answered.length) await sb.from("yt_comments").update({ status: "done", updated_at: new Date().toISOString() }).in("id", answered).in("status", ["new", "pending"]);
-  const { data: known } = await sb.from("yt_comments").select("id").in("id", threads.map((t: { id: string }) => t.id));
-  const seen = new Set((known ?? []).map((k) => k.id));
+  // Los que se quedaron a medias (status «new», p. ej. sin presupuesto) se vuelven a preparar
+  const { data: known } = await sb.from("yt_comments").select("id,status").in("id", threads.map((t: { id: string }) => t.id));
+  const seen = new Set((known ?? []).filter((k) => k.status !== "new").map((k) => k.id));
   const since = Date.now() - 14 * 864e5;
   const fresh = threads.filter((t: { id: string; mine: boolean; answered: boolean; at: string }) => !seen.has(t.id) && !t.mine && !t.answered && new Date(t.at).getTime() >= since).slice(0, 40);
   if (!fresh.length) return;
@@ -3831,7 +3832,7 @@ async function stepComments(job: Job) {
   if (missing.length && (await sb.rpc("yt_quota_take", { p_units: 1 })).data) {
     try { const vd = await yt("videos", { part: "snippet", id: missing.slice(0, 50).join(",") }); for (const it of vd.items ?? []) titles.set(it.id, String(it.snippet?.title ?? "")); } catch (_) { /* sin título */ }
   }
-  await sb.from("yt_comments").insert(fresh.map((t: { id: string; video: string; author: string; text: string; likes: number; at: string }) => ({ id: t.id, channel_id: ch.id, youtube_video_id: t.video, video_title: titles.get(t.video) ?? null, author: t.author, text: t.text, likes: t.likes, published_at: t.at || null })));
+  await sb.from("yt_comments").upsert(fresh.map((t: { id: string; video: string; author: string; text: string; likes: number; at: string }) => ({ id: t.id, channel_id: ch.id, youtube_video_id: t.video, video_title: titles.get(t.video) ?? null, author: t.author, text: t.text, likes: t.likes, published_at: t.at || null })));
   // Lo que cuenta cada vídeo, para que la respuesta no contradiga el vídeo
   const told = new Map((ours ?? []).map((v) => [v.youtube_video_id, (v.script?.scenes ?? []).map((s: { narration?: string }) => s.narration ?? "").join(" ").slice(0, 700)]));
   const { data: mineV } = await sb.from("videos").select("idea_title,title").eq("channel_id", ch.id).order("created_at", { ascending: false }).limit(150);

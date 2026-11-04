@@ -266,6 +266,7 @@ async function runStep(job: Job) {
     case "explore_search": return stepExploreSearch(job);
     case "explore_adapt": return stepExploreAdapt(job);
     case "explore_refresh": return stepExploreRefresh(job);
+    case "bench": return stepBench(job);
     // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
     case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
@@ -3119,6 +3120,21 @@ async function planChannel(job: Job, ch: any) {
       let need = Math.min(slots - inFlight - pend, f === "long" ? 1 : 2); // como mucho 1 largo y 2 Shorts nuevos por hora y canal
       if (need <= 0) continue;
       if (f === "short" && ch.clips_per_long > 0 && ch.production_type !== "challenges" && !(ch.formats ?? []).includes("short")) continue; // los Shorts salen de los largos
+      // Plan de largos del canal (al llegar a los suscriptores fijados): recopilaciones y tipos de vídeo en rotación
+      const plan = (f === "long" && Array.isArray(s.long_plan)) ? s.long_plan as { type: string; mode?: string; theme?: string; focus?: string }[] : [];
+      if (plan.length && ch.production_type !== "challenges") {
+        const nLong = V.filter((v) => fmtOf(v) === "long" && (v.created_at ?? "") >= String(s.long_plan_since ?? "")).length;
+        const kind = plan[nLong % plan.length];
+        if (kind.type === "compile") {
+          const { count: pc } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("step", "compile").in("status", ["queued", "running"]);
+          if (!pc) { await enqueue("compile", { channel_id: ch.id, payload: { theme: kind.theme ?? "", mode: kind.mode ?? "hora" } }); await log(J, `Piloto automático: recopilación «${kind.mode ?? "hora"}» para el hueco de vídeo largo`); }
+          continue;
+        }
+        if (kind.focus && !V.some((v) => v.status === "idea_review" && v.format === "long")) {
+          const { count: pr } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("channel_id", ch.id).eq("step", "refill_ideas").in("status", ["queued", "running"]);
+          if (!pr) await enqueue("refill_ideas", { channel_id: ch.id, payload: { format: "long", focus: kind.focus } });
+        }
+      }
       if (ch.production_type === "challenges") {
         const cfg = ch.retos_config ?? {};
         for (; need > 0; need--) await enqueue("retos_generate", { channel_id: ch.id, payload: { format: f, game_style: cfg.game_style ?? "world", minutes: ch.long_minutes ?? 8, auto: true } });
@@ -3880,8 +3896,10 @@ async function stepCompile(job: Job) {
   const pool = (vids ?? []).filter((v) => Number(v.duration_sec ?? 0) > 10);
   if (pool.length < 4) throw new UserError("Hacen falta al menos 4 Shorts publicados para una recopilación");
   const theme = String(job.payload?.theme ?? "").trim();
+  // «dormir»: recopilación tranquila para ponerla de fondo o para dormir (la gente la deja puesta mucho rato)
+  const sleep = job.payload?.mode === "dormir";
   const list = pool.map((v) => `- [${v.id}] «${v.title}» · ${Math.round(Number(v.duration_sec))} s · ${v.stats?.views ?? 0} visitas · ${String(v.script?.scenes?.[0]?.narration ?? "").slice(0, 120)}`).join("\n");
-  const r = await claudeTool(MODEL_FAST, `Montas recopilaciones para el canal de YouTube «${ch.name}» (${ch.niche ?? ""}, en ${ch.language}). Una recopilación junta Shorts ya publicados en un vídeo horizontal largo para ver de seguido (la gente la pone de fondo o para relajarse). Elige Shorts de un mismo tema${theme ? ` (tema pedido: ${theme})` : ""} para que el vídeo tenga sentido, empieza por el que más visitas tiene (engancha al principio) y alterna los fuertes para que nadie se vaya. Usa solo los Shorts de la lista y como mucho uno de cada; no inventes datos en el título ni en la descripción.`,
+  const r = await claudeTool(MODEL_FAST, `Montas recopilaciones para el canal de YouTube «${ch.name}» (${ch.niche ?? ""}, en ${ch.language}). Una recopilación junta Shorts ya publicados en un vídeo horizontal largo para ver de seguido (la gente la pone de fondo o para relajarse). Elige Shorts de un mismo tema${theme ? ` (tema pedido: ${theme})` : ""} para que el vídeo tenga sentido, empieza por el que más visitas tiene (engancha al principio) y alterna los fuertes para que nadie se vaya.${sleep ? " Esta es la versión «para dormir»: usa TODOS los Shorts que encajen (cuanto más larga, mejor), y título y descripción tranquilos del tipo «X curiosidades para dormir y aprender» o «Curiosidades para dormir: …»; la miniatura, un ambiente nocturno y acogedor." : ""} Usa solo los Shorts de la lista y como mucho uno de cada; no inventes datos en el título ni en la descripción.`,
     `${playbookBlock(ch)}SHORTS DISPONIBLES:\n${list}`, COMPILE_TOOL, 3000);
   const o = r.input ?? {};
   const byId = new Map(pool.map((v) => [v.id, v]));
@@ -4190,6 +4208,47 @@ async function stepExploreRefresh(job: Job) {
   // Una vez por semana, análisis completo de cada canal seguido (vídeos nuevos y estimaciones)
   if (new Date().getUTCDay() === 1) for (const id of ids) { try { await analyzeExt(id); } catch (_) { /* sigue con el resto */ } }
   if (ids.length) await log(job, `Explorar: actualizados ${ids.length} canales seguidos`);
+}
+
+// ---------- Paso semanal: aprender de los canales que más funcionan (los que sigues en Explorar) ----------
+// Para cada canal nuestro: reglas concretas de títulos, miniaturas, duración, narración e imágenes sacadas de lo que les funciona
+// a los referentes → manual del canal. Y, de paso, ideas de canales nuevos si algo funciona y no encaja en los actuales.
+const BENCH_TOOL = { name: "aprendizajes", description: "Lo que copiar de los referentes", input_schema: { type: "object", required: ["rules"], properties: {
+  rules: { type: "array", maxItems: 8, items: { type: "object", required: ["area", "rule", "evidence"], properties: {
+    area: { type: "string", enum: ["titulos", "miniaturas", "duracion", "narracion", "imagenes", "ritmo", "temas", "formato"] },
+    rule: { type: "string", description: "Regla concreta y aplicable por nuestro sistema (guion IA, voz IA, imágenes de archivo o IA)" },
+    evidence: { type: "string", description: "Qué vídeo/canal y cifras lo demuestran" } } } } } } };
+const NEWCH_TOOL = { name: "canales_nuevos", description: "Ideas de canales nuevos", input_schema: { type: "object", required: ["ideas"], properties: {
+  ideas: { type: "array", maxItems: 3, items: { type: "object", required: ["name", "niche", "lang", "format", "why", "how"], properties: {
+    name: { type: "string" }, niche: { type: "string" }, lang: { type: "string" }, format: { type: "string", description: "Shorts, largos o ambos, y duración" },
+    why: { type: "string", description: "Datos de los referentes que demuestran que funciona" }, how: { type: "string", description: "Cómo lo haríamos con nuestro sistema y qué lo hace propio" },
+    evidence: { type: "array", items: { type: "string" }, maxItems: 4 } } } } } } };
+async function stepBench(job: Job) {
+  const { data: refs } = await sb.from("ext_channels").select("id,title,lang,data").eq("watched", true);
+  const R = (refs ?? []).filter((r) => r.data?.top?.length);
+  if (!R.length) return;
+  const { data: chs } = await sb.from("channels").select("*").eq("status", "active").neq("production_type", "challenges");
+  const refText = R.map((r) => { const d = r.data; return `«${r.title}» (${r.lang ?? "?"}, ${d.subs} suscr., ${d.per_week}/semana, ${d.short_share} % Shorts, media Shorts ${d.avg_short} / largos ${d.avg_long}):\n${(d.top ?? []).slice(0, 8).map((v: { title: string; views: number; short: boolean; dur: number }) => `  - ${v.title} — ${v.views} visitas, ${v.short ? "Short" : Math.round(v.dur / 60) + " min"}`).join("\n")}`; }).join("\n\n");
+  // Miniaturas de los vídeos que más funcionan (para aprender del diseño, no copiarlo)
+  // deno-lint-ignore no-explicit-any
+  const thumbs: any[] = [];
+  for (const r of R) for (const v of (r.data.top ?? []).filter((x: { short: boolean; thumb?: string }) => !x.short && x.thumb).slice(0, 2)) if (thumbs.length < 12) thumbs.push({ type: "text", text: `Miniatura de «${v.title}» (${r.title}, ${v.views} visitas):` }, { type: "image", source: { type: "url", url: String(v.thumb).replace(/\/(default|mqdefault)\.jpg/, "/hqdefault.jpg") } });
+  for (const ch of chs ?? []) {
+    try {
+      const r = await claudeTool(MODEL_FAST, `Eres analista de YouTube. Comparas un canal nuestro con los canales de referencia que mejor funcionan y sacas reglas CONCRETAS y medibles para mejorar títulos, miniaturas, duración, narración, imágenes y ritmo. Solo lo que nuestro sistema puede aplicar (guion y voz IA, imágenes de archivo o IA, montaje automático). Nada de copiar: el estilo, no el contenido.`,
+        [{ type: "text", text: `NUESTRO CANAL: «${ch.name}» (${ch.niche}). ${ch.style_guide ? `Guía: ${String(ch.style_guide).slice(0, 1500)}` : ""}\n\nREFERENTES (datos reales de YouTube):\n${refText}\n\nUsa solo los referentes que tengan que ver con nuestro canal; ignora el resto.` }, ...thumbs, { type: "text", text: "Llama a aprendizajes." }], BENCH_TOOL, 2500);
+      const rules = (r.input?.rules ?? []) as { area: string; rule: string; evidence: string }[];
+      if (rules.length) await enqueue("learn", { channel_id: ch.id, payload: { source: "referentes", material: `Lo que funciona en los canales de referencia (semana del ${new Date().toLocaleDateString("es-ES")}):\n${rules.map((x) => `- [${x.area}] ${x.rule} (prueba: ${x.evidence})`).join("\n")}` } });
+      await log({ ...job, channel_id: ch.id }, `Referentes: ${rules.length} aprendizajes para «${ch.name}» (${rules.map((x) => x.area).join(", ")})`);
+    } catch (e) { if (e instanceof OverBudget) throw e; }
+  }
+  // Ideas de canales nuevos: solo si hay algo que funciona y no encaja en los nuestros
+  const { data: prev } = await sb.from("channel_ideas").select("name").order("created_at", { ascending: false }).limit(20);
+  const r2 = await claudeTool(MODEL_FAST, `Eres estratega de YouTube para el mercado hispanohablante. Con los datos reales de los canales de referencia, propones canales NUEVOS (faceless, producidos con guion y voz IA e imágenes de archivo o IA) SOLO si hay un formato que funciona claramente y no encaja en nuestros canales actuales. Si no hay ninguno claro, devuelve la lista vacía. Nada de animación compleja, caras de personas reales ni temas que YouTube no monetiza.`,
+    `NUESTROS CANALES: ${(chs ?? []).map((c) => `${c.name} (${c.niche})`).join("; ")}\nIDEAS YA PROPUESTAS (no repetir): ${(prev ?? []).map((p) => p.name).join(", ") || "ninguna"}\n\nREFERENTES:\n${refText}\n\nLlama a canales_nuevos.`, NEWCH_TOOL, 2500);
+  const ideas = (r2.input?.ideas ?? []) as { name: string; niche: string; lang: string; format: string; why: string; how: string; evidence?: string[] }[];
+  if (ideas.length) await sb.from("channel_ideas").insert(ideas.map((i) => ({ name: clean(i.name), niche: clean(i.niche), lang: clean(i.lang), format: clean(i.format), why: clean(i.why), how: clean(i.how), evidence: i.evidence ?? [] })));
+  await log(job, `Referentes: ${ideas.length ? `${ideas.length} ideas de canal nuevo (${ideas.map((i) => i.name).join(", ")})` : "sin ideas de canal nuevo esta semana"}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

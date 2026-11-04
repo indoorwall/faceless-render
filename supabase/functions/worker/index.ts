@@ -4129,12 +4129,17 @@ async function stepExploreSearch(job: Job) {
     if (S.region) params.regionCode = S.region;
     if (job.payload?.duration) params.videoDuration = String(job.payload.duration);
     const r = await ytx("search", params, 100);
-    const ids = (r.items ?? []).map((i: { id: { videoId: string } }) => i.id?.videoId).filter(Boolean);
+    // Al ordenar por visitas, YouTube mete vídeos virales que no son del tema: solo cuentan los que lo mencionan
+    const norm = (t: string) => String(t ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const terms = norm(String(S.q ?? "")).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 || /[^\x00-\x7f]/.test(w));
+    // deno-lint-ignore no-explicit-any
+    const onTopic = (it: any) => !terms.length || terms.some((w) => norm(`${it.snippet?.title ?? ""} ${it.snippet?.description ?? ""} ${(it.snippet?.tags ?? []).join(" ")}`).includes(w));
+    const ids = (r.items ?? []).filter(onTopic).map((i: { id: { videoId: string } }) => i.id?.videoId).filter(Boolean);
     const vids = ids.length ? (await ytx("videos", { part: "snippet,statistics,contentDetails", id: ids.join(",") }, 1)).items ?? [] : [];
     // deno-lint-ignore no-explicit-any
     const byCh = new Map<string, any>();
     for (const v of vids) {
-      const cid = v.snippet?.channelId; if (!cid) continue;
+      const cid = v.snippet?.channelId; if (!cid || !onTopic(v)) continue;
       const e = byCh.get(cid) ?? { id: cid, title: v.snippet?.channelTitle, views: 0, n: 0, top: null };
       const views = Number(v.statistics?.viewCount ?? 0); e.views += views; e.n++;
       if (!e.top || views > e.top.views) e.top = { id: v.id, title: v.snippet?.title, views, short: isoSecs(v.contentDetails?.duration) <= 180, at: v.snippet?.publishedAt };

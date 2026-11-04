@@ -261,6 +261,7 @@ async function runStep(job: Job) {
     case "compile": return stepCompile(job);
     case "reschedule": return stepReschedule(job);
     case "visual_check": return stepVisualCheck(job);
+    case "voice_design": return stepVoiceDesign(job);
     // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
     case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
@@ -686,6 +687,13 @@ keywords: 1-3 palabras o cifras de la escena que se resaltan en amarillo en los 
       real = `\n\nRESULTADOS REALES EN YOUTUBE DE ESTE CANAL (lo que manda; imita lo que tienen los primeros, evita lo de los últimos):\nDespegaron:\n- ${rows.slice(0, 3).map(fmt).join("\n- ")}\nSe quedaron en el suelo:\n- ${rows.slice(-3).map(fmt).join("\n- ")}`;
     }
   } catch (_) { /* sin datos */ }
+  // Variedad: que no todos los vídeos empiecen y acaben igual (YouTube no monetiza lo repetitivo)
+  try {
+    const { data: recent } = await sb.from("videos").select("script").eq("channel_id", ch.id).neq("id", v.id).not("script", "is", null).order("created_at", { ascending: false }).limit(6);
+    const hooks = (recent ?? []).map((p) => String(p.script?.scenes?.[0]?.shots?.[0]?.line ?? p.script?.scenes?.[0]?.narration ?? "").slice(0, 110)).filter(Boolean);
+    const ends = (recent ?? []).map((p) => { const sc = p.script?.scenes ?? []; const last = sc[sc.length - 1]; const sh = last?.shots ?? []; return String(sh[sh.length - 1]?.line ?? last?.narration ?? "").slice(-110); }).filter(Boolean);
+    if (hooks.length >= 3) real += `\n\nVARIEDAD (obligatoria): los últimos vídeos del canal empezaron así: «${hooks.join("» · «")}» y acabaron así: «${ends.join("» · «")}». Usa una estructura distinta (por ejemplo: empezar por el final, una pregunta directa al espectador, una cifra imposible, un diálogo, una escena en primera persona) y un cierre distinto. Nada de fórmulas repetidas.`;
+  } catch (_) { /* sin historial */ }
   // Lo que más ha fallado últimamente en este canal (análisis de vídeos montados y crítico de guiones): el guionista lo evita desde el principio
   let fails = "";
   try {
@@ -1492,6 +1500,16 @@ function withMust(v: any, t: string, alts: string[] = []): string {
   const alt = alts.find((x) => has(x) && x.length <= 100); if (alt) return alt;
   return `${m}: ${t}`.slice(0, 100);
 }
+// Fuentes visibles al final de la descripción (rigor: lo que diferencia un canal de divulgación de uno de relleno)
+// deno-lint-ignore no-explicit-any
+function withSources(v: any): string {
+  const d = String(v.description ?? "");
+  // deno-lint-ignore no-explicit-any
+  const src = (Array.isArray(v.sources) ? v.sources : (v.script?.sources ?? [])).filter((x: any) => x?.url && /^https?:\/\//.test(x.url)).slice(0, 5);
+  if (!src.length || /(^|\n)Fuentes:/.test(d)) return d.slice(0, 4900);
+  // deno-lint-ignore no-explicit-any
+  return `${d.trim()}\n\nFuentes:\n${src.map((x: any) => `· ${String(x.title ?? "").slice(0, 80)} — ${x.url}`).join("\n")}`.slice(0, 4900);
+}
 async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
@@ -1526,7 +1544,7 @@ async function stepPublish(job: Job) {
   if (qok !== true) throw new QuotaWait("youtube");
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
-    snippet: { title: withMust(v, String(v.title ?? v.idea_title)).slice(0, 100), description: v.description ?? "", tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
+    snippet: { title: withMust(v, String(v.title ?? v.idea_title)).slice(0, 100), description: withSources(v), tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },
     status: { privacyStatus: future ? "private" : v.channel.publish_privacy, publishAt: future ? new Date(v.publish_at).toISOString() : undefined, selfDeclaredMadeForKids: false, containsSyntheticMedia: v.ai_disclosure },
   };
   const head = await fetch(v.video_url, { method: "HEAD" });
@@ -1656,7 +1674,7 @@ const QUALITY_RUBRIC = (short: boolean) => `CRITERIOS DE CALIDAD (los mismos con
 - Título: como mucho 55 caracteres sin contar la etiqueta de serie que va tras «|», despierta curiosidad, no cuenta el desenlace.
 - Rigor: nada inventado ni exagerado.
 - Actualidad: si el vídeo menciona un tema del momento (p. ej. un videojuego), el enlace con la historia tiene que ser natural y estar justificado en una frase, no un parche.
-- Visuales: cada plano muestra EXACTAMENTE lo que dice la voz. En archive_query/stock_query nombra la persona, lugar, objeto y época concretos («Rudolf Hess 1941», «Messerschmitt Bf 110»), nunca algo genérico («soldados», «ciudad»); si es difícil que exista una foto real fiel, usa visual_type ai con un visual_prompt preciso de época.`;
+- Visuales: cada plano muestra EXACTAMENTE lo que dice la voz. En archive_query/stock_query nombra la persona, lugar, objeto y época concretos («Rudolf Hess 1941», «Messerschmitt Bf 110»), nunca algo genérico («soldados», «ciudad»); si es difícil que exista una foto real fiel, usa visual_type ai con un visual_prompt preciso de época (salvo que la guía del canal limite la IA: entonces busca otro material real o cambia la frase).`;
 // deno-lint-ignore no-explicit-any
 async function criticScore(v: any, ch: any, script: any, short: boolean) {
   const rubric = QUALITY_RUBRIC(short);
@@ -3431,6 +3449,21 @@ async function stepVoiceSearch(job: Job) {
 }
 async function stepVoicePick(job: Job) {
   const p = job.payload ?? {};
+  // Voz diseñada para el canal: se guarda en la cuenta de ElevenLabs y pasa a ser la voz del canal
+  if (p.generated_voice_id) {
+    const r = await fetch("https://api.elevenlabs.io/v1/text-to-voice", { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ voice_name: String(p.name ?? "Voz del canal").slice(0, 60), voice_description: String(p.description ?? "").slice(0, 500), generated_voice_id: p.generated_voice_id }) });
+    let t = await r.text();
+    let vid: string | undefined; try { vid = JSON.parse(t).voice_id; } catch (_) { /* sin id */ }
+    if (!r.ok || !vid) {
+      // Endpoint anterior de ElevenLabs
+      const r2 = await fetch("https://api.elevenlabs.io/v1/text-to-voice/create-voice-from-preview", { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ voice_name: String(p.name ?? "Voz del canal").slice(0, 60), voice_description: String(p.description ?? "").slice(0, 500), generated_voice_id: p.generated_voice_id }) });
+      t = await r2.text(); try { vid = JSON.parse(t).voice_id; } catch (_) { /* sin id */ }
+      if (!r2.ok || !vid) throw new UserError(`ElevenLabs no pudo guardar la voz (${r2.status}): ${t.slice(0, 200)}`);
+    }
+    await sb.from("channels").update({ voice_id: vid, voice_provider: "elevenlabs" }).eq("id", job.channel_id);
+    await log(job, `Voz propia del canal: «${p.name}»`);
+    return;
+  }
   if (!p.voice_id) throw new UserError("Falta la voz");
   let id = String(p.voice_id);
   if (p.owner) {
@@ -3915,7 +3948,8 @@ const VCHECK_TOOL = { name: "revisar_imagenes", description: "Qué imágenes no 
   bad: { type: "array", items: { type: "object", required: ["id", "why", "prompt"], properties: {
     id: { type: "string" },
     why: { type: "string", description: "Por qué no encaja, en pocas palabras" },
-    prompt: { type: "string", description: "Prompt en inglés para una imagen nueva que muestre EXACTAMENTE lo que dice la voz (lugar, época, personas, objetos), realista y documental, sin texto" } } } } } } };
+    prompt: { type: "string", description: "Prompt en inglés para una imagen nueva que muestre EXACTAMENTE lo que dice la voz (lugar, época, personas, objetos), realista y documental, sin texto" },
+    query: { type: "string", description: "Búsqueda corta en inglés (2-5 palabras) para encontrar un vídeo o foto REAL de bancos de imágenes que muestre exactamente eso (especie, lugar, objeto)" } } } } } } };
 async function stepVisualCheck(job: Job) {
   const v = await getVideo(job.video_id);
   const ch = v.channel;
@@ -3936,7 +3970,7 @@ async function stepVisualCheck(job: Job) {
   const content: any[] = [{ type: "text", text: `Vídeo «${v.title ?? v.idea_title}» del canal «${ch.name}» (${ch.niche}). Para cada plano verás lo que dice la voz y la imagen que se muestra en ese momento. Marca SOLO las que un espectador vería claramente como incorrectas: otro país, otra época, otro animal u objeto, personas actuales en una historia antigua, escudos, carteles, logos o textos que no tienen nada que ver, o algo que no guarda relación con la frase. Una imagen genérica pero coherente (p. ej. un barco de la época cuando se habla de un barco) está bien.` }];
   for (const it of items.slice(0, 30)) content.push({ type: "text", text: `[${it.id}] voz: «${it.line.slice(0, 200)}»` }, { type: "image", source: { type: "url", url: it.url } });
   content.push({ type: "text", text: "Llama a revisar_imagenes con las que no encajan (lista vacía si todas están bien)." });
-  let bad: { id: string; why: string; prompt: string }[] = [];
+  let bad: { id: string; why: string; prompt: string; query?: string }[] = [];
   try {
     const r = await claudeTool(MODEL_FAST, "Revisas el montaje de vídeos documentales: compruebas que cada imagen corresponde con lo que dice la voz en ese momento. Eres riguroso con la época, el lugar y los objetos.", content, VCHECK_TOOL, 3000);
     await bumpUsage(v.id, usageOf(r));
@@ -3946,6 +3980,7 @@ async function stepVisualCheck(job: Job) {
     await log(job, `No se pudieron revisar las imágenes (${(e as Error).message}); se monta igual`, "warn");
     return goRender();
   }
+  const realFirst = !!ch.real_first || /contenido real|material aut[eé]ntico|im[aá]genes reales/i.test(String(ch.tone ?? "") + String(ch.style_guide ?? ""));
   const byId = new Map(items.map((x) => [x.id, x]));
   const touched = new Map<string, { id: string; shots: unknown[] }>();
   let n = 0;
@@ -3954,7 +3989,10 @@ async function stepVisualCheck(job: Job) {
     const entry = touched.get(it.sc.id) ?? { id: it.sc.id, shots: [...(it.sc.shots ?? [])] };
     // deno-lint-ignore no-explicit-any
     const sh: any = entry.shots[it.i];
-    entry.shots[it.i] = { ...sh, visual_type: "ai", visual_prompt: clean(b.prompt), archive_query: null, stock_query: null, media_url: null, media_kind: null, credit: null, gen: null, vfix: (sh.vfix ?? 0) + 1, vfix_why: clean(b.why) };
+    // Canales que piden material real (p. ej. 5 curiosidades): se busca otro vídeo o foto real; si no, una imagen IA hecha para esa frase
+    entry.shots[it.i] = realFirst && b.query
+      ? { ...sh, visual_type: "stock_video", stock_query: clean(b.query), archive_query: null, visual_prompt: clean(b.prompt), media_url: null, media_kind: null, credit: null, gen: null, vfix: (sh.vfix ?? 0) + 1, vfix_why: clean(b.why) }
+      : { ...sh, visual_type: "ai", visual_prompt: clean(b.prompt), archive_query: null, stock_query: null, media_url: null, media_kind: null, credit: null, gen: null, vfix: (sh.vfix ?? 0) + 1, vfix_why: clean(b.why) };
     // Los acercamientos que dependían de esa imagen se recalculan
     // deno-lint-ignore no-explicit-any
     for (let k = it.i + 1; k < entry.shots.length && (entry.shots[k] as any).visual_type === "reframe"; k++) entry.shots[k] = { ...(entry.shots[k] as object), media_url: null };
@@ -3966,6 +4004,29 @@ async function stepVisualCheck(job: Job) {
   await log(job, `Imágenes revisadas: ${n} de ${items.length} no encajaban con la voz y se rehacen (${bad.slice(0, 3).map((b) => b.why).join("; ")})`, "warn");
   await sb.from("videos").update({ stage: "Rehaciendo las imágenes que no encajaban", progress: 60 }).eq("id", v.id);
   await enqueue("visuals", { video_id: v.id });
+}
+
+// ---------- Paso: diseñar voces propias del canal (ElevenLabs Voice Design) ----------
+// payload: { voices: [{ name, description }], text } → muestras guardadas en channels.voice_options.designed para elegir
+async function stepVoiceDesign(job: Job) {
+  const { data: ch } = await sb.from("channels").select("id,name,voice_options").eq("id", job.channel_id).single();
+  if (!ch) return;
+  const text = String(job.payload?.text ?? "").slice(0, 900);
+  const wanted = (job.payload?.voices ?? []) as { name: string; description: string }[];
+  if (text.length < 100 || !wanted.length) throw new UserError("Faltan las descripciones o el texto de muestra (mínimo 100 caracteres)");
+  const designed: { name: string; description: string; generated_voice_id: string; url: string }[] = [];
+  for (const [i, w] of wanted.entries()) {
+    let r = await fetch("https://api.elevenlabs.io/v1/text-to-voice/design", { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ voice_description: w.description, text, model_id: "eleven_multilingual_ttv_v2", auto_generate_text: false }) });
+    if (r.status === 404 || r.status === 422) r = await fetch("https://api.elevenlabs.io/v1/text-to-voice/create-previews", { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ voice_description: w.description, text }) });
+    if (!r.ok) throw new Error(`ElevenLabs (diseño de voz) ${r.status}: ${(await r.text()).slice(0, 300)}`);
+    const d = await r.json();
+    const pv = (d.previews ?? [])[0];
+    if (!pv?.audio_base_64 || !pv.generated_voice_id) continue;
+    const url = await upload(`voices/${ch.id}/design_${Date.now()}_${i}.mp3`, b64ToBytes(pv.audio_base_64), "audio/mpeg");
+    designed.push({ name: w.name, description: w.description, generated_voice_id: pv.generated_voice_id, url });
+  }
+  await sb.from("channels").update({ voice_options: { ...(ch.voice_options ?? {}), designed, designed_at: new Date().toISOString() } }).eq("id", ch.id);
+  await log(job, `Voces propias diseñadas para «${ch.name}»: ${designed.map((x) => x.name).join(", ")}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

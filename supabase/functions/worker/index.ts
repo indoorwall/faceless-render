@@ -267,6 +267,7 @@ async function runStep(job: Job) {
     case "explore_adapt": return stepExploreAdapt(job);
     case "explore_refresh": return stepExploreRefresh(job);
     case "bench": return stepBench(job);
+    case "style_test": return stepStyleTest(job);
     // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
     case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
@@ -4249,6 +4250,31 @@ async function stepBench(job: Job) {
   const ideas = (r2.input?.ideas ?? []) as { name: string; niche: string; lang: string; format: string; why: string; how: string; evidence?: string[] }[];
   if (ideas.length) await sb.from("channel_ideas").insert(ideas.map((i) => ({ name: clean(i.name), niche: clean(i.niche), lang: clean(i.lang), format: clean(i.format), why: clean(i.why), how: clean(i.how), evidence: i.evidence ?? [] })));
   await log(job, `Referentes: ${ideas.length ? `${ideas.length} ideas de canal nuevo (${ideas.map((i) => i.name).join(", ")})` : "sin ideas de canal nuevo esta semana"}`);
+}
+
+// ---------- Paso: prueba de estilo visual (imágenes de muestra y una miniatura antes de decidir un formato) ----------
+// payload: { name, style, prompts: [..], thumb?: { prompt, text } } → URLs en el registro de actividad
+async function stepStyleTest(job: Job) {
+  const p = job.payload ?? {};
+  const style = String(p.style ?? "");
+  const urls: string[] = [];
+  for (const [i, pr] of ((p.prompts ?? []) as string[]).entries()) {
+    const bytes = await safeImage(`${pr}. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
+    if (bytes) urls.push(await upload(`styletests/${p.name ?? "test"}_${Date.now()}_${i}.png`, bytes, "image/png"));
+  }
+  if (p.thumb?.prompt) {
+    const bytes = await safeImage(`YouTube thumbnail, 16:9. ${p.thumb.prompt}. The characters are big and fill the lower two thirds; the top 30% is a simple background for huge text. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
+    if (bytes) {
+      const bg = await upload(`styletests/${p.name ?? "test"}_thumbbg_${Date.now()}.png`, bytes, "image/png");
+      const path = `styletests/${p.name ?? "test"}_thumb_${Date.now()}.jpg`;
+      const { data: signed } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true });
+      if (signed && KEYS["RENDER_URL"]) {
+        const r = await fetch(`${key("RENDER_URL").replace(/\/+$/, "")}/thumbnail`, { method: "POST", headers: { Authorization: `Bearer ${key("RENDER_SECRET")}`, "Content-Type": "application/json" }, body: JSON.stringify({ image_url: bg, text: String(p.thumb.text ?? ""), side: "top", upload_url: signed.signedUrl }) });
+        if (r.ok) urls.push(sb.storage.from("media").getPublicUrl(path).data.publicUrl);
+      }
+    }
+  }
+  await log(job, `Prueba de estilo «${p.name}»: ${urls.join(" ")}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

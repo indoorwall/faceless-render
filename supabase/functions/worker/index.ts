@@ -1702,8 +1702,13 @@ async function stepDirect(job: Job) {
     // deno-lint-ignore no-explicit-any
     s.scenes = s.scenes.map((sc: any, i: number) => normalizeScene({ ...sc, n: i + 1, sfx: ch.sfx_enabled ? (sc.sfx ?? "") : "" }));
     for (const k of ["sources", "description", "tags", "music_prompt"]) if (!s[k] || (Array.isArray(s[k]) && !s[k].length)) s[k] = original[k];
-    // El título lo decide el empaquetado (estudio del nicho, serie, palabras obligatorias); el director solo puede proponer
-    if (original.title) { if (s.title && s.title !== original.title) s.title_suggested = s.title; s.title = original.title; }
+    // El director puede mejorar el título, pero se conservan la etiqueta de serie («| Serie #N») y las palabras obligatorias
+    if (original.title) {
+      const suffix = String(original.title).includes(" | ") ? ` | ${String(original.title).split(" | ").slice(1).join(" | ")}` : "";
+      let t = String(s.title || "").split(" | ")[0].trim() || String(original.title).split(" | ")[0];
+      t = withMust(v, t);
+      s.title = (t + suffix).length <= 100 ? t + suffix : t;
+    }
     s.director = { ...(out.review ?? {}), score_before: isFinite(first) ? first : crit?.score, critic_before: crit, at: new Date().toISOString() };
     // La nueva versión se vuelve a puntuar en el siguiente paso (la nota que cuenta es la del crítico, no la del propio director)
     await sb.from("videos").update({ script: s, title: s.title, description: s.description, tags: s.tags ?? [], sources: s.sources ?? [], stage: `Mejorando el guion (ronda ${round + 1})` }).eq("id", v.id);

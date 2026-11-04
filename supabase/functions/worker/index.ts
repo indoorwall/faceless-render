@@ -4129,11 +4129,11 @@ async function stepExploreSearch(job: Job) {
     if (S.region) params.regionCode = S.region;
     if (job.payload?.duration) params.videoDuration = String(job.payload.duration);
     const r = await ytx("search", params, 100);
-    // Al ordenar por visitas, YouTube mete vídeos virales que no son del tema: solo cuentan los que lo mencionan
+    // Al ordenar por visitas, YouTube mete vídeos virales que no son del tema: solo cuentan los que lo dicen en el título (sin contar hashtags, que el spam rellena)
     const norm = (t: string) => String(t ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const terms = norm(String(S.q ?? "")).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 || /[^\x00-\x7f]/.test(w));
     // deno-lint-ignore no-explicit-any
-    const onTopic = (it: any) => !terms.length || terms.some((w) => norm(`${it.snippet?.title ?? ""} ${it.snippet?.description ?? ""} ${(it.snippet?.tags ?? []).join(" ")}`).includes(w));
+    const onTopic = (it: any) => !terms.length || terms.some((w) => norm(String(it.snippet?.title ?? "").replace(/#\S+/g, " ")).includes(w));
     const ids = (r.items ?? []).filter(onTopic).map((i: { id: { videoId: string } }) => i.id?.videoId).filter(Boolean);
     const vids = ids.length ? (await ytx("videos", { part: "snippet,statistics,contentDetails", id: ids.join(",") }, 1)).items ?? [] : [];
     // deno-lint-ignore no-explicit-any

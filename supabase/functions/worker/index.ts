@@ -155,8 +155,8 @@ async function runLoop() {
       if (e instanceof QuotaWait) {
         const pt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })); const ms = ((24 - pt.getHours()) * 60 - pt.getMinutes() + 10) * 60000;
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), run_after: new Date(Date.now() + ms).toISOString() }).eq("id", job.id);
-        if (job.video_id) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
-        await log(job, "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
+        if (job.video_id && job.step !== "reschedule") await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
+        await log(job, job.step === "reschedule" ? "Cuota diaria de YouTube agotada: el cambio de fecha se hará hacia las 9:10" : "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
         continue;
       }
       if (e instanceof Pending) {
@@ -3794,6 +3794,9 @@ async function stepCompile(job: Job) {
 
 // ---------- Paso: cambiar la fecha de un vídeo programado (también en YouTube si ya está subido) ----------
 async function stepReschedule(job: Job) {
+  // Si después se pidió otra fecha para el mismo vídeo, manda la última
+  const { count: newer } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "reschedule").eq("video_id", job.video_id).eq("status", "queued").gt("id", job.id);
+  if ((newer ?? 0) > 0) return;
   const v = await getVideo(job.video_id);
   const at = new Date(String(job.payload?.publish_at ?? ""));
   if (isNaN(at.getTime())) throw new UserError("Fecha no válida");
@@ -3807,15 +3810,18 @@ async function stepReschedule(job: Job) {
   if (v.status === "published" || (v.publish_at && new Date(v.publish_at).getTime() < Date.now())) throw new UserError("Este vídeo ya es público: no se puede cambiar su fecha");
   const token = await ytAccess(v.channel_id);
   if (!token) throw new UserError("Conecta el canal de YouTube para cambiar la fecha");
-  if (!(await sb.rpc("yt_quota_take", { p_units: 51 })).data) throw new QuotaWait("youtube");
+  // Cuesta solo 51 unidades: se intenta aunque nuestra cuenta interna diga que el día está lleno (las subidas reservan de más);
+  // si YouTube de verdad no tiene cuota, se reintenta cuando se renueve
+  await sb.rpc("yt_quota_take", { p_units: 51 });
+  const quota = (e: unknown) => { if (/quota/i.test(String((e as Error)?.message ?? e))) throw new QuotaWait("youtube"); throw e; };
   // Se lee el estado actual y se reenvía entero con la nueva fecha (si faltara algún campo, YouTube lo pondría por defecto)
-  const cur = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "status", id: v.youtube_video_id });
+  const cur = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "status", id: v.youtube_video_id }).catch(quota);
   const st = cur.items?.[0]?.status;
   if (!st) throw new UserError("No se encuentra el vídeo en YouTube");
   if (st.privacyStatus !== "private") throw new UserError("Este vídeo ya es público en YouTube: no se puede cambiar su fecha");
   const status = { privacyStatus: "private", publishAt: at.toISOString(), selfDeclaredMadeForKids: st.selfDeclaredMadeForKids ?? false, license: st.license, embeddable: st.embeddable, publicStatsViewable: st.publicStatsViewable, ...(st.containsSyntheticMedia != null ? { containsSyntheticMedia: st.containsSyntheticMedia } : {}) };
   const r = await fetch("https://www.googleapis.com/youtube/v3/videos?part=status", { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ id: v.youtube_video_id, status }) });
-  if (!r.ok) throw new Error(`YouTube (cambiar fecha) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  if (!r.ok) { const t = (await r.text()).slice(0, 200); if (/quota/i.test(t)) throw new QuotaWait("youtube"); throw new Error(`YouTube (cambiar fecha) ${r.status}: ${t}`); }
   await sb.from("videos").update({ publish_at: at.toISOString() }).eq("id", v.id);
   await log(job, `Fecha cambiada en YouTube: «${v.title}» saldrá el ${at.toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}`);
 }

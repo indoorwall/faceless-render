@@ -479,7 +479,7 @@ async function load(){
     sb.from("activity").select("*").order("created_at",{ascending:false}).limit(60),
     sb.rpc("api_key_status"),
     sb.rpc("get_prices"),
-    sb.from("jobs").select("id,step,status,channel_id,video_id,run_after").in("status",["queued","running"]),
+    sb.from("jobs").select("id,step,status,channel_id,video_id,run_after,payload").in("status",["queued","running"]),
     sb.from("channel_reports").select("*").order("day",{ascending:false}).limit(60),
     sb.from("yt_comments").select("*").in("status",["pending","hide"]).order("published_at",{ascending:false}).limit(200),
   ]);
@@ -866,8 +866,11 @@ function resched(v){
   const days=[...Array(8)].map((_,i)=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()+i); return d; });
   const mine=S.videos.filter(x=>x.channel_id===v.channel_id&&["scheduled","publishing","final_review"].includes(x.status)&&x.publish_at);
   const cnt=days.map(d=>({d,n:mine.filter(x=>{ const t=new Date(x.publish_at); return t>=d&&t<new Date(d.getTime()+864e5); }).length}));
+  // Cambio pedido que aún no se ha hecho (p. ej. esperando a que se renueve la cuota de YouTube)
+  const pend=(S.jobs||[]).filter(j=>j.step==="reschedule"&&j.video_id===v.id&&j.status!=="done").sort((a,b)=>b.id-a.id)[0];
+  const pendTxt=pend?.payload?.publish_at?`<div class="chip st-warn" style="margin-bottom:8px">Cambio pendiente a ${esc(whenTxt(pend.payload.publish_at))}${new Date(pend.run_after)>Date.now()+60e3?` · YouTube sin cuota hoy: se hará hacia las ${esc(new Date(pend.run_after).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}))}`:" · en curso"}</div>`:"";
   return `<div class="card" style="padding:12px 14px;margin:10px 0">
-    <div class="label" style="margin-bottom:6px">Cambiar el día</div>
+    <div class="label" style="margin-bottom:6px">Cambiar el día</div>${pendTxt}
     <div class="row" style="gap:8px;flex-wrap:wrap"><input type="datetime-local" id="rs-at" value="${loc(v.publish_at)}" style="font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)"><button class="btn pri" onclick="rescheduleVideo('${v.id}')">Guardar fecha</button></div>
     <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap">${cnt.map(({d,n})=>`<span class="chip ${n>=3?"st-warn":""}" title="Vídeos de este canal ese día">${d.toLocaleDateString("es-ES",{weekday:"short",day:"numeric"})}: ${n}</span>`).join("")}</div>
     <div class="muted" style="font-size:12.5px;margin-top:6px">${v.youtube_video_id?"Ya está subido: la fecha también se cambia en YouTube (tarda un minuto).":"Aún no está subido: se subirá programado para la nueva fecha."}</div></div>`;

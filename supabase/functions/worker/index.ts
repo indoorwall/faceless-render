@@ -2,6 +2,7 @@
 // Autenticación propia: cabecera x-cron-secret (pg_cron) o JWT de un miembro (web).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { jsonrepair } from "npm:jsonrepair@3.13.1";
+import { encodeBase64 } from "jsr:@std/encoding@1/base64";
 // Motor B (retos): el mismo código que usan la web y el servidor de montaje
 import { timeline as retosTimeline, validateProject, mergeConfig as retosConfig, hashStr, buildProject, makeChallenge, projectStrings, QUIZ_TOPICS, CATEGORY_ORDER as RETOS_CLASSIC, SOUNDS as RETOS_SOUNDS, MUSIC as RETOS_MUSIC } from "../../../web/retos/engine.js";
 import { WORLD } from "../../../web/retos/world.js";
@@ -3980,29 +3981,43 @@ async function stepVisualCheck(job: Job) {
   const round = Number(v.auto?.vcheck ?? 0);
   const goRender = () => enqueue("render", { video_id: v.id });
   if (round >= 2 || v.engine === "challenges") return goRender();
+  // Si ya hay otra revisión de este vídeo en marcha o recién hecha, esta sobra (evita revisar y rehacer dos veces)
+  const { count: dup } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "visual_check").eq("video_id", v.id).neq("id", job.id).in("status", ["running", "done"]).gte("created_at", new Date(Date.now() - 20 * 60000).toISOString());
+  if ((dup ?? 0) > 0) return;
   const { data: scenes } = await sb.from("scenes").select("id,n,shots").eq("video_id", v.id).order("n");
-  const thumb = (u: string) => u.includes("/storage/v1/object/public/") ? u.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/").replace(/\?.*$/, "") + "?width=512&quality=60" : u;
+  // Miniatura sin recortar (resize=contain) que se descarga aquí y se manda en base64: con enlaces, la IA a veces recibía otra imagen
+  const thumb = (u: string) => u.includes("/storage/v1/object/public/") ? u.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/").replace(/\?.*$/, "") + "?width=384&height=384&resize=contain&quality=60" : u;
   // deno-lint-ignore no-explicit-any
-  const items: { id: string; line: string; url: string; sc: any; i: number }[] = [];
+  const items: { id: string; line: string; url: string; sc: any; i: number; b64?: string; mt?: string }[] = [];
   for (const sc of scenes ?? []) (sc.shots ?? []).forEach((sh: { media_url?: string; media_kind?: string; visual_type?: string; line?: string; vfix?: number }, i: number) => {
     if (!sh.media_url || sh.media_kind !== "image" || sh.visual_type === "reframe" || (sh.vfix ?? 0) >= 1) return;
     items.push({ id: `${sc.n}.${i}`, line: String(sh.line ?? ""), url: thumb(sh.media_url), sc, i });
   });
-  if (!items.length) return goRender();
+  for (const it of items.slice(0, 30)) {
+    try { const r = await fetch(it.url); if (r.ok) { it.mt = (r.headers.get("content-type") ?? "image/jpeg").split(";")[0]; if (!/^image\/(jpeg|png|webp|gif)$/.test(it.mt)) it.mt = "image/jpeg"; it.b64 = encodeBase64(new Uint8Array(await r.arrayBuffer())); } } catch (_) { /* sin miniatura: no se revisa */ }
+  }
+  const ok = items.slice(0, 30).filter((x) => x.b64);
+  if (!ok.length) return goRender();
   await sb.from("videos").update({ stage: "Revisando que cada imagen encaje con la voz", progress: 78 }).eq("id", v.id);
-  // deno-lint-ignore no-explicit-any
-  const content: any[] = [{ type: "text", text: `Vídeo «${v.title ?? v.idea_title}» del canal «${ch.name}» (${ch.niche}). Para cada plano verás lo que dice la voz y la imagen que se muestra en ese momento. Marca SOLO las que un espectador vería claramente como incorrectas: otro país, otra época, otro animal u objeto, personas actuales en una historia antigua, escudos, carteles, logos o textos que no tienen nada que ver, o algo que no guarda relación con la frase. Una imagen genérica pero coherente (p. ej. un barco de la época cuando se habla de un barco) está bien.` }];
-  for (const it of items.slice(0, 30)) content.push({ type: "text", text: `[${it.id}] voz: «${it.line.slice(0, 200)}»` }, { type: "image", source: { type: "url", url: it.url } });
-  content.push({ type: "text", text: "Llama a revisar_imagenes con las que no encajan (lista vacía si todas están bien)." });
   let bad: { id: string; why: string; prompt: string; query?: string }[] = [];
-  try {
-    const r = await claudeTool(MODEL_FAST, "Revisas el montaje de vídeos documentales: compruebas que cada imagen corresponde con lo que dice la voz en ese momento. Eres riguroso con la época, el lugar y los objetos.", content, VCHECK_TOOL, 3000);
-    await bumpUsage(v.id, usageOf(r));
-    bad = Array.isArray(r.input?.bad) ? r.input.bad : [];
-  } catch (e) {
-    if (e instanceof OverBudget) throw e;
-    await log(job, `No se pudieron revisar las imágenes (${(e as Error).message}); se monta igual`, "warn");
-    return goRender();
+  // Por tandas de 8: con muchas imágenes en un solo mensaje la IA confunde cuál es cuál
+  for (let k = 0; k < ok.length; k += 8) {
+    const part = ok.slice(k, k + 8);
+    // deno-lint-ignore no-explicit-any
+    const content: any[] = [{ type: "text", text: `Vídeo «${v.title ?? v.idea_title}» del canal «${ch.name}» (${ch.niche}). Para cada plano verás lo que dice la voz y, justo después, LA IMAGEN de ese plano. Describe mentalmente cada imagen antes de juzgarla. Marca SOLO las que un espectador vería claramente como incorrectas: otro país, otra época, otro animal u objeto, personas actuales en una historia antigua, escudos, carteles, logos o textos que no tienen nada que ver, o algo sin relación con la frase. Una imagen genérica pero coherente (p. ej. un barco de la época cuando se habla de un barco) está bien.` }];
+    for (const it of part) content.push({ type: "text", text: `[${it.id}] voz: «${it.line.slice(0, 200)}»` }, { type: "image", source: { type: "base64", media_type: it.mt, data: it.b64 } });
+    content.push({ type: "text", text: "Llama a revisar_imagenes con las que no encajan (lista vacía si todas están bien)." });
+    try {
+      const r = await claudeTool(MODEL_FAST, "Revisas el montaje de vídeos documentales: compruebas que cada imagen corresponde con lo que dice la voz en ese momento. Eres riguroso con la época, el lugar y los objetos, pero no inventas: si una imagen encaja, no la marques.", content, VCHECK_TOOL, 2000);
+      await bumpUsage(v.id, usageOf(r));
+      const got = (Array.isArray(r.input?.bad) ? r.input.bad : []).filter((b: { id: string }) => part.some((x) => x.id === String(b.id)));
+      // Si marca casi toda la tanda, lo más probable es que haya fallado la revisión, no las imágenes
+      if (got.length > Math.max(2, Math.ceil(part.length * 0.6))) { await log(job, `Revisión de imágenes poco fiable en una tanda (marcaba ${got.length} de ${part.length}); se ignora`, "warn"); continue; }
+      bad.push(...got);
+    } catch (e) {
+      if (e instanceof OverBudget) throw e;
+      await log(job, `No se pudo revisar una tanda de imágenes (${(e as Error).message})`, "warn");
+    }
   }
   const realFirst = !!ch.real_first || /contenido real|material aut[eé]ntico|im[aá]genes reales/i.test(String(ch.tone ?? "") + String(ch.style_guide ?? ""));
   const byId = new Map(items.map((x) => [x.id, x]));

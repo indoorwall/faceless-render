@@ -1705,9 +1705,11 @@ async function stepDirect(job: Job) {
   };
   if (!original?.scenes?.length) throw new UserError("No hay guion que revisar");
   if (job.attempts >= 2) { await finish(original); await log(job, "El director tardó demasiado. Queda la última versión del guion.", "warn"); return; }
-  // 1) Nota del crítico independiente
+  // 1) Nota del crítico independiente: desactivada por defecto (no predice las visitas: el caballo de madera sacó 4,5 y tiene 10.000).
+  //    El guionista ya se autoevalúa con los mismos criterios. Se activa con channels.critic_on = true.
   let crit: { score: number; issues: string[] } | null = null;
-  try { crit = await criticScore(v, ch, original, short); } catch (e) { if (e instanceof OverBudget) throw e; }
+  if (ch.critic_on) { try { crit = await criticScore(v, ch, original, short); } catch (e) { if (e instanceof OverBudget) throw e; } }
+  else { await finish({ ...original, director: { ...(original.director ?? {}), skipped: true, score_after: Number(original.self_score ?? original.director?.score_after ?? 7), at: new Date().toISOString() } }); return; }
   const first = Number(original.director?.score_before ?? crit?.score ?? NaN);
   if (crit && crit.score >= th) {
     await finish({ ...original, director: { ...(original.director ?? {}), skipped: round === 0, score_before: isFinite(first) ? first : crit.score, score_after: crit.score, critic: crit, rounds: round, at: new Date().toISOString() } });
@@ -3990,7 +3992,8 @@ async function stepVisualCheck(job: Job) {
   // deno-lint-ignore no-explicit-any
   const items: { id: string; line: string; url: string; sc: any; i: number; b64?: string; mt?: string }[] = [];
   for (const sc of scenes ?? []) (sc.shots ?? []).forEach((sh: { media_url?: string; media_kind?: string; visual_type?: string; line?: string; vfix?: number }, i: number) => {
-    if (!sh.media_url || sh.media_kind !== "image" || sh.visual_type === "reframe" || (sh.vfix ?? 0) >= 1) return;
+    // Solo fotos de archivo y de bancos de imágenes: las de IA salen de un prompt hecho para esa frase y casi nunca fallan
+    if (!sh.media_url || sh.media_kind !== "image" || ["reframe", "ai"].includes(String(sh.visual_type)) || (sh.vfix ?? 0) >= 1) return;
     items.push({ id: `${sc.n}.${i}`, line: String(sh.line ?? ""), url: thumb(sh.media_url), sc, i });
   });
   for (const it of items.slice(0, 30)) {
@@ -4023,7 +4026,8 @@ async function stepVisualCheck(job: Job) {
   const byId = new Map(items.map((x) => [x.id, x]));
   const touched = new Map<string, { id: string; shots: unknown[] }>();
   let n = 0;
-  for (const b of bad) {
+  // Como mucho 4 imágenes rehechas por vídeo (cada una cuesta)
+  for (const b of bad.slice(0, 4)) {
     const it = byId.get(String(b.id)); if (!it || !b.prompt) continue;
     const entry = touched.get(it.sc.id) ?? { id: it.sc.id, shots: [...(it.sc.shots ?? [])] };
     // deno-lint-ignore no-explicit-any

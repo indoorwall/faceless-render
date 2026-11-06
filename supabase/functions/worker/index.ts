@@ -3181,7 +3181,8 @@ async function planChannel(job: Job, ch: any) {
     }
   }
   // 4) Canal en otro idioma: dobla los vídeos publicados del canal original (uno por pasada)
-  if (ch.mirror_of && ch.mirror_auto) {
+  // (solo con el canal de YouTube ya conectado: si no, se gastaría en voces que no se pueden subir)
+  if (ch.mirror_of && ch.mirror_auto && ch.youtube_connected) {
     const { data: srcAll } = await sb.from("videos").select("id,derived,stats,created_at").eq("channel_id", ch.mirror_of).in("status", ["publishing", "scheduled", "published"]).is("derived", null).order("created_at", { ascending: false }).limit(300);
     // Primero los que mejor funcionaron en el canal original (visitas); los aún sin datos, al final
     const srcV = (srcAll ?? []).sort((a, b) => Number(b.stats?.views ?? -1) - Number(a.stats?.views ?? -1));

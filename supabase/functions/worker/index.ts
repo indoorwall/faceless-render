@@ -3588,6 +3588,13 @@ async function packageVideo(ch: any, s: any, v: any) {
   // Serie con número («… | Animales en guerra #4»): da al espectador un motivo para suscribirse y no perderse el siguiente
   try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200), (r.input?.candidates ?? []).map((x: unknown) => String(x).trim())); } catch (e) { if (e instanceof OverBudget) throw e; }
   t = withMust(v, t, (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()));
+  // Longitud máxima del canal (en el feed de Shorts el título se corta hacia los 40-45 caracteres):
+  // si se pasa, otro candidato que quepa; si no, sin la etiqueta de serie (la serie sigue en la lista de reproducción)
+  const tmax = Number(P.title_max ?? 0);
+  if (tmax && t.length > tmax) {
+    const fit = (r.input?.candidates ?? []).map((x: unknown) => withMust(v, String(x).trim().replace(/\s*#[\p{L}\p{N}_]+/gu, "").trim())).find((x: string) => x.length <= tmax);
+    t = fit ?? t.split(" | ")[0].trim();
+  }
   return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
 }
 // Rehacer título y descripción de un vídeo ya escrito o montado

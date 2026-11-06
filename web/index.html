@@ -520,12 +520,13 @@ function render(){
 function authView(){
   return `<div class="auth"><form class="card" id="authf">
     <div class="brand" style="padding:0"><i></i>Faceless Studio</div>
-    <p class="muted" style="margin:0">Tu estudio de canales automáticos. La primera cuenta que se crea es la del propietario; nadie más tiene acceso.</p>
+    <p class="muted" style="margin:0">Herramienta privada para producir y publicar vídeos en mis propios canales de YouTube. Solo tiene acceso el propietario.</p>
+    <div class="row" style="gap:8px;align-items:center;font-size:13px"><svg width="28" height="20" viewBox="0 0 28 20" aria-label="YouTube"><rect width="28" height="20" rx="5" fill="#FF0000"/><path d="M11 5.5v9l7.5-4.5z" fill="#fff"/></svg><span>Publica en YouTube con los servicios de la API de YouTube</span></div>
     <label class="f">Email<input type="email" id="ae" required autocomplete="email"></label>
     <label class="f">Contraseña<input type="password" id="ap" required minlength="8" autocomplete="current-password"></label>
-    <div class="row"><button class="btn pri" type="submit" style="flex:1">Entrar</button><button class="btn" type="button" id="asu">Crear cuenta</button></div>
+    <div class="row"><button class="btn pri" type="submit" style="flex:1">Entrar</button><button class="btn" type="button" id="asu" hidden>Crear cuenta</button></div>
     <p class="muted" id="amsg" style="margin:0;font-size:13px"></p>
-    <p class="muted" style="margin:0;font-size:12px;text-align:center"><a href="privacidad.html">Política de privacidad</a> · <a href="condiciones.html">Condiciones del servicio</a></p>
+    <p class="muted" style="margin:0;font-size:12px;text-align:center"><a href="privacidad.html">Política de privacidad</a> · <a href="condiciones.html">Condiciones del servicio</a> · <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener">Condiciones de YouTube</a> · <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Privacidad de Google</a></p>
   </form></div>`;
 }
 function bindAuth(){

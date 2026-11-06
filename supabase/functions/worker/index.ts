@@ -1961,6 +1961,10 @@ async function stepRefillIdeas(job: Job) {
   const approved = (vids ?? []).filter((x) => !["idea_review", "idea_rejected"].includes(x.status)).map((x) => x.idea_title).slice(0, 20);
   const rejected = (vids ?? []).filter((x) => x.status === "idea_rejected").map((x) => x.idea_title).slice(0, 30);
   const used = [...new Set([...(vids ?? []).map((x) => x.idea_title), ...(bank ?? []).filter((b) => !String(b.focus ?? "").startsWith("retirada")).map((x) => x.title)])].filter(Boolean);
+  // Variedad: cuánto se ha repetido cada tema en los últimos 20 vídeos e ideas del canal
+  const lastT = (vids ?? []).slice(0, 20).map((x) => topicOf(String(x.idea_title ?? ""))).filter(Boolean) as string[];
+  const counts = Object.entries(lastT.reduce((a: Record<string, number>, t) => { a[t] = (a[t] ?? 0) + 1; return a; }, {})).sort((a, b) => b[1] - a[1]);
+  const varietyBlock = focus ? "" : `\nVARIEDAD (obligatoria): como mucho 1 de cada 5 ideas puede ser de perros o gatos, y nunca dos ideas seguidas del mismo animal o tema. Reparte entre TODOS los temas del canal (animales salvajes y marinos, insectos, cuerpo humano, cerebro, comida, lugares del mundo, inventos, historia, espacio, plantas…).${counts.length ? ` En los últimos vídeos ya hay: ${counts.map(([t, n]) => `${t} ×${n}`).join(", ")}; prioriza lo que menos ha salido.` : ""}\n`;
   const allowedF: string[] = (ch.formats?.length ? ch.formats : [ch.format]).filter((f: string) => ["short", "long"].includes(f));
   const wantF = ["short", "long"].includes(job.payload?.format) && allowedF.includes(job.payload.format) ? job.payload.format : allowedF.length === 1 ? allowedF[0] : "mix";
   const longMin = ch.format === "long" ? ch.target_minutes : (ch.long_minutes ?? 8);
@@ -1974,7 +1978,7 @@ Nicho: ${ch.niche}
 TEMAS DEL CANAL (obligatorio, solo de aquí): ${ch.topics || ch.niche}
 Formato: ${fmtLine}
 ${ch.style_guide ? `\nGUÍA DEL CANAL:\n${String(ch.style_guide).slice(0, 5000)}\n` : ""}${playbookBlock(ch)}${focus ? `\nENFOQUE PEDIDO AHORA POR EL AUTOR (todas las ideas deben ir de esto): ${focus}\n` : ""}
-${approved.length ? `Ideas que el autor APROBÓ (busca más de este estilo, sin repetirlas):\n${approved.map((t) => `- ${t}`).join("\n")}\n` : ""}${rejected.length ? `\nIdeas que el autor RECHAZÓ (evita ese tipo de tema o enfoque):\n${rejected.map((t) => `- ${t}`).join("\n")}\n` : ""}
+${varietyBlock}${approved.length ? `Ideas que el autor APROBÓ (busca más de este estilo, sin repetirlas):\n${approved.map((t) => `- ${t}`).join("\n")}\n` : ""}${rejected.length ? `\nIdeas que el autor RECHAZÓ (evita ese tipo de tema o enfoque):\n${rejected.map((t) => `- ${t}`).join("\n")}\n` : ""}
 Ya usadas o en cola (no repetir ni parafrasear la misma historia):
 ${used.slice(0, 220).map((t) => `- ${t}`).join("\n") || "-"}
 
@@ -3058,6 +3062,9 @@ async function stepPlanner(job: Job) {
     try { await planChannel(job, ch); } catch (e) { if (e instanceof OverBudget) throw e; await log({ ...job, channel_id: ch.id }, `Piloto automático: ${(e as Error).message}`, "warn"); }
   }
 }
+// Tema grueso de una idea (para no repetir el mismo animal o tema seguido)
+const TOPICS: [string, RegExp][] = [["perros", /\b(perr[oa]s?|cachorr|can(in|es)\b)/i], ["gatos", /\b(gat[oa]s?|felin|minino)/i], ["otras mascotas", /\b(conejo|cobaya|hámster|hamster|loro|periquito|tortuga|mascota)/i], ["cuerpo humano", /\b(cerebro|corazón|piel|huesos?|ojos?|sangre|pelo|uñas|dientes|estómago|sueño|lágrimas)/i]];
+const topicOf = (t: string) => TOPICS.find(([, re]) => re.test(t))?.[0] ?? null;
 // deno-lint-ignore no-explicit-any
 async function planChannel(job: Job, ch: any) {
   const J = { ...job, channel_id: ch.id };
@@ -3145,8 +3152,18 @@ async function planChannel(job: Job, ch: any) {
         await log(J, `Piloto automático: ${f === "long" ? "nuevo vídeo largo" : "nuevo Short"} de retos para llenar el calendario`);
       } else {
         const ideas = V.filter((v) => v.status === "idea_review" && (!v.format || v.format === f));
-        for (const v of ideas.slice(0, need)) { await setAuto(v, { idea: { by: "auto", at: new Date().toISOString() } }, { status: "scripting", format: f }); need--; await log({ ...J, video_id: v.id }, `Piloto automático: idea aprobada «${v.idea_title}»`); }
-        if (need > 0 && ideas.length < 3) await sb.rpc("draw_ideas_internal", { p_channel: ch.id, p_n: Math.max(3, need + 2) });
+        // Variedad: si entre los últimos 6 vídeos del canal ya hay 2 del mismo tema (p. ej. perros o gatos), las ideas de ese tema esperan
+        const recentT = V.filter((v) => !["idea_review", "idea_rejected"].includes(v.status)).sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).slice(0, 6).map((v) => topicOf(String(v.title ?? v.idea_title ?? "")));
+        const ok = ideas.filter((v) => { const t = topicOf(String(v.idea_title ?? "")); return !t || recentT.filter((x) => x === t).length < 2; });
+        const picked: string[] = [];
+        for (const v of ok) {
+          if (need <= 0) break;
+          const t = topicOf(String(v.idea_title ?? ""));
+          if (t && [...recentT, ...picked].filter((x) => x === t).length >= 2) continue;
+          if (t) picked.push(t);
+          await setAuto(v, { idea: { by: "auto", at: new Date().toISOString() } }, { status: "scripting", format: f }); need--; await log({ ...J, video_id: v.id }, `Piloto automático: idea aprobada «${v.idea_title}»`);
+        }
+        if (need > 0 && ok.length < 3) await sb.rpc("draw_ideas_internal", { p_channel: ch.id, p_n: Math.max(3, need + 2) });
       }
     }
   }

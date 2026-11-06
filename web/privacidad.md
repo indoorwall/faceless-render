@@ -1,6 +1,6 @@
 # Política de privacidad — Faceless Studio
 
-*Última actualización: 28 de octubre de 2026*
+*Última actualización: 6 de noviembre de 2026*
 
 Faceless Studio es una herramienta privada que usa su propietario para producir y publicar vídeos en sus propios canales de YouTube. No está abierta al público ni recoge datos de otras personas.
 

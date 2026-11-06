@@ -1965,7 +1965,9 @@ async function stepRefillIdeas(job: Job) {
   const lastT = (vids ?? []).slice(0, 20).map((x) => topicOf(String(x.idea_title ?? ""))).filter(Boolean) as string[];
   const counts = Object.entries(lastT.reduce((a: Record<string, number>, t) => { a[t] = (a[t] ?? 0) + 1; return a; }, {})).sort((a, b) => b[1] - a[1]);
   const varietyBlock = focus ? "" : `\nVARIEDAD (obligatoria): como mucho 1 de cada 5 ideas puede ser de perros o gatos, y nunca dos ideas seguidas del mismo animal o tema. Reparte entre TODOS los temas del canal (animales salvajes y marinos, insectos, cuerpo humano, cerebro, comida, lugares del mundo, inventos, historia, espacio, plantas…).${counts.length ? ` En los últimos vídeos ya hay: ${counts.map(([t, n]) => `${t} ×${n}`).join(", ")}; prioriza lo que menos ha salido.` : ""}\n`;
-  const allowedF: string[] = (ch.formats?.length ? ch.formats : [ch.format]).filter((f: string) => ["short", "long"].includes(f));
+  // Sin ideas de vídeos largos mientras el canal no llegue a los suscriptores fijados para empezar con largos
+  const longLocked = Number(ch.schedule?.long_min_subs ?? 0) > Number(ch.yt_stats?.subs ?? 0);
+  const allowedF: string[] = (ch.formats?.length ? ch.formats : [ch.format]).filter((f: string) => ["short", "long"].includes(f) && !(f === "long" && longLocked && job.payload?.format !== "long"));
   const wantF = ["short", "long"].includes(job.payload?.format) && allowedF.includes(job.payload.format) ? job.payload.format : allowedF.length === 1 ? allowedF[0] : "mix";
   const longMin = ch.format === "long" ? ch.target_minutes : (ch.long_minutes ?? 8);
   const searchLine = " La mitad de las ideas de vídeo largo responden a algo que la gente busca en YouTube o Google («¿Por qué…?», «¿Qué pasó con…?», «Cómo…»): su título coincide con esa búsqueda para que el vídeo reciba visitas durante años; la otra mitad son ideas virales.";

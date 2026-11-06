@@ -11,6 +11,7 @@ Cuando el propietario conecta su canal de YouTube, Faceless Studio accede, con s
 - **Para publicar:** sube vídeos, títulos, descripciones, etiquetas y miniaturas al canal del propietario.
 - **Para leer el canal:** nombre e identificador del canal y lista de vídeos subidos.
 - **Para las analíticas:** estadísticas agregadas de los vídeos del canal (visitas, tiempo de visualización, retención de la audiencia, fuentes de tráfico, suscriptores, «me gusta», comentarios y veces compartido). Son datos agregados: no identifican a ningún espectador.
+- **Para responder a la audiencia:** el texto de los comentarios públicos de los vídeos del propietario, para preparar respuestas que el propietario revisa. Se borran a los 30 días.
 
 ## Para qué los usamos
 
@@ -19,6 +20,10 @@ Solo para publicar los vídeos del propietario y para mostrarle cómo funcionan,
 ## Dónde se guardan
 
 En una base de datos privada (Supabase) a la que solo accede el propietario. El acceso a YouTube se guarda cifrado.
+
+## Cuánto tiempo se guardan
+
+Los datos obtenidos de la API de YouTube se actualizan a diario y no se guardan más de 30 días sin actualizar. Si el propietario desconecta su canal, se borran.
 
 ## Cómo retirar el acceso
 

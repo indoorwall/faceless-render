@@ -1353,8 +1353,9 @@ async function stepVisuals(job: Job) {
     if (credits.length) {
       const seenC = new Set<string>();
       const lines = credits.filter((c) => !seenC.has(c.source) && seenC.add(c.source)).map((c) => `· ${c.title} — ${c.author} (${c.license}) ${c.source}`);
-      const baseDesc = String(v.description ?? "").split("\n\nImágenes de archivo:")[0];
-      await sb.from("videos").update({ description: `${baseDesc}\n\nImágenes de archivo:\n${lines.join("\n")}`.trim() }).eq("id", v.id);
+      const lbl = descLabel(ch.language, "img");
+      const baseDesc = String(v.description ?? "").split(/\n\n(?:Imágenes de archivo|Archive images|Imagens de arquivo):/)[0];
+      await sb.from("videos").update({ description: `${baseDesc}\n\n${lbl}:\n${lines.join("\n")}`.trim() }).eq("id", v.id);
     }
     await enqueue("visual_check", { video_id: v.id }); await log(job, "Visuales terminados");
   }
@@ -1509,13 +1510,20 @@ function withMust(v: any, t: string, alts: string[] = []): string {
 }
 // Fuentes visibles al final de la descripción (rigor: lo que diferencia un canal de divulgación de uno de relleno)
 // deno-lint-ignore no-explicit-any
+// Etiquetas fijas de la descripción en el idioma del canal (los canales en otros idiomas no deben llevar «Fuentes:»)
+function descLabel(lang: string, k: "img" | "src") {
+  const L: Record<string, [string, string]> = { es: ["Imágenes de archivo", "Fuentes"], en: ["Archive images", "Sources"], pt: ["Imagens de arquivo", "Fontes"] };
+  return (L[String(lang ?? "es").slice(0, 2)] ?? L.es)[k === "img" ? 0 : 1];
+}
+// deno-lint-ignore no-explicit-any
 function withSources(v: any): string {
   const d = String(v.description ?? "");
+  const lbl = descLabel(v.channel?.language, "src");
   // deno-lint-ignore no-explicit-any
   const src = (Array.isArray(v.sources) ? v.sources : (v.script?.sources ?? [])).filter((x: any) => x?.url && /^https?:\/\//.test(x.url)).slice(0, 5);
-  if (!src.length || /(^|\n)Fuentes:/.test(d)) return d.slice(0, 4900);
+  if (!src.length || /(^|\n)(Fuentes|Sources|Fontes):/.test(d)) return d.slice(0, 4900);
   // deno-lint-ignore no-explicit-any
-  return `${d.trim()}\n\nFuentes:\n${src.map((x: any) => `· ${String(x.title ?? "").slice(0, 80)} — ${x.url}`).join("\n")}`.slice(0, 4900);
+  return `${d.trim()}\n\n${lbl}:\n${src.map((x: any) => `· ${String(x.title ?? "").slice(0, 80)} — ${x.url}`).join("\n")}`.slice(0, 4900);
 }
 async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
@@ -3077,8 +3085,9 @@ async function planChannel(job: Job, ch: any) {
   const setAuto = (v: { id: string; auto?: unknown }, patch: Record<string, unknown>, extra: Record<string, unknown> = {}) => sb.from("videos").update({ auto: { ...((v.auto as object) ?? {}), ...patch }, ...extra }).eq("id", v.id);
 
   if (ch.autopilot !== "manual") {
+    const mirrorOnly = !!(ch.mirror_of && ch.mirror_auto);
     // 1) Guiones (y retos) por revisar: se aprueban solos si pasan los controles
-    for (const v of V.filter((x) => x.status === "script_review" && !x.auto?.script)) {
+    for (const v of V.filter((x) => !mirrorOnly && x.status === "script_review" && !x.auto?.script)) {
       let score: number | null = null, why = "";
       if (v.engine === "challenges") { const val = v.retos?.kind === "formato" ? validateFormat(v.retos.format, v.retos.data) : validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
       // La nota del crítico es orientativa (no predice las visitas reales): solo frena un guion desastroso (por debajo de script_min, 3 por defecto)
@@ -3099,6 +3108,8 @@ async function planChannel(job: Job, ch: any) {
         if (!ch.youtube_connected) { await setAuto(v, { final: { held: "conecta el canal de YouTube", at: new Date().toISOString() } }); continue; }
         let score: number | null = null, why = "";
         if (v.engine === "challenges") { const a = v.retos?.report?.audio; if (!a || a.lufs == null) why = "el informe de sonido no está completo"; else score = 10; }
+        // Doblaje: el original ya pasó el análisis; no se paga otra vez
+        else if (v.derived === "dub") score = Number((await sb.from("videos").select("analysis").eq("id", v.parent_id).maybeSingle()).data?.analysis?.score ?? 7);
         else {
           if (v.analysis?.status !== "done" || v.analysis?.video_url !== v.video_url) {
             if (!v.auto?.analyze_requested) { await enqueue("analyze", { video_id: v.id }); await setAuto(v, { analyze_requested: new Date().toISOString() }, { analysis: { status: "running" } }); }
@@ -3123,7 +3134,7 @@ async function planChannel(job: Job, ch: any) {
     }
     // 3) Mantener la cola llena según el calendario
     const s = scheduleOf(ch), horizon = Date.now() + (s.buffer_days ?? 5) * 86400000;
-    for (const f of ["long", "short"]) {
+    for (const f of mirrorOnly ? [] : ["long", "short"]) {
       const slots = slotsFor(ch, f, s.buffer_days ?? 5).filter((t) => t.getTime() <= horizon).length; if (!slots) continue;
       // Lo programado más allá del horizonte no tapa los huecos de los próximos días
       const inFlight = V.filter((v) => fmtOf(v) === f && (["scripting", "script_review", "producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now() && new Date(v.publish_at).getTime() <= horizon))).length;
@@ -3171,12 +3182,18 @@ async function planChannel(job: Job, ch: any) {
   }
   // 4) Canal en otro idioma: dobla los vídeos publicados del canal original (uno por pasada)
   if (ch.mirror_of && ch.mirror_auto) {
-    const { data: srcV } = await sb.from("videos").select("id,derived").eq("channel_id", ch.mirror_of).in("status", ["publishing", "scheduled", "published"]).is("derived", null).order("created_at", { ascending: false }).limit(30);
+    const { data: srcAll } = await sb.from("videos").select("id,derived,stats,created_at").eq("channel_id", ch.mirror_of).in("status", ["publishing", "scheduled", "published"]).is("derived", null).order("created_at", { ascending: false }).limit(300);
+    // Primero los que mejor funcionaron en el canal original (visitas); los aún sin datos, al final
+    const srcV = (srcAll ?? []).sort((a, b) => Number(b.stats?.views ?? -1) - Number(a.stats?.views ?? -1));
+    // Solo se dobla si hay hueco en el calendario de los próximos días (si no, se gastaría la voz antes de tiempo)
+    const ms = scheduleOf(ch), hz = Date.now() + (ms.buffer_days ?? 5) * 86400000;
+    const fm = ch.format ?? "short";
+    const free = slotsFor(ch, fm, ms.buffer_days ?? 5).filter((t) => t.getTime() <= hz).length - V.filter((v) => ["producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now())).length;
     const { data: done } = await sb.from("videos").select("parent_id").eq("channel_id", ch.id).eq("derived", "dub");
     const have = new Set((done ?? []).map((x) => x.parent_id));
     const { count: running } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "dub").eq("channel_id", ch.id).in("status", ["queued", "running"]);
     const next = (srcV ?? []).find((x) => !have.has(x.id));
-    if (next && !running) { await enqueue("dub", { video_id: next.id, channel_id: ch.id }); await log(J, "Piloto automático: doblando un vídeo del canal original"); }
+    if (next && !running && free > 0) { await enqueue("dub", { video_id: next.id, channel_id: ch.id }); await log(J, "Piloto automático: doblando un vídeo del canal original"); }
   }
   // 5) Shorts a partir de los vídeos largos ya aprobados
   if (ch.clips_per_long > 0) {
@@ -4017,7 +4034,7 @@ async function stepVisualCheck(job: Job) {
   const ch = v.channel;
   const round = Number(v.auto?.vcheck ?? 0);
   const goRender = () => enqueue("render", { video_id: v.id });
-  if (round >= 2 || v.engine === "challenges") return goRender();
+  if (round >= 2 || v.engine === "challenges" || v.derived === "dub") return goRender();
   // Si ya hay otra revisión de este vídeo en marcha o recién hecha, esta sobra (evita revisar y rehacer dos veces)
   const { count: dup } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "visual_check").eq("video_id", v.id).neq("id", job.id).in("status", ["running", "done"]).gte("created_at", new Date(Date.now() - 20 * 60000).toISOString());
   if ((dup ?? 0) > 0) return;
@@ -4676,7 +4693,7 @@ async function stepDub(job: Job) {
   const input = { title: src.title, description: src.description ?? "", tags: src.tags ?? [], scenes: scenes.map((x) => ({ n: x.n, lines: linesOf(x) })) };
   const lang = LANG_NAME[tch.language] ?? tch.language;
   const tool = { name: "doblaje", description: "Guion traducido", input_schema: { type: "object", required: ["title", "description", "tags", "scenes"], properties: { title: { type: "string" }, description: { type: "string" }, tags: { type: "array", items: { type: "string" } }, scenes: { type: "array", items: { type: "object", required: ["n", "lines"], properties: { n: { type: "integer" }, lines: { type: "array", items: { type: "string" } } } } } } } };
-  const r = await claudeTool(MODEL_FAST, `Eres adaptador de guiones de documentales de YouTube al ${lang}. No traduces palabra por palabra: adaptas para que suene natural y nativo, con el mismo ritmo, gancho y datos (nada inventado ni omitido). Cada línea corresponde a un plano: mantén EXACTAMENTE el mismo número de escenas y de líneas por escena, con una longitud parecida a la original. El título debe funcionar en YouTube en ese idioma (menos de 60 caracteres). Las etiquetas (tags), en ${lang}.`, `Adapta al ${lang} este guion (JSON) y llama a doblaje:\n${JSON.stringify(input)}`, tool, 16000);
+  const r = await claudeTool(MODEL_FAST, `Eres adaptador de guiones de documentales de YouTube al ${lang}. No traduces palabra por palabra: adaptas para que suene natural y nativo, con el mismo ritmo, gancho y datos (nada inventado ni omitido). Cada línea corresponde a un plano: mantén EXACTAMENTE el mismo número de escenas y de líneas por escena, con una longitud parecida a la original. El título NO es una traducción literal: escríbelo como lo haría un canal nativo de ese idioma (en inglés, para público de EEUU), con gancho, sin hashtags ni emojis y de menos de 50 caracteres. En la descripción, quita las listas de fuentes y créditos (se añaden solas después). Las etiquetas (tags), en ${lang}.`, `Adapta al ${lang} este guion (JSON) y llama a doblaje:\n${JSON.stringify(input)}`, tool, 16000);
   await bumpUsage(src.id, usageOf(r));
   const out = r.input as { title: string; description: string; tags: string[]; scenes: { n: number; lines: string[] }[] };
   const tr = new Map((out.scenes ?? []).map((x) => [x.n, x.lines]));
@@ -4684,7 +4701,7 @@ async function stepDub(job: Job) {
   // deno-lint-ignore no-explicit-any
   const shotsTr = (x: any) => { const l = tr.get(x.n)!; return (x.shots ?? []).map((sh: any, k: number) => ({ ...sh, line: l[k] })); };
   const script = {
-    ...(src.script ?? {}), title: out.title, description: out.description, tags: out.tags,
+    ...(src.script ?? {}), overlay: undefined, chapters: undefined, director: undefined, title: out.title, description: out.description, tags: out.tags,
     // deno-lint-ignore no-explicit-any
     scenes: scenes.map((x) => ({ narration: tr.get(x.n)!.join(" "), shots: shotsTr(x).map((sh: any) => ({ line: sh.line, visual_type: sh.visual_type, visual_prompt: sh.visual_prompt, stock_query: sh.stock_query, archive_query: sh.archive_query, reframe: sh.reframe })), sfx: x.sfx_prompt ?? "", keywords: [] })),
   };

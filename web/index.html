@@ -724,7 +724,7 @@ function ideaCard(v){
     ${v.idea_reason?`<div class="why"><b>Por qué funcionará:</b> ${esc(v.idea_reason)}</div>`:""}
     ${ev.length?`<div class="ev">${ev.map(e=>`<a href="${esc(e.url)}" target="_blank" rel="noopener" title="${esc(e.title)}">${esc((e.title||e.url).slice(0,60))}${e.score?`<span class="mono">×${esc(e.score)}</span>`:e.views?`<span class="mono">${fmtN(e.views)}</span>`:""}</a>`).join("")}</div>`:""}
     <textarea id="note-${v.id}" placeholder="Tu enfoque u opinión para el guion (opcional, pero da al canal tu sello)" rows="2"></textarea>
-    <div class="row end"><button class="btn ghost danger" onclick="rejectIdea('${v.id}')">Descartar</button><button class="btn pri" onclick="approveIdea('${v.id}')">Aprobar y escribir guion</button></div>
+    <div class="row end"><button class="btn ghost danger" onclick="rejectIdea('${v.id}')">Descartar</button><button class="btn pri" onclick="approveIdea('${v.id}')">Aprobar y escribir guion · ≈0,20 €</button></div>
   </div>`;
 }
 function setupHint(){
@@ -1080,7 +1080,7 @@ function renderSheet(first){
         ${c.sfx_enabled!==false?`<div class="scene-meta"><span class="muted" style="font-size:12.5px;align-self:center">Efecto de sonido</span><input type="text" data-i="${i}" data-k="sfx" value="${esc(sc.sfx||"")}" placeholder="Sin efecto"></div>`:""}</div></div>`).join("")}</div>
       ${(v.sources||[]).length?`<div><div class="label" style="margin-bottom:6px">Fuentes consultadas</div><div class="ev">${v.sources.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc((s.title||s.url).slice(0,60))}</a>`).join("")}</div></div>`:""}
       <label class="f">¿Algo que cambiar? <small>Escribe el feedback y pulsa «Rehacer guion»</small><textarea id="s-fb" rows="2">${esc("")}</textarea></label>`;
-    foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="redoScript()">Rehacer guion</button><button class="btn pri" onclick="approveScript()">Aprobar y producir</button>`;
+    foot=`<button class="btn danger ghost" onclick="discardVideo()">Descartar</button><button class="btn" onclick="repackage('${v.id}')" title="Nuevo título y descripción con el estudio de los vídeos que más funcionan en YouTube">Mejorar título</button><button class="btn" onclick="redoScript()">Rehacer guion</button><button class="btn pri" onclick="approveScript()">Aprobar y producir · ≈0,25 €</button>`;
   } else if(v.status==="final_review"){
     const pa = v.publish_at ? new Date(new Date(v.publish_at).getTime()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,16) : "";
     body=`<video src="${esc(v.video_url)}" controls playsinline preload="metadata" ${v.thumbnail_url?`poster="${esc(v.thumbnail_url)}"`:""}></video>
@@ -1319,7 +1319,7 @@ function learnHtml(c,L){
 }
 
 // ---------- Ficha del canal: automatización, calendario y presupuesto ----------
-const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final."], semi:["Semiautomático","El estudio aprueba solo las ideas y los guiones que pasan los controles de calidad y de políticas. Tú solo ves el vídeo final."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
+const AUTOPILOT = { manual:["Manual","Apruebas tú la idea, el guion y el vídeo final, y el estudio no prepara ideas ni programa nada por su cuenta."], semi:["Semiautomático","Tú apruebas todo lo que gasta dinero: la idea (escribir el guion, ≈0,20 €), el guion (producir el vídeo, ≈0,25 €) y el vídeo final. El estudio te prepara las ideas y programa en el calendario lo que apruebes."], auto:["Automático","También aprueba el vídeo final si saca la nota mínima y pasa los controles, y lo programa en el calendario. Lo que no pase te espera con el motivo."] };
 // ---------- Títulos y descripciones con el estudio real de YouTube ----------
 async function repackage(id){
   const before=S.videos.find(x=>x.id===id)?.title;

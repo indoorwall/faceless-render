@@ -3092,8 +3092,11 @@ async function planChannel(job: Job, ch: any) {
 
   if (ch.autopilot !== "manual") {
     const mirrorOnly = !!(ch.mirror_of && ch.mirror_auto);
+    // Semiautomático: todo lo que gasta dinero lo aprueba el dueño (la idea → guion ≈0,20 €; el guion → producción ≈0,25 €; el vídeo final → publicación).
+    // El piloto solo prepara ideas (del banco, gratis) y programa en el calendario lo que el dueño aprueba.
+    const semi = ch.autopilot === "semi";
     // 1) Guiones (y retos) por revisar: se aprueban solos si pasan los controles
-    for (const v of V.filter((x) => !mirrorOnly && x.status === "script_review" && !x.auto?.script)) {
+    for (const v of V.filter((x) => !mirrorOnly && !semi && x.status === "script_review" && !x.auto?.script)) {
       let score: number | null = null, why = "";
       if (v.engine === "challenges") { const val = v.retos?.kind === "formato" ? validateFormat(v.retos.format, v.retos.data) : validateProject(v.retos ?? {}); if (!val.ok) why = `retos sin validar: ${val.errors[0]}`; else score = 10; }
       // La nota del crítico es orientativa (no predice las visitas reales): solo frena un guion desastroso (por debajo de script_min, 3 por defecto)
@@ -3183,7 +3186,7 @@ async function planChannel(job: Job, ch: any) {
         const recentT = V.filter((v) => !["idea_review", "idea_rejected"].includes(v.status)).sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).slice(0, 6).map((v) => topicOf(String(v.title ?? v.idea_title ?? "")));
         const ok = ideas.filter((v) => { const t = topicOf(String(v.idea_title ?? "")); return !t || recentT.filter((x) => x === t).length < 2; });
         const picked: string[] = [];
-        for (const v of ok) {
+        for (const v of semi ? [] : ok) {
           if (need <= 0) break;
           const t = topicOf(String(v.idea_title ?? ""));
           if (t && [...recentT, ...picked].filter((x) => x === t).length >= 2) continue;

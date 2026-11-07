@@ -3112,8 +3112,9 @@ async function planChannel(job: Job, ch: any) {
       }
     }
     // 2) Vídeos finales (solo en automático): análisis + nota mínima + políticas → se programa en el calendario
-    if (ch.autopilot === "auto") {
-      for (const v of V.filter((x) => x.status === "final_review" && !x.auto?.final)) {
+    // En semiautomático, solo los vídeos que el dueño dejó preaprobados (auto.preapproved) se programan solos al terminar
+    if (ch.autopilot === "auto" || semi) {
+      for (const v of V.filter((x) => x.status === "final_review" && !x.auto?.final && (ch.autopilot === "auto" || x.auto?.preapproved))) {
         if (!ch.youtube_connected) { await setAuto(v, { final: { held: "conecta el canal de YouTube", at: new Date().toISOString() } }); continue; }
         let score: number | null = null, why = "";
         if (v.engine === "challenges") { const a = v.retos?.report?.audio; if (!a || a.lufs == null) why = "el informe de sonido no está completo"; else score = 10; }

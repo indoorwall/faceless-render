@@ -379,11 +379,17 @@ function budgetBar(full){
   const parts=PLATFORMS.map(([name,keys,color])=>({name,color,eur:keys.reduce((a,k)=>a+Number(t[k]||0)*Number(P[k]||0),0)})).filter(x=>x.eur>=0.005);
   const rest=spent-parts.reduce((a,x)=>a+x.eur,0); if(rest>=0.005) parts.push({name:"Otros",color:"var(--v-other)",eur:rest});
   const pct=(x)=>cap>0?Math.min(100,x/cap*100):0;
+  // Tramos de 6 h: a las 00:00 se libera el 25 % del tope, a las 06:00 el 50 %, a las 12:00 el 75 % y a las 18:00 el 100 %
+  const hM=Number(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Madrid",hour:"2-digit",hourCycle:"h23"}).format(new Date()));
+  const tr=Math.floor(hM/6)+1, capNow=cap*tr/4, nextH=tr<4?`${String(tr*6).padStart(2,"0")}:00`:"00:00";
+  const perCh=(S.channels||[]).map(c=>({c,eur:Number(t["eur:"+c.id]||0),lim:c.daily_budget_eur!=null?Number(c.daily_budget_eur):null})).filter(x=>x.eur>=0.005||x.lim!=null);
   return `<div class="budget">
-    <div class="spread"><b style="white-space:nowrap">Gasto de hoy</b><span class="mono" style="font-size:12.5px">${eur(spent)} de ${eur(cap)} · ${spent>=cap-0.005?`<span style="color:var(--bad)">tope alcanzado: lo demás sigue mañana</span>`:`quedan ${eur(cap-spent)}`}</span></div>
+    <div class="spread"><b style="white-space:nowrap">Gasto de hoy</b><span class="mono" style="font-size:12.5px">${eur(spent)} de ${eur(cap)} · ${spent>=cap-0.005?`<span style="color:var(--bad)">tope del día alcanzado: lo demás sigue mañana</span>`:spent>=capNow-0.02?`<span style="color:var(--warn,#B7791F)">tramo agotado: sigue a las ${nextH}</span>`:`quedan ${eur(capNow-spent)} en este tramo`}</span></div>
+    <div class="muted" style="font-size:12px">El tope se libera por tramos para que no se gaste todo de golpe: ${eur(cap/4)} a las 00:00, ${eur(cap/2)} a las 06:00, ${eur(cap*3/4)} a las 12:00 y ${eur(cap)} a las 18:00. Ahora: hasta ${eur(capNow)}.</div>
     <div class="bbar" role="img" aria-label="Gasto de hoy por plataforma">${parts.map(x=>`<i style="width:${pct(x.eur)}%;background:${x.color}" title="${x.name}: ${eur(x.eur)}"></i>`).join("")}</div>
     <div class="legend">${parts.length?parts.map(x=>`<span><i style="background:${x.color}"></i>${x.name} ${eur(x.eur)}</span>`).join(""):`<span class="muted">Hoy aún no se ha gastado nada</span>`}</div>
-    ${full?`<div class="row" style="margin-top:4px;align-items:flex-end"><label class="f" style="margin:0">Tope diario en euros <small>al llegar, los trabajos esperan al día siguiente</small><input type="number" id="cap-eur" min="0" max="200" step="0.5" value="${cap}" style="width:120px"></label><button class="btn sm" onclick="saveCap()">Guardar tope</button></div>`:""}
+    ${perCh.length?`<div class="legend">${perCh.map(x=>`<span>${esc(x.c.name)}: ${eur(x.eur)}${x.lim!=null?` de ${eur(x.lim)}`:""}</span>`).join("")}</div>`:""}
+    ${full?`<div class="row" style="margin-top:4px;align-items:flex-end"><label class="f" style="margin:0">Tope diario en euros <small>se libera en 4 tramos de 6 h; el límite de cada canal se cambia en su ficha</small><input type="number" id="cap-eur" min="0" max="200" step="0.5" value="${cap}" style="width:120px"></label><button class="btn sm" onclick="saveCap()">Guardar tope</button></div>`:""}
   </div>`;
 }
 async function saveCap(){
@@ -691,7 +697,7 @@ function ideasChip(chId){
   return `<span class="chip st-bad" title="Hoy se ha alcanzado el tope de gasto diario">Sin presupuesto hoy · llegarán a las ${hhmm(w)}</span>`;
 }
 async function budgetMsg(){
-  try{ const {data}=await sb.rpc("budget_left"); const left=Number(data); if(isFinite(left)&&left<0.05) return `Hoy ya se ha gastado el tope diario, así que las ideas se generarán mañana a las 00:05. Si las quieres ya, sube el tope en Ajustes → Presupuesto diario.`; }catch(_){ /* sin dato: se sigue */ }
+  try{ const {data}=await sb.rpc("budget_left"); const left=Number(data); if(isFinite(left)&&left<0.05) return `El presupuesto de este tramo está gastado, así que las ideas se generarán en el siguiente tramo (00:00, 06:00, 12:00 o 18:00). Si las quieres ya, sube el tope en Ajustes → Presupuesto diario.`; }catch(_){ /* sin dato: se sigue */ }
   return null;
 }
 async function genIdeas(){

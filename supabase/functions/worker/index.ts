@@ -96,11 +96,13 @@ async function claudeCall(body: any, headers: Record<string, string> = AH()) {
     return d;
   } finally { if (hold > 0.001) await unreserve("hold_eur", hold); }
 }
-// Mañana a las 00:05, hora de Madrid
-function nextMadridDay() {
+// El presupuesto del día se libera por tramos de 6 h (00:00, 06:00, 12:00 y 18:00, hora de Madrid):
+// sin presupuesto, el trabajo espera al siguiente tramo (5 min después de que empiece)
+function nextBudgetSlot() {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date()).map((x) => [x.type, x.value]));
   const sec = Number(p.hour) * 3600 + Number(p.minute) * 60 + Number(p.second);
-  return new Date(Date.now() + (86400 - sec + 300) * 1000).toISOString();
+  const next = (Math.floor(sec / 21600) + 1) * 21600;
+  return { at: new Date(Date.now() + (next - sec + 300) * 1000).toISOString(), hour: (next / 3600) % 24 };
 }
 function key(name: string) {
   const v = KEYS[name];
@@ -148,9 +150,11 @@ async function runLoop() {
       await sb.from("jobs").update({ status: "done", error: null }).eq("id", job.id);
     } catch (e) {
       if (e instanceof OverBudget) {
-        await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: nextMadridDay() }).eq("id", job.id);
-        if (job.video_id && MAIN_STEPS.has(job.step)) await sb.from("videos").update({ stage: "Esperando al presupuesto de mañana" }).eq("id", job.video_id);
-        if (!budgetLogged) { budgetLogged = true; await log(job, `Presupuesto diario agotado (${e.message}): ${job.step} y lo que venga detrás siguen mañana`, "warn"); }
+        const nb = nextBudgetSlot();
+        const hh = `${String(nb.hour).padStart(2, "0")}:00`;
+        await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), payload: job.payload, run_after: nb.at }).eq("id", job.id);
+        if (job.video_id && MAIN_STEPS.has(job.step)) await sb.from("videos").update({ stage: `Esperando presupuesto (siguiente tramo a las ${hh})` }).eq("id", job.video_id);
+        if (!budgetLogged) { budgetLogged = true; await log(job, `Presupuesto de este tramo agotado (${e.message}): ${job.step} y lo que venga detrás siguen a las ${hh}`, "warn"); }
         continue;
       }
       if (e instanceof QuotaWait) {
@@ -3144,6 +3148,14 @@ async function planChannel(job: Job, ch: any) {
       const { data: pendJobs } = await sb.from("jobs").select("payload").eq("channel_id", ch.id).eq("step", "retos_generate").in("status", ["queued", "running"]);
       const pend = (pendJobs ?? []).filter((j) => ((j.payload as { format?: string })?.format === "short" ? "short" : "long") === f).length;
       let need = Math.min(slots - inFlight - pend, f === "long" ? 1 : 2); // como mucho 1 largo y 2 Shorts nuevos por hora y canal
+      // Como mucho, tantos vídeos nuevos al día como publica el canal al día (ritmo del calendario o channels.schedule.new_per_day)
+      if (f === "short") {
+        const perDay = Number(s.new_per_day ?? Math.ceil(Number(s.shorts_per_week ?? 7) / 7));
+        const dayStart = madridToUtc(...(new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid" }).format(new Date()).split("-").map(Number) as [number, number, number]), 0, 0).getTime();
+        const startedToday = V.filter((v) => fmtOf(v) === "short" && v.auto?.idea?.at && new Date(v.auto.idea.at).getTime() >= dayStart).length;
+        need = Math.min(need, perDay - startedToday);
+        if (need <= 0) continue;
+      }
       if (need <= 0) continue;
       if (f === "short" && ch.clips_per_long > 0 && ch.production_type !== "challenges" && !(ch.formats ?? []).includes("short")) continue; // los Shorts salen de los largos
       // Plan de largos del canal (al llegar a los suscriptores fijados): recopilaciones y tipos de vídeo en rotación

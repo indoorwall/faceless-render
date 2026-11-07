@@ -1528,6 +1528,7 @@ function withSources(v: any): string {
 async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
+  if (/\[object Object\]/.test(String(v.title ?? ""))) throw new UserError("El título está roto: corrígelo antes de publicar");
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
   // Vídeo rehecho que no llegó a tiempo: el original ya es público, así que no se borra ni se sube otro igual
@@ -3617,22 +3618,25 @@ async function packageVideo(ch: any, s: any, v: any) {
   const r = await claudeTool(MODEL_FAST, `Eres el mejor especialista en títulos y descripciones de YouTube ${ch.format === "short" ? "Shorts" : ""} en ${LANG_NAME[ch.language ?? "es"] ?? ch.language}. Te basas en el estudio real del nicho y en la guía del canal (la guía manda si hay conflicto). Nada de clickbait falso: el título promete lo que el vídeo cuenta. No inventas datos que no estén en el guion.`,
     `${playbookBlock(ch)}(Si algo de lo anterior choca con el estudio, mandan las REGLAS FIJAS DEL DUEÑO.)\n\nESTUDIO REAL DEL NICHO (${new Date(P.at).toLocaleDateString("es-ES")}):\n${P.summary}\nReglas de título:\n- ${(P.title_rules ?? []).join("\n- ")}${own}\nFórmulas que funcionan:\n${(P.title_formulas ?? []).map((f: { formula: string; example: string; views?: number }) => `- ${f.formula} (ej.: «${f.example}»${f.views ? `, ${f.views.toLocaleString("es-ES")} visitas` : ""})`).join("\n")}\nEvitar:\n- ${(P.avoid ?? []).join("\n- ")}\nTítulos reales con más visitas:\n${(P.sample ?? []).slice(0, 15).map((x: { title: string; views: number }) => `- «${x.title}» (${x.views.toLocaleString("es-ES")})`).join("\n")}\n\nReglas de descripción:\n- ${(P.description_rules ?? []).join("\n- ")}\nPlantilla: ${P.description_template}\nHashtags frecuentes: ${(P.hashtags ?? []).map((h: string) => `#${h}`).join(" ")}\n\n${guideTitles ? `GUÍA DEL CANAL (títulos, emojis, hashtags):\n${guideTitles}\n\n` : ""}Títulos recientes del canal (no repitas su estructura más de una vez seguida):\n${(prev ?? []).map((x) => `- ${x.title}`).join("\n") || "-"}\n\nVÍDEO:\nTema: ${v.idea_title ?? s.title}\n${(v.idea_stories ?? []).length ? `Curiosidades: ${(v.idea_stories ?? []).map((x: { title: string }) => x.title).join(" · ")}\n` : ""}Guion: ${narr}\nFuentes:\n${src || "-"}\n\nEscribe 10 títulos candidatos distintos (aplica las fórmulas, varía la estructura), puntúalos, elige el mejor y redacta la descripción siguiendo la plantilla (incluye las fuentes al final si las hay). Etiquetas: 8-15.`,
     PACK_TOOL, 3000);
+  // Los candidatos llegan como objetos { title, score }: aquí se pasan a texto (antes salía «[object Object]»)
+  const cands: string[] = (r.input?.candidates ?? []).map((x: unknown) => String(typeof x === "string" ? x : (x as { title?: string })?.title ?? "").trim()).filter(Boolean);
   let t = String(r.input?.title ?? "").trim();
   // Canales que lo piden (p. ej. Frente insólito): títulos limpios, sin hashtags ni emojis (con ellos se quedaban en el suelo)
   if (P.title_clean) t = t.replace(/\s*#[\p{L}\p{N}_]+/gu, "").replace(/\p{Extended_Pictographic}\uFE0F?/gu, "").replace(/\s{2,}/g, " ").trim();
   if (!t) return null;
   // Canales «5 curiosidades»: el título lleva el 5 (con número, sus títulos funcionan un 60 % mejor)
-  if (ch.idea_format === "list5" && P.title_number !== false && !/(^|\D)5(\D|$)|\bcinco\b/i.test(t)) { const alt = (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()).find((x: string) => /(^|\D)5(\D|$)|\bcinco\b/i.test(x)); if (alt) t = alt; }
+  if (ch.idea_format === "list5" && P.title_number !== false && !/(^|\D)5(\D|$)|\bcinco\b/i.test(t)) { const alt = cands.find((x: string) => /(^|\D)5(\D|$)|\bcinco\b/i.test(x)); if (alt) t = alt; }
   // Serie con número («… | Animales en guerra #4»): da al espectador un motivo para suscribirse y no perderse el siguiente
-  try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200), (r.input?.candidates ?? []).map((x: unknown) => String(x).trim())); } catch (e) { if (e instanceof OverBudget) throw e; }
-  t = withMust(v, t, (r.input?.candidates ?? []).map((x: unknown) => String(x).trim()));
+  try { t = await withSeries(ch, v, t, String(s.scenes?.map((x: { narration?: string }) => x.narration ?? "").join(" ") ?? "").slice(0, 1200), cands); } catch (e) { if (e instanceof OverBudget) throw e; }
+  t = withMust(v, t, cands);
   // Longitud máxima del canal (en el feed de Shorts el título se corta hacia los 40-45 caracteres):
   // si se pasa, otro candidato que quepa; si no, sin la etiqueta de serie (la serie sigue en la lista de reproducción)
   const tmax = Number(P.title_max ?? 0);
   if (tmax && t.length > tmax) {
-    const fit = (r.input?.candidates ?? []).map((x: unknown) => withMust(v, String(x).trim().replace(/\s*#[\p{L}\p{N}_]+/gu, "").trim())).find((x: string) => x.length <= tmax);
+    const fit = cands.map((x: string) => withMust(v, x.replace(/\s*#[\p{L}\p{N}_]+/gu, "").trim())).find((x: string) => x.length <= tmax);
     t = fit ?? t.split(" | ")[0].trim();
   }
+  if (/\[object Object\]/.test(t) || !t.trim()) t = cands.find((x) => !tmax || x.length <= tmax) ?? String(v.idea_title ?? s.title ?? "").trim();
   return { title: t.slice(0, 100), description: String(r.input?.description ?? "").trim(), tags: (r.input?.tags ?? []).map((x: unknown) => String(x)).slice(0, 15), title_candidates: r.input?.candidates ?? [] };
 }
 // Rehacer título y descripción de un vídeo ya escrito o montado

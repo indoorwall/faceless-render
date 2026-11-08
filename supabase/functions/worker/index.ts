@@ -160,7 +160,7 @@ async function runLoop() {
       if (e instanceof QuotaWait) {
         const pt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })); const ms = ((24 - pt.getHours()) * 60 - pt.getMinutes() + 10) * 60000;
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), run_after: new Date(Date.now() + ms).toISOString() }).eq("id", job.id);
-        if (job.video_id && job.step !== "reschedule") await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
+        if (job.video_id && !["reschedule", "yt_retitle"].includes(job.step)) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
         await log(job, job.step === "reschedule" ? "Cuota diaria de YouTube agotada: el cambio de fecha se hará hacia las 9:10" : "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
         continue;
       }
@@ -175,11 +175,11 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "failed", error: msg }).eq("id", job.id);
         // El análisis y las miniaturas son opcionales: si fallan, el vídeo sigue su curso
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "reschedule"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "reschedule", "yt_retitle"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
         const prov = creditProvider(msg);
         if (prov) await notify(`saldo:${prov}`, `⚠️ Sin saldo en ${prov}`, `<p><b>${esc2(prov)}</b> se ha quedado sin saldo y la producción se ha parado.</p><p>Error: <i>${esc2(msg.slice(0, 200))}</i></p><p>Recárgalo y los vídeos seguirán solos.</p>`, 6);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage", "reschedule"].includes(job.step)) {
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage", "reschedule", "yt_retitle"].includes(job.step)) {
           const { data: vv } = await sb.from("videos").select("title,idea_title,channel:channels(name)").eq("id", job.video_id).maybeSingle();
           await notify(`fallo:${job.video_id}`, `❌ Un vídeo ha fallado: ${String(vv?.title ?? vv?.idea_title ?? "").slice(0, 60)}`, `<p>El vídeo <b>${esc2(vv?.title ?? vv?.idea_title)}</b> (${esc2((vv?.channel as { name?: string } | null)?.name)}) ha fallado en el paso <b>${esc2(job.step)}</b>.</p><p>Error: <i>${esc2(msg.slice(0, 300))}</i></p><p>En la app puedes pulsar «Reintentar».</p>`, 48);
         }

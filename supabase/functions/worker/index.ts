@@ -265,6 +265,7 @@ async function runStep(job: Job) {
     case "comments": return stepComments(job);
     case "compile": return stepCompile(job);
     case "reschedule": return stepReschedule(job);
+    case "yt_retitle": return stepRetitle(job);
     case "visual_check": return stepVisualCheck(job);
     case "voice_design": return stepVoiceDesign(job);
     case "explore": return stepExplore(job);
@@ -4008,6 +4009,27 @@ async function stepCompile(job: Job) {
 }
 
 // ---------- Paso: cambiar la fecha de un vídeo programado (también en YouTube si ya está subido) ----------
+// Cambiar el título de un vídeo ya subido (prueba: a un Short atascado en el feed se le da un título más general).
+// Se lee el snippet actual y se reenvía entero con el título nuevo; el título anterior queda en auto.retitles
+async function stepRetitle(job: Job) {
+  const v = await getVideo(job.video_id);
+  const title = String(job.payload?.title ?? "").trim().slice(0, 100);
+  if (!title) throw new UserError("Falta el título nuevo");
+  if (!v.youtube_video_id) { await sb.from("videos").update({ title }).eq("id", v.id); return; }
+  const token = await ytAccess(v.channel_id);
+  if (!token) throw new UserError("Conecta el canal de YouTube para cambiar el título");
+  await sb.rpc("yt_quota_take", { p_units: 51 });
+  const quota = (e: unknown) => { if (/quota/i.test(String((e as Error)?.message ?? e))) throw new QuotaWait("youtube"); throw e; };
+  const cur = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "snippet", id: v.youtube_video_id }).catch(quota);
+  const sn = cur.items?.[0]?.snippet;
+  if (!sn) throw new UserError("No se encuentra el vídeo en YouTube");
+  const snippet = { title, description: sn.description ?? "", categoryId: sn.categoryId ?? "27", tags: sn.tags ?? [], defaultLanguage: sn.defaultLanguage, defaultAudioLanguage: sn.defaultAudioLanguage };
+  const r = await fetch("https://www.googleapis.com/youtube/v3/videos?part=snippet", { method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ id: v.youtube_video_id, snippet }) });
+  if (!r.ok) { const t = await r.text(); if (/quota/i.test(t)) throw new QuotaWait("youtube"); throw new Error(`YouTube ${r.status}: ${t.slice(0, 300)}`); }
+  const hist = [...(v.auto?.retitles ?? []), { from: v.title, to: title, at: new Date().toISOString(), views: Number(v.stats?.views ?? 0), why: job.payload?.why ?? null }];
+  await sb.from("videos").update({ title, auto: { ...(v.auto ?? {}), retitles: hist } }).eq("id", v.id);
+  await log(job, `Título cambiado en YouTube: «${v.title}» → «${title}»`);
+}
 async function stepReschedule(job: Job) {
   // Si después se pidió otra fecha para el mismo vídeo, manda la última
   const { count: newer } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "reschedule").eq("video_id", job.video_id).eq("status", "queued").gt("id", job.id);

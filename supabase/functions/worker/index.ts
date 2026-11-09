@@ -1534,6 +1534,8 @@ async function stepPublish(job: Job) {
   const v = await getVideo(job.video_id);
   if (!v.video_url) throw new UserError("No hay vídeo renderizado");
   if (/\[object Object\]/.test(String(v.title ?? ""))) throw new UserError("El título está roto: corrígelo antes de publicar");
+  // Ya subido (otro trabajo de publicar llegó antes): no se vuelve a subir ni se borra nada
+  if (v.youtube_video_id && ["scheduled", "published"].includes(v.status) && !(v.auto?.replace && !v.auto.replace.deleted)) return;
   const access_token = await ytAccess(v.channel_id);
   if (!access_token) throw new UserError("Conecta el canal de YouTube en la ficha del canal antes de publicar.");
   // Vídeo rehecho que no llegó a tiempo: el original ya es público, así que no se borra ni se sube otro igual
@@ -1543,7 +1545,7 @@ async function stepPublish(job: Job) {
     return;
   }
   // Vídeo rehecho: se borra la versión anterior de YouTube y se sube la nueva a la misma hora (si aún no ha pasado)
-  if (v.auto?.replace && v.youtube_video_id) {
+  if (v.auto?.replace && !v.auto.replace.deleted && v.youtube_video_id) {
     if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) throw new QuotaWait("youtube");
     const d = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${v.youtube_video_id}`, { method: "DELETE", headers: { Authorization: `Bearer ${access_token}` } });
     if (!d.ok && d.status !== 404) throw new Error(`YouTube (borrar versión anterior) ${d.status}: ${(await d.text()).slice(0, 200)}`);
@@ -1587,7 +1589,10 @@ async function stepPublish(job: Job) {
       await fetch(`https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${res.id}`, { method: "POST", headers: { Authorization: `Bearer ${access_token}`, "Content-Type": /\.jpe?g(\?|$)/i.test(v.thumbnail_url) ? "image/jpeg" : "image/png" }, body: img });
     } catch (_) { /* la miniatura personalizada requiere canal verificado */ }
   }
-  await sb.from("videos").update({ youtube_video_id: res.id, status: future ? "scheduled" : "published", stage: null, published_at: future ? new Date(v.publish_at).toISOString() : new Date().toISOString() }).eq("id", v.id);
+  // La sustitución ya está hecha: se quita la marca para que otro publicar no borre la versión nueva
+  const { data: fa } = await sb.from("videos").select("auto").eq("id", v.id).maybeSingle();
+  const autoAfter = { ...((fa?.auto ?? v.auto) ?? {}) }; delete autoAfter.replace;
+  await sb.from("videos").update({ youtube_video_id: res.id, status: future ? "scheduled" : "published", stage: null, published_at: future ? new Date(v.publish_at).toISOString() : new Date().toISOString(), auto: autoAfter }).eq("id", v.id);
   await log(job, `${future ? "Programado" : "Publicado"} en YouTube: https://youtu.be/${res.id}`);
   if (v.format === "long") await longVideoTasks(job, v, res.id);
   if (v.channel.clips_per_long > 0 || v.channel.autopilot !== "manual") await kickPlanner(v.channel_id);

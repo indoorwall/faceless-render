@@ -1476,7 +1476,7 @@ async function stepRenderCheck(job: Job) {
       const url = sb.storage.from("media").getPublicUrl(`${v.id}/final.mp4`).data.publicUrl + `?v=${Date.now()}`;
       await sb.from("videos").update({ video_url: url, status: "final_review", stage: null, progress: 100, duration_sec: Math.round((d.duration ?? 0) * 10) / 10 }).eq("id", v.id);
       await log(job, `Vídeo listo para revisión: ${v.title}`);
-      if (v.channel?.autopilot === "auto") await kickPlanner(v.channel_id, 5);
+      if (v.channel?.autopilot === "auto" || v.auto?.preapproved) await kickPlanner(v.channel_id, 5);
       // Actualidad en un canal que apruebas tú: aviso inmediato (la noticia caduca)
       else if (v.idea_kind === "trend") await notify(`urgente:${v.id}`, `⏰ Vídeo de actualidad listo: ${String(v.title ?? "").slice(0, 60)}`, `<p>El Short de actualidad <b>${esc2(v.title)}</b> (${esc2(v.channel?.name)}) ya está montado y <b>se publica en cuanto lo apruebes</b>. Cuanto antes salga, más visitas: la noticia caduca.</p>`, 48);
     } else if (d.status === "failed") {
@@ -1872,7 +1872,7 @@ async function finishAnalysis(job: Job, v: any, ch: any, r: any, meta: { frames?
   }
   await bumpUsage(v.id, { ...usageOf(r), analyses: 1 }, { analysis: { ...r.input, status: "done", video_url: v.video_url, frames: meta.frames ?? null, duration: meta.duration ?? null, analyzed_at: new Date().toISOString() } });
   await log(job, `Análisis de «${v.title}»: ${r.input.score}/10, potencial ${r.input.viral_potential}`);
-  if (ch.autopilot === "auto") await kickPlanner(ch.id, 5);
+  if (ch.autopilot === "auto" || v.auto?.preapproved) await kickPlanner(ch.id, 5);
   // deno-lint-ignore no-explicit-any
   await enqueue("learn", { channel_id: ch.id, video_id: v.id, payload: { source: "analysis", material: `Análisis del vídeo montado «${v.title}» (${r.input.score}/10): ${r.input.verdict}\nProblemas:\n${(r.input.issues ?? []).map((i: any) => `- ${i.area}: ${i.problem} → ${i.fix}`).join("\n")}\nFunciona: ${(r.input.strengths ?? []).join("; ")}` } });
 }

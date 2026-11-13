@@ -4085,7 +4085,9 @@ async function stepVisualCheck(job: Job) {
   const goRender = () => enqueue("render", { video_id: v.id });
   if (round >= 2 || v.engine === "challenges" || v.derived === "dub") return goRender();
   // Si ya hay otra revisión de este vídeo en marcha o recién hecha, esta sobra (evita revisar y rehacer dos veces)
-  const { count: dup } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "visual_check").eq("video_id", v.id).neq("id", job.id).in("status", ["running", "done"]).gte("created_at", new Date(Date.now() - 20 * 60000).toISOString());
+  // Solo sobra si hay OTRA revisión de este vídeo en marcha o en cola (antes también contaban las ya hechas: tras rehacer imágenes,
+  // la segunda revisión se saltaba y el vídeo se quedaba parado al 80 % sin pasar al montaje). Las vueltas las limita auto.vcheck.
+  const { count: dup } = await sb.from("jobs").select("id", { count: "exact", head: true }).eq("step", "visual_check").eq("video_id", v.id).neq("id", job.id).in("status", ["running", "queued"]);
   if ((dup ?? 0) > 0) return;
   const { data: scenes } = await sb.from("scenes").select("id,n,shots").eq("video_id", v.id).order("n");
   // Miniatura sin recortar (resize=contain) que se descarga aquí y se manda en base64: con enlaces, la IA a veces recibía otra imagen

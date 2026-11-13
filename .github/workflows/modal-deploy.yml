@@ -27,3 +27,4 @@ jobs:
           echo "::add-mask::$AUTH"
           modal secret create faceless-tts TTS_AUTH="$AUTH" --force > /dev/null
       - run: modal deploy modal/tts_app.py
+      - run: modal deploy modal/tts_es_app.py

@@ -21,7 +21,7 @@ image = (
 )
 
 @app.cls(image=image, gpu="L4", cpu=4, scaledown_window=120, timeout=900, secrets=[modal.Secret.from_name("faceless-tts")])
-class TTS:
+class Voice:
     @modal.enter()
     def load(self):
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
@@ -100,7 +100,7 @@ def submit(body: dict):
     if not body.get("auth") or body.get("auth") != os.environ.get("TTS_AUTH"):
         return {"error": "unauthorized"}
     body = {k: v for k, v in body.items() if k != "auth"}
-    call = TTS().generate.spawn(body)
+    call = Voice().generate.spawn(body)
     return {"call_id": call.object_id}
 
 @app.function(image=web_image, secrets=[modal.Secret.from_name("faceless-tts")])

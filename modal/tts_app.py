@@ -20,14 +20,15 @@ image = (
     .run_function(_download)
 )
 
-@app.cls(image=image, gpu="L4", scaledown_window=120, timeout=900, secrets=[modal.Secret.from_name("faceless-tts")])
+@app.cls(image=image, gpu="L4", cpu=4, scaledown_window=120, timeout=900, secrets=[modal.Secret.from_name("faceless-tts")])
 class TTS:
     @modal.enter()
     def load(self):
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
         from faster_whisper import WhisperModel
         self.model = ChatterboxMultilingualTTS.from_pretrained(device="cuda")
-        self.whisper = WhisperModel("small", device="cuda", compute_type="float16")
+        # Whisper en el procesador (int8): evita depender de las librerías cuDNN de la tarjeta y para frases cortas va sobrado
+        self.whisper = WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4)
         self.refs = {}
 
     def _ref(self, url, start=45.0, length=12.0):

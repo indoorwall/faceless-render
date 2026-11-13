@@ -1,0 +1,18 @@
+# Muestra los últimos registros del generador de voz en Modal (para diagnosticar fallos). Se lanza a mano.
+name: modal-logs
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install -q modal
+      - run: timeout 60 modal app logs faceless-tts || true

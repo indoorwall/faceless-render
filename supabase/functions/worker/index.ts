@@ -4381,12 +4381,20 @@ async function stepStyleTest(job: Job) {
   const p = job.payload ?? {};
   const style = String(p.style ?? "");
   const urls: string[] = [];
+  // FLUX primero si se pide o si OpenAI no tiene saldo; si falla uno, se prueba el otro
+  const gen = async (prompt: string, _short = false): Promise<Uint8Array | null> => {
+    const tries = p.provider === "openai" ? ["openai", "flux"] : ["flux", "openai"];
+    for (const t of tries) {
+      try { const b = t === "flux" ? (KEYS["FAL_KEY"] ? await fluxImage(prompt, false) : null) : await safeImage(prompt, false); if (b) return b; } catch (_) { /* siguiente */ }
+    }
+    return null;
+  };
   for (const [i, pr] of ((p.prompts ?? []) as string[]).entries()) {
-    const bytes = await safeImage(`${pr}. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
+    const bytes = await gen(`${pr}. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
     if (bytes) urls.push(await upload(`styletests/${p.name ?? "test"}_${Date.now()}_${i}.png`, bytes, "image/png"));
   }
   if (p.thumb?.prompt) {
-    const bytes = await safeImage(`YouTube thumbnail, 16:9. ${p.thumb.prompt}. The characters are big and fill the lower two thirds; the top 30% is a simple background for huge text. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
+    const bytes = await gen(`YouTube thumbnail, 16:9. ${p.thumb.prompt}. The characters are big and fill the lower two thirds; the top 30% is a simple background for huge text. Style: ${style}. Absolutely no text, letters or watermarks.`, false);
     if (bytes) {
       const bg = await upload(`styletests/${p.name ?? "test"}_thumbbg_${Date.now()}.png`, bytes, "image/png");
       const path = `styletests/${p.name ?? "test"}_thumb_${Date.now()}.jpg`;

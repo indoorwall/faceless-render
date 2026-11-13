@@ -3114,7 +3114,48 @@ async function kickPlanner(chId: string, delaySec = 20) {
   if (!count) await enqueue("planner", { channel_id: chId, delaySec });
 }
 
+// Reparto del presupuesto por prioridad (app_config.budget_mode = "priority"):
+// el canal que antes se queda sin vídeo listo en el calendario cobra primero; el que ya tiene cubiertos
+// sus próximos días (vídeos terminados o programados) no gasta nada más que un mínimo (comentarios).
+// Se guarda en channels.budget_auto.cap_eur (tope de hoy en €, gasto ya hecho incluido) y lo aplica reserve_spend.
+const BUDGET_FLOOR = 0.03;
+async function allocateBudget() {
+  const { data: mode } = await sb.from("app_config").select("value").eq("key", "budget_mode").maybeSingle();
+  if (String(mode?.value ?? "") !== "priority") return;
+  const { data: capRow } = await sb.from("app_config").select("value").eq("key", "daily_cap_eur").maybeSingle();
+  const G = Number(capRow?.value ?? 0); if (!(G > 0)) return;
+  const { data: chs } = await sb.from("channels").select("*").eq("status", "active");
+  const { data: sp } = await sb.from("spend_daily").select("k,n").eq("day", madridDate()).like("k", "eur%");
+  const spent: Record<string, number> = {}; let spentAll = 0;
+  for (const x of sp ?? []) { if (x.k === "eur") spentAll = Number(x.n); else spent[x.k.slice(4)] = Number(x.n); }
+  const now = Date.now();
+  const rows: { ch: { id: string; name: string }; need: number; first: number; det: string[]; sp: number; low: boolean }[] = [];
+  for (const ch of chs ?? []) {
+    const s = scheduleOf(ch), D = Number(s.buffer_days ?? 2), hz = now + D * 864e5;
+    const { data: vids } = await sb.from("videos").select("status,format,publish_at").eq("channel_id", ch.id).in("status", ["final_review", "publishing", "scheduled"]);
+    let need = 0, first = Infinity; const det: string[] = [];
+    for (const f of ["short", "long"]) {
+      const slots = slotsFor(ch, f, D + 1).filter((t) => t.getTime() > now && t.getTime() <= hz);
+      if (!slots.length) continue;
+      const ready = (vids ?? []).filter((v) => (v.format ?? ch.format ?? "long") === f && (v.status === "final_review" || !v.publish_at || (new Date(v.publish_at).getTime() > now && new Date(v.publish_at).getTime() <= hz))).length;
+      const miss = Math.max(0, slots.length - ready);
+      if (miss) { first = Math.min(first, slots[Math.min(ready, slots.length - 1)].getTime()); need += miss * Number(f === "short" ? (s.cost_short ?? 0.3) : (s.cost_long ?? 1)); }
+      det.push(`${f === "short" ? "Shorts" : "largos"} listos ${Math.min(ready, slots.length)}/${slots.length}`);
+    }
+    rows.push({ ch, need, first, det, sp: spent[ch.id] ?? 0, low: !!s.budget_low });
+  }
+  // Primero el hueco más cercano; los canales marcados como de baja prioridad (schedule.budget_low) solo cogen lo que sobra
+  rows.sort((a, b) => (Number(a.low) - Number(b.low)) || (a.first - b.first));
+  let free = G - spentAll - rows.length * BUDGET_FLOOR;
+  for (const [i, r] of rows.entries()) {
+    const alloc = r.need > 0 ? Math.max(0, Math.min(r.need, free)) : 0; free -= alloc;
+    const cap = Math.round((r.sp + BUDGET_FLOOR + alloc) * 1000) / 1000;
+    const why = r.need <= 0 ? `cubierto (${r.det.join(", ")}): no gasta` : `${r.det.join(", ")} · hueco ${new Date(r.first).toLocaleString("es-ES", { timeZone: "Europe/Madrid", weekday: "short", hour: "2-digit", minute: "2-digit" })} · necesita ≈${r.need.toFixed(2)} €${alloc < r.need - 0.005 ? `, recibe ${alloc.toFixed(2)} €` : ""}`;
+    await sb.from("channels").update({ budget_auto: { cap_eur: cap, at: new Date().toISOString(), rank: i + 1, need_eur: Math.round(r.need * 100) / 100, why } }).eq("id", r.ch.id);
+  }
+}
 async function stepPlanner(job: Job) {
+  if (!job.channel_id) { try { await allocateBudget(); } catch (e) { await log(job, `Reparto del presupuesto: ${(e as Error).message}`, "warn"); } }
   let q = sb.from("channels").select("*").eq("status", "active");
   if (job.channel_id) q = q.eq("id", job.channel_id);
   const { data: chs } = await q;

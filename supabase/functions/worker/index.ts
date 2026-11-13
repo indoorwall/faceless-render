@@ -2201,9 +2201,21 @@ async function modalAuth() {
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 48);
 }
 async function modalTts(text: string, language: string, opts: { ref_url?: string; ref_start?: number; ref_len?: number; exaggeration?: number; cfg_weight?: number } = {}) {
-  const r = await fetch(MODAL_TTS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auth: await modalAuth(), text, language, ...opts }) });
+  // Por encargo: se pide (devuelve un número) y se recoge cuando está lista. La primera vez del día tarda ~1 min
+  // (arranca la tarjeta gráfica); si no llega en ~100 s, el trabajo se reintenta con el generador ya encendido.
+  const auth = await modalAuth();
+  const r = await fetch(MODAL_TTS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auth, text, language, ...opts }) });
   if (!r.ok) throw new Error(`Voz propia (Modal) ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const d = await r.json();
+  const sub = await r.json();
+  if (sub.error || !sub.call_id) throw new Error(`Voz propia (Modal): ${sub.error ?? "sin número de encargo"}`);
+  // deno-lint-ignore no-explicit-any
+  let d: any = { pending: true };
+  for (let i = 0; i < 34 && d.pending; i++) {
+    await new Promise((res) => setTimeout(res, 3000));
+    const g = await fetch(`${MODAL_TTS_URL.replace("faceless-tts", "faceless-tts-result")}?call_id=${encodeURIComponent(sub.call_id)}&auth=${auth}`);
+    if (g.ok) d = await g.json();
+  }
+  if (d.pending) throw new Error("Voz propia (Modal): el generador está arrancando, se reintenta");
   if (d.error) throw new Error(`Voz propia (Modal): ${d.error}`);
   return { bytes: b64ToBytes(d.audio_b64), duration: Number(d.duration), words: (d.words ?? []) as { word: string; start: number; end: number }[] };
 }

@@ -46,12 +46,13 @@ class TTS:
             self.refs[key] = f.name
         return self.refs[key]
 
-    @modal.fastapi_endpoint(method="POST", label="faceless-tts")
-    def speak(self, body: dict):
-        # La clave va en el cuerpo (body.auth): el enlace es público, sin clave no se genera nada
-        if not body.get("auth") or body.get("auth") != os.environ.get("TTS_AUTH"):
-            return {"error": "unauthorized"}
-        return self._speak(body)
+    @modal.method()
+    def generate(self, body: dict):
+        try:
+            return self._speak(body)
+        except Exception as e:  # el error vuelve al motor en vez de perderse
+            import traceback
+            return {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-1500:]}
 
     def _speak(self, body):
         import torch, torchaudio
@@ -87,3 +88,30 @@ class TTS:
         with open(mp3f, "rb") as fh:
             b64 = base64.b64encode(fh.read()).decode()
         return {"audio_b64": b64, "duration": round(audio.shape[1] / sr, 3), "words": words}
+
+
+# Encargar (POST, devuelve call_id) y recoger (GET ?call_id=). Sin GPU: responden al instante.
+web_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]")
+
+@app.function(image=web_image, secrets=[modal.Secret.from_name("faceless-tts")])
+@modal.fastapi_endpoint(method="POST", label="faceless-tts")
+def submit(body: dict):
+    if not body.get("auth") or body.get("auth") != os.environ.get("TTS_AUTH"):
+        return {"error": "unauthorized"}
+    body = {k: v for k, v in body.items() if k != "auth"}
+    call = TTS().generate.spawn(body)
+    return {"call_id": call.object_id}
+
+@app.function(image=web_image, secrets=[modal.Secret.from_name("faceless-tts")])
+@modal.fastapi_endpoint(method="GET", label="faceless-tts-result")
+def result(call_id: str, auth: str):
+    if auth != os.environ.get("TTS_AUTH"):
+        return {"error": "unauthorized"}
+    from modal.functions import FunctionCall
+    try:
+        out = FunctionCall.from_id(call_id).get(timeout=0)
+    except Exception as e:
+        if "Timeout" in type(e).__name__:
+            return {"pending": True}
+        return {"error": f"{type(e).__name__}: {e}"}
+    return out

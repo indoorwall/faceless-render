@@ -20,7 +20,7 @@ image = (
     .run_function(_download)
 )
 
-@app.cls(image=image, gpu="L4", cpu=4, scaledown_window=120, timeout=900, secrets=[modal.Secret.from_name("faceless-tts")])
+@app.cls(image=image, gpu=["L4", "A10G", "T4"], cpu=4, scaledown_window=120, timeout=900, secrets=[modal.Secret.from_name("faceless-tts")])
 class Voice:
     @modal.enter()
     def load(self):

@@ -7,7 +7,7 @@ permissions:
 jobs:
   logs:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -15,4 +15,4 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
       - run: pip install -q modal
-      - run: timeout 60 modal app logs faceless-tts || true
+      - run: timeout 240 modal app logs faceless-tts 2>&1 | grep -v "GET / -> 200" | tail -150 || true

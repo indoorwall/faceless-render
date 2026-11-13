@@ -4382,10 +4382,11 @@ async function stepStyleTest(job: Job) {
   const style = String(p.style ?? "");
   const urls: string[] = [];
   // FLUX primero si se pide o si OpenAI no tiene saldo; si falla uno, se prueba el otro
+  const errs: string[] = [];
   const gen = async (prompt: string, _short = false): Promise<Uint8Array | null> => {
     const tries = p.provider === "openai" ? ["openai", "flux"] : ["flux", "openai"];
     for (const t of tries) {
-      try { const b = t === "flux" ? (KEYS["FAL_KEY"] ? await fluxImage(prompt, false) : null) : await safeImage(prompt, false); if (b) return b; } catch (_) { /* siguiente */ }
+      try { const b = t === "flux" ? (KEYS["FAL_KEY"] ? await fluxImage(prompt, false) : null) : await safeImage(prompt, false); if (b) return b; } catch (e) { errs.push(`${t}: ${(e as Error).message ?? e}`.slice(0, 200)); }
     }
     return null;
   };
@@ -4405,7 +4406,7 @@ async function stepStyleTest(job: Job) {
       }
     }
   }
-  await log(job, `Prueba de estilo «${p.name}»: ${urls.join(" ")}`);
+  await log(job, `Prueba de estilo «${p.name}»: ${urls.join(" ")}${errs.length ? ` · fallos: ${[...new Set(errs)].join(" | ")}` : ""}`);
 }
 
 // ---------- Paso: actualidad (temas del día curiosos → un Short extra que sale en cuanto está listo) ----------

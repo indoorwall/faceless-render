@@ -943,7 +943,20 @@ async function stepVoice(job: Job) {
   if (fish && !ch.fish_voice_id) throw new UserError("El canal usa Fish Audio pero no tiene voz elegida. Pon el ID de la voz en el canal.");
   const { data: pending } = await sb.from("scenes").select("*").eq("video_id", v.id).is("audio_url", null).order("n").limit(fish ? 4 : 8);
   let chars = 0; let fishBytes = 0; let sttSec = 0;
+  const own = ch.voice_provider === "modal" && !!KEYS["MODAL_TOKEN_SECRET"];
+  let ownSec = 0;
   for (const s of pending ?? []) {
+    // Voz propia (Modal): casi gratis; si falla, esa escena se hace con ElevenLabs para no parar el vídeo
+    if (own) {
+      try {
+        const t = await modalTts(plain(s.narration), String(ch.language ?? "es").slice(0, 2), { ref_url: ch.voice_options?.ref_url ?? undefined, exaggeration: ch.voice_options?.exaggeration ?? undefined });
+        const url = await upload(`${v.id}/a_${String(s.n).padStart(3, "0")}_${Date.now()}.mp3`, t.bytes, "audio/mpeg");
+        // Los tiempos de Whisper se ajustan a las palabras exactas del guion (subtítulos sin erratas)
+        await sb.from("scenes").update({ audio_url: url, audio_duration: t.duration, words: t.words.length ? alignWords(plain(s.narration), t.words, t.duration) : null }).eq("id", s.id);
+        ownSec += t.duration;
+        continue;
+      } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Escena ${s.n}: voz propia no disponible (${(e as Error).message.slice(0, 120)}); se usa ElevenLabs`, "warn"); }
+    }
     if (fish) {
       // Fish Audio: voz por escena y tiempos por palabra con la transcripción de OpenAI (si falla, el montaje los estima)
       const text = plain(s.narration);
@@ -973,7 +986,7 @@ async function stepVoice(job: Job) {
   }
   const { count: total } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id);
   const { count: left } = await sb.from("scenes").select("id", { count: "exact", head: true }).eq("video_id", v.id).is("audio_url", null);
-  await bumpUsage(v.id, { tts_chars: chars, ...(fishBytes ? { fish_bytes: fishBytes } : {}), ...(sttSec ? { stt_sec: Math.round(sttSec) } : {}) }, { progress: Math.round(2 + 33 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
+  await bumpUsage(v.id, { tts_chars: chars, ...(ownSec ? { own_tts_sec: Math.round(ownSec) } : {}), ...(fishBytes ? { fish_bytes: fishBytes } : {}), ...(sttSec ? { stt_sec: Math.round(sttSec) } : {}) }, { progress: Math.round(2 + 33 * (1 - (left ?? 0) / Math.max(total ?? 1, 1))) });
   if ((left ?? 0) > 0) await enqueue("voice", { video_id: v.id, payload: { cont: true } });
   else { await enqueue("audio", { video_id: v.id }); await log(job, "Voz terminada"); }
 }
@@ -2180,6 +2193,20 @@ async function fishTts(text: string, voiceId: string | undefined, model = FISH_M
   return new Uint8Array(await r.arrayBuffer());
 }
 // Voces de la biblioteca de Fish en un idioma, de más a menos valoradas
+// Generador de voz propio en Modal (Chatterbox en tarjeta gráfica por segundos). Devuelve audio mp3 y tiempos por palabra.
+// La clave del generador se deriva del secreto de Modal (igual que en .github/workflows/modal-deploy.yml)
+const MODAL_TTS_URL = "https://giolmacia--faceless-tts.modal.run";
+async function modalAuth() {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${key("MODAL_TOKEN_SECRET")}tts`));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 48);
+}
+async function modalTts(text: string, language: string, opts: { ref_url?: string; exaggeration?: number; cfg_weight?: number } = {}) {
+  const r = await fetch(MODAL_TTS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auth: await modalAuth(), text, language, ...opts }) });
+  if (!r.ok) throw new Error(`Voz propia (Modal) ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const d = await r.json();
+  if (d.error) throw new Error(`Voz propia (Modal): ${d.error}`);
+  return { bytes: b64ToBytes(d.audio_b64), duration: Number(d.duration), words: (d.words ?? []) as { word: string; start: number; end: number }[] };
+}
 async function fishVoices(lang: string, n: number) {
   const r = await fetch(`https://api.fish.audio/model?page_size=${n}&page_number=1&sort_by=score&language=${encodeURIComponent(lang)}`, { headers: { Authorization: `Bearer ${key("FISH_AUDIO_API_KEY")}` } });
   if (!r.ok) throw new Error(`Fish Audio voces ${r.status}: ${(await r.text()).slice(0, 150)}`);
@@ -4026,15 +4053,19 @@ async function stepVoiceTest(job: Job) {
   const out: string[] = []; const errs: string[] = [];
   const name = String(p.name ?? "voces");
   // Fish Audio: las mejores voces del idioma (o las indicadas)
-  if (KEYS["FISH_AUDIO_API_KEY"]) {
+  if (KEYS["FISH_AUDIO_API_KEY"] && p.fish !== false) {
     let voices: { id: string; title: string }[] = (p.fish_voices ?? []).map((id: string) => ({ id, title: id }));
     if (!voices.length) { try { voices = await fishVoices(lang, Number(p.fish_n ?? 3)); } catch (e) { errs.push(`fish lista: ${(e as Error).message}`); } }
     for (const vo of voices) {
       try { const b = await fishTts(text, vo.id, FISH_MODEL); out.push(`FISH «${vo.title}»: ${await upload(`voicetests/${name}_fish_${vo.id}.mp3`, b, "audio/mpeg")}`); } catch (e) { errs.push(`fish ${vo.title}: ${(e as Error).message}`.slice(0, 160)); }
     }
   } else errs.push("Falta FISH_AUDIO_API_KEY");
+  // Voz propia (Modal): una variante por voz de referencia (o la voz por defecto del modelo)
+  for (const mv of (p.modal ?? []) as { ref_url?: string; label?: string; exaggeration?: number; cfg_weight?: number }[]) {
+    try { const t = await modalTts(text, lang, mv); out.push(`PROPIA «${mv.label ?? "por defecto"}» (${t.duration}s, ${t.words.length} palabras con tiempo): ${await upload(`voicetests/${name}_propia_${(mv.label ?? "def").replace(/\W+/g, "_")}.mp3`, t.bytes, "audio/mpeg")}`); } catch (e) { errs.push(`propia ${mv.label ?? ""}: ${(e as Error).message}`.slice(0, 200)); }
+  }
   // ElevenLabs: modelos indicados (por defecto, el actual v3 y el económico flash)
-  for (const ev of (p.eleven ?? [{ voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_v3" }, { voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_flash_v2_5" }]) as { voice: string; model: string; label?: string }[]) {
+  for (const ev of (p.eleven === false ? [] : p.eleven ?? [{ voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_v3" }, { voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_flash_v2_5" }]) as { voice: string; model: string; label?: string }[]) {
     try {
       const factor = /flash|turbo/.test(ev.model) ? 0.5 : 1;
       await reserve("tts_chars", Math.ceil(text.length * factor));

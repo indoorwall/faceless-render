@@ -3926,7 +3926,7 @@ async function stepComments(job: Job) {
     const cs = fresh.filter((t: { video: string }) => t.video === vid);
     return `VÍDEO «${titles.get(vid) ?? vid}»${told.get(vid) ? `\nLo que cuenta: ${told.get(vid)}` : ""}\n${cs.map((t: { id: string; author: string; text: string; likes: number; thread: string[] }) => `- [${t.id}] ${t.author} (${t.likes} likes): ${t.text}${t.thread.length ? `\n    respuestas: ${t.thread.join(" | ")}` : ""}`).join("\n")}`;
   }).join("\n\n");
-  const r = await claudeTool(MODEL_FAST, `Llevas la comunidad del canal de YouTube «${ch.name}» (${ch.niche ?? ""}). Para cada comentario nuevo decides si contestar y escribes la respuesta tal cual se publicará como el canal. Contestar bien hace que la gente vuelva y se suscriba: sé cercano, agradecido y concreto; nada de respuestas genéricas ni de pedir la suscripción en cada respuesta. Nunca inventes datos.${canIdea ? " Además, si alguien pregunta o pide algo que daría para un Short nuevo, propón esa idea (máximo una)." : ""}`,
+  const r = await claudeTool(MODEL_CHEAP, `Llevas la comunidad del canal de YouTube «${ch.name}» (${ch.niche ?? ""}). Para cada comentario nuevo decides si contestar y escribes la respuesta tal cual se publicará como el canal. Contestar bien hace que la gente vuelva y se suscriba: sé cercano, agradecido y concreto; nada de respuestas genéricas ni de pedir la suscripción en cada respuesta. Nunca inventes datos.${canIdea ? " Además, si alguien pregunta o pide algo que daría para un Short nuevo, propón esa idea (máximo una)." : ""}`,
     `${playbookBlock(ch)}${canIdea ? `VÍDEOS QUE YA TIENE EL CANAL (no repitas): ${list}\n\n` : ""}COMENTARIOS NUEVOS:\n${body}`, COMMENTS_TOOL, 6000);
   const o = r.input ?? {};
   const now = new Date().toISOString();

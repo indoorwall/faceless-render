@@ -15,7 +15,7 @@ def _download():
     WhisperModel("small", device="cpu", compute_type="int8")
 
 image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.debian_slim(python_version="3.11")
     .apt_install("git", "ffmpeg", "sox", "libsox-dev", "build-essential")
     .run_commands(f"git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git {REPO}")
     .pip_install(

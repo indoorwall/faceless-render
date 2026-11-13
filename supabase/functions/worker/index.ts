@@ -160,7 +160,7 @@ async function runLoop() {
       if (e instanceof QuotaWait) {
         const pt = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" })); const ms = ((24 - pt.getHours()) * 60 - pt.getMinutes() + 10) * 60000;
         await sb.from("jobs").update({ status: "queued", attempts: Math.max(0, job.attempts - 1), run_after: new Date(Date.now() + ms).toISOString() }).eq("id", job.id);
-        if (job.video_id && !["reschedule", "yt_retitle"].includes(job.step)) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
+        if (job.video_id && !["reschedule", "yt_retitle", "voice_test"].includes(job.step)) await sb.from("videos").update({ stage: "Esperando cuota de YouTube (se sube hacia las 9:10)" }).eq("id", job.video_id);
         await log(job, job.step === "reschedule" ? "Cuota diaria de YouTube agotada: el cambio de fecha se hará hacia las 9:10" : "Cuota diaria de YouTube agotada: la subida sigue mañana", "warn");
         continue;
       }
@@ -175,11 +175,11 @@ async function runLoop() {
         await sb.from("jobs").update({ status: "failed", error: msg }).eq("id", job.id);
         // El análisis y las miniaturas son opcionales: si fallan, el vídeo sigue su curso
         if (job.step === "analyze" && job.video_id) await sb.from("videos").update({ analysis: { status: "failed", error: msg } }).eq("id", job.video_id);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "reschedule", "yt_retitle"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "reschedule", "yt_retitle", "voice_test"].includes(job.step)) await sb.from("videos").update({ status: "failed", error: `${job.step}: ${msg}` }).eq("id", job.video_id);
         await log(job, `Error en ${job.step}: ${msg}`, "error");
         const prov = creditProvider(msg);
         if (prov) await notify(`saldo:${prov}`, `⚠️ Sin saldo en ${prov}`, `<p><b>${esc2(prov)}</b> se ha quedado sin saldo y la producción se ha parado.</p><p>Error: <i>${esc2(msg.slice(0, 200))}</i></p><p>Recárgalo y los vídeos seguirán solos.</p>`, 6);
-        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage", "reschedule", "yt_retitle"].includes(job.step)) {
+        else if (job.video_id && !["thumbs", "learn", "compare", "audio_asset", "analyze", "repackage", "reschedule", "yt_retitle", "voice_test"].includes(job.step)) {
           const { data: vv } = await sb.from("videos").select("title,idea_title,channel:channels(name)").eq("id", job.video_id).maybeSingle();
           await notify(`fallo:${job.video_id}`, `❌ Un vídeo ha fallado: ${String(vv?.title ?? vv?.idea_title ?? "").slice(0, 60)}`, `<p>El vídeo <b>${esc2(vv?.title ?? vv?.idea_title)}</b> (${esc2((vv?.channel as { name?: string } | null)?.name)}) ha fallado en el paso <b>${esc2(job.step)}</b>.</p><p>Error: <i>${esc2(msg.slice(0, 300))}</i></p><p>En la app puedes pulsar «Reintentar».</p>`, 48);
         }
@@ -266,6 +266,7 @@ async function runStep(job: Job) {
     case "compile": return stepCompile(job);
     case "reschedule": return stepReschedule(job);
     case "yt_retitle": return stepRetitle(job);
+    case "voice_test": return stepVoiceTest(job);
     case "visual_check": return stepVisualCheck(job);
     case "voice_design": return stepVoiceDesign(job);
     case "explore": return stepExplore(job);
@@ -4016,6 +4017,35 @@ async function stepCompile(job: Job) {
 // ---------- Paso: cambiar la fecha de un vídeo programado (también en YouTube si ya está subido) ----------
 // Cambiar el título de un vídeo ya subido (prueba: a un Short atascado en el feed se le da un título más general).
 // Se lee el snippet actual y se reenvía entero con el título nuevo; el título anterior queda en auto.retitles
+// Prueba de voces: el mismo texto con varias voces y motores (Fish Audio y ElevenLabs en sus modos) para escucharlas y comparar coste
+async function stepVoiceTest(job: Job) {
+  const p = job.payload ?? {};
+  const text = String(p.text ?? "").trim();
+  if (!text) throw new UserError("Falta el texto");
+  const lang = String(p.lang ?? "en");
+  const out: string[] = []; const errs: string[] = [];
+  const name = String(p.name ?? "voces");
+  // Fish Audio: las mejores voces del idioma (o las indicadas)
+  if (KEYS["FISH_AUDIO_API_KEY"]) {
+    let voices: { id: string; title: string }[] = (p.fish_voices ?? []).map((id: string) => ({ id, title: id }));
+    if (!voices.length) { try { voices = await fishVoices(lang, Number(p.fish_n ?? 3)); } catch (e) { errs.push(`fish lista: ${(e as Error).message}`); } }
+    for (const vo of voices) {
+      try { const b = await fishTts(text, vo.id, FISH_MODEL); out.push(`FISH «${vo.title}»: ${await upload(`voicetests/${name}_fish_${vo.id}.mp3`, b, "audio/mpeg")}`); } catch (e) { errs.push(`fish ${vo.title}: ${(e as Error).message}`.slice(0, 160)); }
+    }
+  } else errs.push("Falta FISH_AUDIO_API_KEY");
+  // ElevenLabs: modelos indicados (por defecto, el actual v3 y el económico flash)
+  for (const ev of (p.eleven ?? [{ voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_v3" }, { voice: "JBFqnCBsd6RMkjVDRZzb", model: "eleven_flash_v2_5" }]) as { voice: string; model: string; label?: string }[]) {
+    try {
+      const factor = /flash|turbo/.test(ev.model) ? 0.5 : 1;
+      await reserve("tts_chars", Math.ceil(text.length * factor));
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${ev.voice}?output_format=mp3_44100_128`, { method: "POST", headers: { "xi-api-key": key("ELEVENLABS_API_KEY"), "Content-Type": "application/json" }, body: JSON.stringify({ text, model_id: ev.model, ...(ev.model === "eleven_v3" ? {} : { language_code: lang }) }) });
+      if (!r.ok) { await unreserve("tts_chars", Math.ceil(text.length * factor)); throw new Error(`${r.status} ${(await r.text()).slice(0, 120)}`); }
+      const b = new Uint8Array(await r.arrayBuffer());
+      out.push(`ELEVEN ${ev.label ?? ev.voice} ${ev.model}: ${await upload(`voicetests/${name}_eleven_${ev.voice}_${ev.model}.mp3`, b, "audio/mpeg")}`);
+    } catch (e) { errs.push(`eleven ${ev.model}: ${(e as Error).message}`.slice(0, 160)); }
+  }
+  await log(job, `Prueba de voces «${name}» (${text.length} caracteres): ${out.join(" || ")}${errs.length ? ` · fallos: ${errs.join(" | ")}` : ""}`);
+}
 async function stepRetitle(job: Job) {
   const v = await getVideo(job.video_id);
   const title = String(job.payload?.title ?? "").trim().slice(0, 100);

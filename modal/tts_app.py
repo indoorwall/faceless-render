@@ -85,14 +85,14 @@ class Voice:
         mp3f = wavf.replace(".wav", ".mp3")
         subprocess.run(["ffmpeg", "-y", "-i", wavf, "-ac", "1", "-b:a", "128k", mp3f], check=True, capture_output=True)
         segs, info = self.whisper.transcribe(wavf, language=lang, word_timestamps=True, initial_prompt=text[:200])
-        words = [{"word": w.word.strip(), "start": round(w.start, 3), "end": round(w.end, 3)} for s in segs for w in (s.words or [])]
+        words = [{"word": str(w.word).strip(), "start": round(float(w.start), 3), "end": round(float(w.end), 3)} for s in segs for w in (s.words or [])]
         with open(mp3f, "rb") as fh:
             b64 = base64.b64encode(fh.read()).decode()
-        return {"audio_b64": b64, "duration": round(audio.shape[1] / sr, 3), "words": words}
+        return {"audio_b64": b64, "duration": round(float(audio.shape[1]) / float(sr), 3), "words": words}
 
 
 # Encargar (POST, devuelve call_id) y recoger (GET ?call_id=). Sin GPU: responden al instante.
-web_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]")
+web_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]", "numpy")
 
 @app.function(image=web_image, secrets=[modal.Secret.from_name("faceless-tts")])
 @modal.fastapi_endpoint(method="POST", label="faceless-tts")

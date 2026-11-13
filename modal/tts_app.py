@@ -30,18 +30,21 @@ class TTS:
         self.whisper = WhisperModel("small", device="cuda", compute_type="float16")
         self.refs = {}
 
-    def _ref(self, url):
+    def _ref(self, url, start=45.0, length=12.0):
+        # Voz de referencia: se recorta un trozo limpio (por defecto 12 s a partir del segundo 45, para saltar la
+        # presentación de los audiolibros de LibriVox) y se pasa a mono 24 kHz
         if not url:
             return None
-        if url not in self.refs:
+        key = f"{url}#{start}-{length}"
+        if key not in self.refs:
             import requests
             r = requests.get(url, timeout=60)
             r.raise_for_status()
             f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             src = tempfile.NamedTemporaryFile(delete=False); src.write(r.content); src.close()
-            subprocess.run(["ffmpeg", "-y", "-i", src.name, "-ac", "1", "-ar", "24000", f.name], check=True, capture_output=True)
-            self.refs[url] = f.name
-        return self.refs[url]
+            subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(length), "-i", src.name, "-ac", "1", "-ar", "24000", f.name], check=True, capture_output=True)
+            self.refs[key] = f.name
+        return self.refs[key]
 
     @modal.fastapi_endpoint(method="POST", label="faceless-tts")
     def speak(self, body: dict):
@@ -56,7 +59,7 @@ class TTS:
         lang = str(body.get("language", "es"))[:2]
         if not text:
             return {"error": "empty text"}
-        ref = self._ref(body.get("ref_url"))
+        ref = self._ref(body.get("ref_url"), float(body.get("ref_start", 45)), float(body.get("ref_len", 12)))
         # Frases de hasta ~250 caracteres: Chatterbox va mejor en trozos cortos
         parts, cur = [], ""
         for s in re.split(r"(?<=[.!?…])\s+", text):

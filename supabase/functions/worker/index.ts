@@ -949,7 +949,7 @@ async function stepVoice(job: Job) {
     // Voz propia (Modal): casi gratis; si falla, esa escena se hace con ElevenLabs para no parar el vídeo
     if (own) {
       try {
-        const t = await modalTts(plain(s.narration), String(ch.language ?? "es").slice(0, 2), { ref_url: ch.voice_options?.ref_url ?? undefined, exaggeration: ch.voice_options?.exaggeration ?? undefined });
+        const t = await modalTts(plain(s.narration), String(ch.language ?? "es").slice(0, 2), { ref_url: ch.voice_options?.ref_url ?? undefined, ref_start: ch.voice_options?.ref_start ?? undefined, exaggeration: ch.voice_options?.exaggeration ?? undefined });
         const url = await upload(`${v.id}/a_${String(s.n).padStart(3, "0")}_${Date.now()}.mp3`, t.bytes, "audio/mpeg");
         // Los tiempos de Whisper se ajustan a las palabras exactas del guion (subtítulos sin erratas)
         await sb.from("scenes").update({ audio_url: url, audio_duration: t.duration, words: t.words.length ? alignWords(plain(s.narration), t.words, t.duration) : null }).eq("id", s.id);
@@ -2200,7 +2200,7 @@ async function modalAuth() {
   const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${key("MODAL_TOKEN_SECRET")}tts`));
   return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 48);
 }
-async function modalTts(text: string, language: string, opts: { ref_url?: string; exaggeration?: number; cfg_weight?: number } = {}) {
+async function modalTts(text: string, language: string, opts: { ref_url?: string; ref_start?: number; ref_len?: number; exaggeration?: number; cfg_weight?: number } = {}) {
   const r = await fetch(MODAL_TTS_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auth: await modalAuth(), text, language, ...opts }) });
   if (!r.ok) throw new Error(`Voz propia (Modal) ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const d = await r.json();
@@ -4061,7 +4061,7 @@ async function stepVoiceTest(job: Job) {
     }
   } else errs.push("Falta FISH_AUDIO_API_KEY");
   // Voz propia (Modal): una variante por voz de referencia (o la voz por defecto del modelo)
-  for (const mv of (p.modal ?? []) as { ref_url?: string; label?: string; exaggeration?: number; cfg_weight?: number }[]) {
+  for (const mv of (p.modal ?? []) as { ref_url?: string; ref_start?: number; label?: string; exaggeration?: number; cfg_weight?: number }[]) {
     try { const t = await modalTts(text, lang, mv); out.push(`PROPIA «${mv.label ?? "por defecto"}» (${t.duration}s, ${t.words.length} palabras con tiempo): ${await upload(`voicetests/${name}_propia_${(mv.label ?? "def").replace(/\W+/g, "_")}.mp3`, t.bytes, "audio/mpeg")}`); } catch (e) { errs.push(`propia ${mv.label ?? ""}: ${(e as Error).message}`.slice(0, 200)); }
   }
   // ElevenLabs: modelos indicados (por defecto, el actual v3 y el económico flash)

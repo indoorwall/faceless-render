@@ -4,7 +4,9 @@ from ep import *
 L = lambda n: f"lib/bg_{n}.png"
 SR, EX, CC, VA, FL, BR, VS, VC, MO, CO, BK, PP, WR, CB = [L(n) for n in "server_room crypto_exchange coat_check vault trading_floor boardroom video_store video_store_closed mail_office courtroom bakery printing_press wallpaper_room central_bank".split()]
 HK, SP, BAG, CL = "lib/cut_hacker.png", "lib/cut_spokesperson.png", "lib/cut_moneybag.png", "lib/cut_ceo_laughing.png"
-LOGO = HTML("<div class='logo' style='left:540px;top:1560px;transform:translateX(-50%);font-size:44px' data-anim='fade' data-in='0.3'><i>$</i>BILLION DOLLAR STORIES</div>")
+import json as _j
+BRAND = _j.load(open('../../brand.json'))['name']
+LOGO = HTML(f"<div class='logo' style='left:540px;top:1560px;transform:translateX(-50%);font-size:44px' data-anim='fade' data-in='0.3'><i>$</i>{BRAND}</div>")
 SUB = lambda at: {"type": "subscribe", "x": 540, "y": 1180, "at": at, "sound": "pop"}
 X = 540
 def w(at, t, y, st="box", sz=90, **k): return W(at, t, X, y, st, sz, **k)

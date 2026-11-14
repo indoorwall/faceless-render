@@ -90,13 +90,26 @@ Inglés estadounidense sencillo. Personajes que reaccionan y se mueven solo cuan
 explicaciones, veredicto y despedida, no en todas las escenas. Texto en pantalla: ≤ 4 palabras, cifras grandes.
 Cierre: «This is Billion Dollar Stories. We make money make sense.» + avance del siguiente tema si lo sabes.
 Ejemplo completo y verificado: `studio/bds/examples/nvidia/` (guion y cronología) y `examples/nvidia-v4/episode.json`
-(el montaje de referencia). Reglas de retención aprendidas en la V4:
+(montaje intermedio). **La referencia de calidad es `examples/nvidia-v5/episode.json` (V5 aprobada por Giol): todos los episodios deben salir así.** Reglas aprendidas:
 - Un mensaje por plano: como mucho un cartel grande y una nota pequeña a la vez (usa `out` para que el anterior se vaya).
 - Cada salto de tiempo se justifica en pantalla (rebobinado con contador de años, tira de calendario para una semana).
 - Un solo gráfico de bolsa por vídeo; el resto se cuenta con personajes, contadores o la metáfora.
 - Los personajes reaccionan en el momento clave (`react`) en vez de moverse sin motivo.
 - Música según la emoción: suspense en el conflicto, alegre/cálida en orígenes y explicación, y silencios antes del golpe y en el giro.
-- Un único final: la idea memorable + despedida de 4 s.
+- Un único final que RESUELVE el misterio del gancho («Where did it go? Nowhere. It was never cash.») + la idea memorable + despedida breve: «If that made money make a little more sense, hit subscribe. We make money make sense.»
+- El conflicto se ve desde el primer fotograma (nada de planos vacíos al empezar ni mientras arranca la voz).
+- Ningún fondo ni personaje más de 2 planos seguidos.
+- Cada concepto financiero se explica con 🍕 PIZZA MATH u otro ejemplo cotidiano, con el sello en pantalla.
+
+**TODO REAL (innegociable).** No se publica nada que no esté verificado en una fuente abierta en esa sesión. Tabla de
+hechos obligatoria (confirmado / atribuido a medios / cálculo propio) guardada en `script.facts` del vídeo. Si un dato no
+se puede comprobar, se quita. Nunca cifras inventadas, citas inventadas, nombres de particulares ni sospechas presentadas
+como hechos. Las cifras de bolsa son valor de mercado: dilo así y explica la diferencia con el dinero en efectivo.
+
+**Miniatura (cada largo):** 2 versiones en HTML 1920x1080 con los dibujos del canal (un protagonista con emoción clara + un
+elemento de dinero + 1-2 palabras enormes que no repitan el título), capturadas con Playwright y guardadas en JPG
+1280x720 (< 2 MB). Súbelas con `upload_url` y pon la mejor en `thumbnail_url` y ambas en `thumbnails`
+(`[{"id":"A","url":…,"selected":true},{"id":"B","url":…,"selected":false}]`). Ejemplo: `examples/nvidia/thumbs.html`.
 
 **0. Preparación** (cada sesión es un ordenador nuevo):
 ```bash

@@ -63,6 +63,10 @@ Puedes usar una idea del banco (`idea_review`) o una tuya. Respeta la `style_gui
   y 3 respuestas que suben de intensidad, sin numerarlas, 38-50 s. Temas: 60 % mascotas y animales con «poderes», 25 % personas
   del momento (como el papa León XIV), 15 % cuerpo. Nunca temas abstractos (olores del espacio, medallas de arte, huesos).
   Imágenes reales del sujeto exacto de cada frase; nada de stock de relleno.
+- **5 curiosidades, plan de recuperación (2 semanas desde el 14-nov):** la mediana cayó a 385 visitas. Hasta que la de los
+  últimos 7 Shorts vuelva a pasar de 1.000: solo temas seguros (perros, gatos, cuervos y animales con «poderes», famosos del
+  momento) y prioridad a secuelas de los éxitos (cuervos 9.700, cachorro 3.500, papa León XIV 2.600, perros que ladran 2.600),
+  con un ángulo nuevo. Comprueba la mediana antes de elegir tema.
 
 **Paso 3 — Investiga** con WebSearch/WebFetch (Wikipedia y fuentes serias). Guarda las URL que abras.
 

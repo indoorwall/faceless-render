@@ -1,0 +1,30 @@
+{
+ "base": "https://embjkwggqooawqnzkoam.supabase.co/storage/v1/object/public/media/studio/lib/",
+ "files": {
+  "cut_tech_ceo.png": "Personaje recortado: CEO tecnológico canoso con chaqueta de cuero negra y gafas, puño en alto con un chip (caricatura genérica usada para Jensen Huang)",
+  "cut_tech_ceo_box.png": "El mismo CEO saliendo cabizbajo con una caja de sus cosas (despido/dimisión), de perfil caminando",
+  "cut_tech_ceo_atlas.png": "El mismo CEO cargando un rascacielos de cristal al hombro (riesgo de depender de una persona)",
+  "cut_tech_ceo_phone.png": "El mismo CEO mirando preocupado el móvil",
+  "cut_trader_panic.png": "Trader de Wall Street gordito con corbata roja gritando con las manos en la cabeza (pánico, caídas)",
+  "cut_exec_woman.png": "Directiva rubia con gafas y traje azul marino con una carpeta (CEO/CFO, sustituta)",
+  "cut_lawyer.png": "Abogado/investigador con maletín y lupa",
+  "cut_moneybag.png": "Saco de dinero con agujero perdiendo monedas",
+  "bg_boardroom.png": "Fondo: sala de consejo con mesa larga y ciudad al fondo (dos consejeros sentados)",
+  "bg_trading_floor.png": "Fondo: parqué de bolsa con pantallas rojas",
+  "bg_living_room.png": "Fondo: salón de casa con una familia en el sofá mirando tabletas (alegres)",
+  "bg_city_night.png": "Fondo: skyline de noche con pantallas vacías (encuadrar con kb≥1.3 para ocultar los carteles amarillos de los lados)",
+  "bg_diner.png": "Fondo: diner americano de los 90 con tres ingenieros bocetando un chip en una servilleta",
+  "bg_vault.png": "Fondo: cámara acorazada abierta con monedas y bitcoins",
+  "bg_pizza_chef.png": "Fondo: pizzero sonriente con pizzas (para la metáfora de las acciones)",
+  "bg_gamepad_to_ai.png": "Fondo: mando de videojuego que se convierte en un chip de IA",
+  "music_spy.mp3": "Música: suspense tipo thriller de espías (escándalos, conflicto)",
+  "music_fun.mp3": "Música: alegre y curiosa (explicaciones, final)",
+  "sfx_whoosh.mp3": "Efecto: barrido entre planos",
+  "sfx_pop.mp3": "Efecto: aparece un texto",
+  "sfx_hit.mp3": "Efecto: golpe (sellos, cifras clave)",
+  "sfx_zoom.mp3": "Efecto: zoom/transformación",
+  "sfx_error.mp3": "Efecto: error (caídas, malas noticias)",
+  "sfx_score.mp3": "Efecto: subida/acierto",
+  "sfx_tick.mp3": "Efecto: tic de contador"
+ }
+}

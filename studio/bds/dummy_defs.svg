@@ -1,0 +1,57 @@
+<defs>
+ <symbol id="target" viewBox="-50 -50 100 100"><circle r="46" fill="#111"/><path d="M0 0 L0 -40 A40 40 0 0 1 40 0 Z" fill="#FFC400"/><path d="M0 0 L0 40 A40 40 0 0 1 -40 0 Z" fill="#FFC400"/><circle r="46" fill="none" stroke="#111" stroke-width="6"/></symbol>
+ <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FBEFB8"/><stop offset="1" stop-color="#E9D27A"/></linearGradient>
+ <g id="body">
+  <!-- legs -->
+  <rect x="-62" y="250" width="48" height="150" rx="20" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <rect x="14" y="250" width="48" height="150" rx="20" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <ellipse cx="-38" cy="404" rx="44" ry="20" fill="#111"/><ellipse cx="38" cy="404" rx="44" ry="20" fill="#111"/>
+  <!-- torso -->
+  <rect x="-95" y="80" width="190" height="190" rx="60" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <use href="#target" x="-30" y="140" width="60" height="60"/>
+  <!-- tie -->
+  <path d="M-14 84 L14 84 L8 100 L20 160 L0 180 L-20 160 L-8 100 Z" fill="#18244A" stroke="#111" stroke-width="5"/>
+  <!-- neck -->
+  <rect x="-22" y="60" width="44" height="30" rx="10" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+ </g>
+ <g id="head">
+  <ellipse cx="0" cy="-60" rx="120" ry="130" fill="url(#skin)" stroke="#111" stroke-width="9"/>
+  <use href="#target" x="-26" y="-190" width="52" height="52"/>
+  <path d="M-120 -70 Q0 -50 120 -70" fill="none" stroke="#111" stroke-width="5" opacity=".35"/>
+ </g>
+<g id="dm_explain">
+ <use href="#body"/>
+ <path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q170 60 210 -20" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q170 60 210 -20" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <line x1="210" y1="-20" x2="300" y2="-170" stroke="#8B5A2B" stroke-width="12" stroke-linecap="round"/><circle cx="300" cy="-170" r="12" fill="#EF4444"/>
+ <use href="#head"/>
+ <ellipse cx="-42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="-36" cy="-66" r="11" fill="#111"/>
+ <ellipse cx="42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="48" cy="-66" r="11" fill="#111"/>
+ <path d="M-30 -110 L-58 -118 M30 -112 L58 -122" stroke="#111" stroke-width="8" stroke-linecap="round"/>
+ <path d="M-36 -10 Q0 22 40 -12" fill="none" stroke="#111" stroke-width="8" stroke-linecap="round"/></g>
+<g id="dm_shock">
+ <use href="#body"/>
+ <path d="M-90 120 Q-170 40 -110 -40" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-170 40 -110 -40" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q170 40 110 -40" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q170 40 110 -40" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <use href="#head"/>
+ <circle cx="-110" cy="-40" r="30" fill="#F3E39A" stroke="#111" stroke-width="8"/><circle cx="110" cy="-40" r="30" fill="#F3E39A" stroke="#111" stroke-width="8"/>
+ <circle cx="-42" cy="-72" r="30" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="-42" cy="-72" r="8" fill="#111"/>
+ <circle cx="42" cy="-72" r="30" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="42" cy="-72" r="8" fill="#111"/>
+ <path d="M-30 -122 L-56 -136 M30 -122 L56 -136" stroke="#111" stroke-width="8" stroke-linecap="round"/>
+ <ellipse cx="0" cy="0" rx="24" ry="32" fill="#4A1414" stroke="#111" stroke-width="7"/>
+ <g stroke="#FFC400" stroke-width="8" stroke-linecap="round"><line x1="-150" y1="-170" x2="-185" y2="-205"/><line x1="150" y1="-170" x2="185" y2="-205"/><line x1="0" y1="-210" x2="0" y2="-250"/></g></g>
+<g id="dm_thumbs">
+ <use href="#body"/>
+ <path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q190 110 200 20" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q190 110 200 20" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <g transform="translate(200,10)">
+  <rect x="-40" y="-26" width="80" height="62" rx="20" fill="#F3E39A" stroke="#111" stroke-width="8"/>
+  <path d="M-40 -6 H34 M-40 12 H34" stroke="#111" stroke-width="5" opacity=".5"/>
+  <path d="M-34 -22 Q-46 -70 -26 -86 Q-8 -92 -6 -70 L-4 -24" fill="#F3E39A" stroke="#111" stroke-width="8" stroke-linejoin="round"/>
+ </g>
+ <use href="#head"/>
+ <path d="M-62 -72 Q-42 -92 -22 -72" fill="none" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+ <ellipse cx="42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="46" cy="-66" r="11" fill="#111"/>
+ <path d="M-50 -14 Q0 40 52 -16 Q0 10 -50 -14 Z" fill="#fff" stroke="#111" stroke-width="7" stroke-linejoin="round"/>
+ <path d="M28 -116 L58 -126" stroke="#111" stroke-width="8" stroke-linecap="round"/></g>
+</defs>

@@ -106,10 +106,13 @@ hechos obligatoria (confirmado / atribuido a medios / cálculo propio) guardada 
 se puede comprobar, se quita. Nunca cifras inventadas, citas inventadas, nombres de particulares ni sospechas presentadas
 como hechos. Las cifras de bolsa son valor de mercado: dilo así y explica la diferencia con el dinero en efectivo.
 
-**Miniatura (cada largo):** 2 versiones en HTML 1920x1080 con los dibujos del canal (un protagonista con emoción clara + un
-elemento de dinero + 1-2 palabras enormes que no repitan el título), capturadas con Playwright y guardadas en JPG
-1280x720 (< 2 MB). Súbelas con `upload_url` y pon la mejor en `thumbnail_url` y ambas en `thumbnails`
-(`[{"id":"A","url":…,"selected":true},{"id":"B","url":…,"selected":false}]`). Ejemplo: `examples/nvidia/thumbs.html`.
+**Miniatura (cada largo) — estilo «impacto»** (referencia del dueño del canal): fondo oscuro con brillo de color,
+protagonista GRANDE con luz de contorno, número enorme en 3D con grietas sobre una banda rasgada (roja; azul si es
+«congelado», verde si es una subida), subtítulo en brochazo amarillo con subrayado rojo, flecha roja de caída si hay
+pérdida y un segundo personaje asustado en la esquina. Nada de texto tapado por personajes. Con los dibujos del canal:
+sin fotos realistas de personas reales ni logos de marcas. Hazlas con `tools/thumb.py` (ejemplo:
+`work/thumbs/build2.py`): 2 versiones, captura 1920x1080 → JPG 1280x720 (< 2 MB). Súbelas con `upload_url` y pon la
+mejor en `thumbnail_url` y ambas en `thumbnails` (`[{"id":"A","url":…,"selected":true},{"id":"B","url":…,"selected":false}]`).
 
 **0. Preparación** (cada sesión es un ordenador nuevo):
 ```bash

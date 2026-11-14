@@ -67,7 +67,7 @@ function anim(el,rel,shotLen){
   else if(a==='drop'){ const b=clamp(p/0.5); tf+=` translateY(${(1-easeOut(b))*-1100}px)`; if(b>=1&&p<0.75){ const sq=Math.sin((p-0.5)/0.25*Math.PI)*0.12; tf+=` scale(${1+sq},${1-sq})`; } }
   else if(a==='fold'){ const f=clamp(p/0.6); tf+=` perspective(900px) rotateX(${easeInOut(f)*80}deg) scale(${1-0.3*f})`; op=1-f*0.6; }
   else if(a==='zoom'){ tf+=` scale(${0.3+0.7*backOut(q)})`; }
-  else if(a==='count'){ const fr=clamp(p/(+el.dataset.dur||1)); const q2=el.dataset.steps?Math.floor(fr*(+el.dataset.steps)+1e-6)/(+el.dataset.steps):easeOut(fr); const v=Math.round(+el.dataset.from+(+el.dataset.to-+el.dataset.from)*q2); el.textContent=(el.dataset.fmt||'−${v}B').replace('{v}',v); tf+=` scale(${1+0.06*Math.sin(p*20)*(p<1.6?1:0)})`; }
+  else if(a==='count'){ const fr=clamp(p/(+el.dataset.dur||1)); const q2=el.dataset.steps?Math.floor(fr*(+el.dataset.steps)+1e-6)/(+el.dataset.steps):easeOut(fr); const v=Math.round(+el.dataset.from+(+el.dataset.to-+el.dataset.from)*q2); el.textContent=(el.dataset.fmt||'−${v}B').replace('{v}',(Math.abs(v)>=1000&&!((+el.dataset.from>=1800&&+el.dataset.from<=2100)&&(+el.dataset.to>=1800&&+el.dataset.to<=2100)))?v.toLocaleString('en-US'):v); tf+=` scale(${1+0.06*Math.sin(p*20)*(p<1.6?1:0)})`; }
   // reposo: los dibujos se mueven siempre
   const idle=el.dataset.idle, rp=rel;
   const react=el.dataset.react!=null?+el.dataset.react:null;

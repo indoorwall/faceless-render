@@ -197,6 +197,9 @@ for si, scn in enumerate(E["scenes"]):
     voices.append((T0, scn["voice"]))
     end = d + gap if si < len(E["scenes"]) - 1 else d + float(E.get("end_pad", 1.6))
     starts = [sc.t(sh.get("at", 0)) if k else 0.0 for k, sh in enumerate(scn["shots"])]
+    for k in range(1, len(starts)):  # un plano que empieza antes que el anterior deja huecos: casi siempre es una palabra repetida («and» → «and#1»)
+        if starts[k] <= starts[k - 1] or starts[k] >= end:
+            raise SystemExit(f"Escena {si + 1}: el plano {k + 1} («{scn['shots'][k].get('at')}» → {starts[k]:.2f}s) no va después del plano {k} ({starts[k - 1]:.2f}s). Usa «palabra#n».")
     for k, sh in enumerate(scn["shots"]):
         s0, s1 = starts[k], (starts[k + 1] if k + 1 < len(starts) else end)
         t_abs = T0 + s0

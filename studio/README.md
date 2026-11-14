@@ -106,6 +106,14 @@ hechos obligatoria (confirmado / atribuido a medios / cálculo propio) guardada 
 se puede comprobar, se quita. Nunca cifras inventadas, citas inventadas, nombres de particulares ni sospechas presentadas
 como hechos. Las cifras de bolsa son valor de mercado: dilo así y explica la diferencia con el dinero en efectivo.
 
+**Dinamismo mínimo = Nvidia V5** (`work/nvidia-v5`, el listón). Antes de renderizar un largo:
+`python3 tools/stats.py work/<ep>` (≥ 8 planos/min, ≥ 24 efectos/min, ≥ 3 personajes/min, ≥ 10 tipos de recurso, ≥ 6 cambios
+de música) y `python3 tools/empty.py work/<ep>` tras `node tools/rec.cjs work/<ep> 30 1` (ningún segundo con el fondo vacío).
+Recursos obligatorios: calendario (`calendar` con `days`) en cada salto de tiempo, contadores con ticks, personajes que
+reaccionan (`react`, `shake`, `jump`, `walk`), silencio de música antes de cada golpe, Pizza Math (o su versión del tema)
+en varios planos con `tag`/`pizza8`, y cierre con suscripción + «Next:». El motor se niega si un plano empieza antes que el
+anterior (palabra repetida: usa `palabra#n`).
+
 **Miniatura (cada largo) — estilo «impacto»** (referencia del dueño del canal): fondo oscuro con brillo de color,
 protagonista GRANDE con luz de contorno, número enorme en 3D con grietas sobre una banda rasgada (roja; azul si es
 «congelado», verde si es una subida), subtítulo en brochazo amarillo con subrayado rojo, flecha roja de caída si hay

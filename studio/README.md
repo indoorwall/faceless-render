@@ -1,7 +1,7 @@
 # Estudio: guiones y montajes escritos por Claude
 
 Las sesiones diarias de Claude (tareas programadas) escriben aquí los guiones de **Frente insólito**, **5 curiosidades** y
-**Billion Dollar Stories**, en lugar de pagarlos a la API. Producen, verifican y dejan los vídeos en la web
+**The Money Slice**, en lugar de pagarlos a la API. Producen, verifican y dejan los vídeos en la web
 (Faceless Studio), que los sube sola a YouTube en su hueco del calendario.
 
 - Proyecto de Supabase: `embjkwggqooawqnzkoam` (herramienta `execute_sql` del conector de Supabase).
@@ -14,7 +14,7 @@ Las sesiones diarias de Claude (tareas programadas) escriben aquí los guiones d
 | --- | --- | --- | --- |
 | Frente insólito (es) | `9aa16a1f-0a4d-42dd-9c8e-cac2090deb1e` | 2 Shorts | 12:30 y 18:30 |
 | 5 curiosidades (es) | `b1fcab59-d0c6-4afc-8335-d00753b38cca` | 2 Shorts | 12:30 y 18:30 |
-| Billion Dollar Stories (en, EE. UU.) | `fee9f75e-fd80-47c4-a3e3-70c396d0a104` | 1 largo + 2 Shorts | largo 20:00 · Shorts 16:00 y 01:00 |
+| The Money Slice (en, EE. UU.) | `fee9f75e-fd80-47c4-a3e3-70c396d0a104` | 1 largo + 2 Shorts | largo 20:00 · Shorts 16:00 y 01:00 |
 
 El calendario lo pone la web (planificador): tú solo dejas los vídeos hechos. Produce **para el día siguiente**.
 
@@ -78,7 +78,7 @@ update videos set status = 'producing', progress = 0, stage = 'En cola' from v w
 `preapproved` hace que, cuando el vídeo esté montado y revisado, la web lo programe sola en su hueco.
 Comprueba al final con `select status, stage, error from videos where id = '<id>'` que ha empezado (stage cambia).
 
-## 3. Billion Dollar Stories (largo + 2 Shorts en inglés)
+## 3. The Money Slice (largo + 2 Shorts en inglés)
 
 Identidad fija: la del piloto de Nvidia (dibujos caricaturescos FLUX, navy/amarillo/verde/rojo, tipografía Anton, cajas de
 texto, mascota «Dummy» dibujada por código). **No la cambies.** Lema: *We make money make sense.*
@@ -88,7 +88,7 @@ Estructura: gancho (5-10 s) → contexto mínimo → conflicto que escala → gi
 resumen). Explica cada concepto con un ejemplo sencillo (como la pizza = acciones). Humor que nace de la historia.
 Inglés estadounidense sencillo. Personajes que reaccionan y se mueven solo cuando aporta. La mascota aparece en
 explicaciones, veredicto y despedida, no en todas las escenas. Texto en pantalla: ≤ 4 palabras, cifras grandes.
-Cierre: «This is Billion Dollar Stories. We make money make sense.» + avance del siguiente tema si lo sabes.
+Cierre: «This is The Money Slice. We make money make sense.» + avance del siguiente tema si lo sabes.
 Ejemplo completo y verificado: `studio/bds/examples/nvidia/` (guion y cronología) y `examples/nvidia-v4/episode.json`
 (montaje intermedio). **La referencia de calidad es `examples/nvidia-v5/episode.json` (V5 aprobada por Giol): todos los episodios deben salir así.** Reglas aprendidas:
 - Un mensaje por plano: como mucho un cartel grande y una nota pequeña a la vez (usa `out` para que el anterior se vaya).

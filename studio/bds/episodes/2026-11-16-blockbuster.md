@@ -1,4 +1,4 @@
-# Billion Dollar Stories: Blockbuster passed on Netflix for $50 million
+# The Money Slice: Blockbuster passed on Netflix for $50 million
 
 Researched 14 Nov 2026. Every source below was opened with WebFetch in this session. Sources that were searched but not opened (e.g. Business Insider, NYT, NPR, the Bend store site) are not used.
 
@@ -106,7 +106,7 @@ In 2000, Netflix's founders flew to Dallas and offered to sell their company to 
 
 Blockbuster wasn't blind. It launched an online service, dropped late fees, and even made Netflix lose subscribers. But late fees were worth about $800 million a year, and giving up that cash cow, plus about $1 billion in debt, made the future hard to chase. That's the innovator's dilemma, explained with Pizza Math.
 
-This is Billion Dollar Stories. We make money make sense. Figures are from the sources below; market values are not cash.
+This is The Money Slice. We make money make sense. Figures are from the sources below; market values are not cash.
 
 Sources:
 - https://www.yahoo.com/news/blockbuster-ceo-struggled-not-laugh-191553438.html

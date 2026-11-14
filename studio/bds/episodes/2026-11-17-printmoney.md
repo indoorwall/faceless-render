@@ -1,4 +1,4 @@
-# Billion Dollar Stories — "Why Can't the Government Just Print More Money?"
+# The Money Slice — "Why Can't the Government Just Print More Money?"
 
 Pillar: Money Explained (told as a story). Research date: 2026-11-14. Every source below was opened in this session.
 

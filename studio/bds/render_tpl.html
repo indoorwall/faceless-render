@@ -21,6 +21,12 @@ html,body{width:%%W%%px;height:%%H%%px;overflow:hidden;background:#0E1630}
 .sub{font-family:Inter;font-weight:900;font-size:80px;color:#fff;background:#EF4444;border-radius:20px;padding:18px 54px;box-shadow:0 12px 0 #7f1d1d}
 .tile{position:absolute;width:520px;height:292px;background-size:cover;background-position:center;border:8px solid #FFC400;border-radius:18px;transform-origin:50% 50%;overflow:hidden}
 .tile span{position:absolute;left:0;right:0;bottom:0;padding:14px;font-family:Anton;font-size:46px;line-height:1.05;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.85));text-align:center}
+.cal{position:absolute;left:50%;top:26px;transform:translateX(-50%);display:flex;gap:10px;z-index:50;font-family:Anton;letter-spacing:1px}
+.cal span{display:block;min-width:118px;text-align:center;padding:8px 14px 6px;border:5px solid #111;border-radius:14px;background:rgba(14,22,48,.82);color:rgba(248,245,236,.55);font-size:34px;line-height:1}
+.cal span.on{background:#FFC400;color:#111;transform:scale(1.12)}
+.cal span b{display:block;font-size:26px;margin-top:4px;font-weight:400}
+.cal span b.dn{color:#EF4444}.cal span.on b.dn{color:#B91C1C}.cal span b.up{color:#22C55E}.cal span.on b.up{color:#15803D}
+.scan{position:absolute;inset:0;background:repeating-linear-gradient(0deg,rgba(255,255,255,.07) 0 3px,transparent 3px 7px);mix-blend-mode:screen;pointer-events:none}
 .stripe{position:absolute;left:-40px;right:-40px;height:46px;background:repeating-linear-gradient(-45deg,#FFC400 0 40px,#111 40px 80px)}
 .logo{position:absolute;display:flex;align-items:center;gap:22px;font-family:Anton;font-size:46px;letter-spacing:2px;color:#F8F5EC}
 .logo i{width:56px;height:56px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#FFE27A,#E0A800 60%,#9A6B00);border:5px solid #F8F5EC;display:grid;place-items:center;font-style:normal;color:#5a3c00;font-size:30px}
@@ -40,10 +46,11 @@ const backOut=(p,s=1.9)=>{p=p-1;return p*p*((s+1)*p+s)+1};
 const easeOut=p=>1-Math.pow(1-p,3);
 const easeInOut=p=>p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
 function rnd(n){const x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)}
-function base(el){ if(el.classList.contains('a')) return 'translateX(-50%)'; if(el.tagName==='svg'||el.tagName==='g'||el.tagName==='polyline') return ''; if(el.classList.contains('ov')) return ''; return 'translate(-50%,-50%)'; }
+function base(el){ if(el.classList.contains('a')||el.classList.contains('cal')) return 'translateX(-50%)'; if(el.classList.contains('scan')) return ''; if(el.tagName==='svg'||el.tagName==='g'||el.tagName==='polyline') return ''; if(el.classList.contains('ov')) return ''; return 'translate(-50%,-50%)'; }
 function anim(el,rel,shotLen){
   const tin=+el.dataset.in||0, a=el.dataset.anim, out=el.dataset.out!=null?+el.dataset.out:null;
   const p=(rel-tin);
+  if(a==='wedge'){ const L=+el.dataset.leave, B=el.dataset.back!=null?+el.dataset.back:1e9; let k=0; if(rel>=L) k=easeOut(clamp((rel-L)/0.5)); if(rel>=B) k=1-easeOut(clamp((rel-B)/0.5)); const an=(+el.dataset.ang)*Math.PI/180; el.setAttribute('transform',`translate(${Math.cos(an)*k*460},${Math.sin(an)*k*460}) rotate(${k*35} 290 290)`); el.style.opacity=1-0.9*k; return; }
   if(a==='draw'){ const d=+el.dataset.dur||1; el.style.strokeDasharray='1'; el.style.strokeDashoffset=String(1-easeInOut(clamp(p/d))); return; }
   if(a==='slide-out'){ const q=easeOut(clamp(p/0.5)); el.setAttribute('transform',`translate(${q*70},${q*45})`); return; }
   if(p<0){ el.style.opacity=0; return; }
@@ -60,7 +67,7 @@ function anim(el,rel,shotLen){
   else if(a==='drop'){ const b=clamp(p/0.5); tf+=` translateY(${(1-easeOut(b))*-1100}px)`; if(b>=1&&p<0.75){ const sq=Math.sin((p-0.5)/0.25*Math.PI)*0.12; tf+=` scale(${1+sq},${1-sq})`; } }
   else if(a==='fold'){ const f=clamp(p/0.6); tf+=` perspective(900px) rotateX(${easeInOut(f)*80}deg) scale(${1-0.3*f})`; op=1-f*0.6; }
   else if(a==='zoom'){ tf+=` scale(${0.3+0.7*backOut(q)})`; }
-  else if(a==='count'){ const v=Math.round(+el.dataset.from+(+el.dataset.to-+el.dataset.from)*easeOut(clamp(p/(+el.dataset.dur||1)))); el.textContent=(el.dataset.fmt||'−${v}B').replace('{v}',v); tf+=` scale(${1+0.06*Math.sin(p*20)*(p<1.6?1:0)})`; }
+  else if(a==='count'){ const fr=clamp(p/(+el.dataset.dur||1)); const q2=el.dataset.steps?Math.floor(fr*(+el.dataset.steps)+1e-6)/(+el.dataset.steps):easeOut(fr); const v=Math.round(+el.dataset.from+(+el.dataset.to-+el.dataset.from)*q2); el.textContent=(el.dataset.fmt||'−${v}B').replace('{v}',v); tf+=` scale(${1+0.06*Math.sin(p*20)*(p<1.6?1:0)})`; }
   // reposo: los dibujos se mueven siempre
   const idle=el.dataset.idle, rp=rel;
   const react=el.dataset.react!=null?+el.dataset.react:null;

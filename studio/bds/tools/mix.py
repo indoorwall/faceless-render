@@ -18,10 +18,12 @@ for i, (t, s, vol) in enumerate(P["sfx"]):
     f.append(f"[{k}]volume={vol},adelay={ms}|{ms},aresample=44100,aformat=channel_layouts=stereo[s{i}]"); sl.append(f"[s{i}]")
 f.append(f"{''.join(sl) or '[vo]'}amix=inputs={max(1, len(sl))}:normalize=0[sfx]" if sl else "anullsrc=r=44100:cl=stereo,atrim=0:0.1[sfx]")
 mus = P.get("music") or [["spy", 0]]; ml = []
-for j, (trk, st) in enumerate(mus):
+for j, mm in enumerate(mus):
+    trk, st = mm[0], mm[1]; vol = mm[2] if len(mm) > 2 else 1.0
+    if trk == "none": continue          # silencio dramático
     en = mus[j + 1][1] if j + 1 < len(mus) else T
-    k = add(os.path.join(LIB, f"music_{trk}.mp3")); ln = max(0.5, en - st + 0.6); ms = int(max(0, st - 0.3) * 1000)
-    f.append(f"[{k}]aloop=loop=-1:size=2e9,atrim=0:{ln},afade=t=in:d=0.5,afade=t=out:st={max(0, ln - 1.2)}:d=1.2,adelay={ms}|{ms},aresample=44100,aformat=channel_layouts=stereo[m{j}]"); ml.append(f"[m{j}]")
+    k = add(os.path.join(LIB, f"music_{trk}.mp3")); ln = max(0.5, en - st + 0.4); ms = int(max(0, st - 0.2) * 1000)
+    f.append(f"[{k}]aloop=loop=-1:size=2e9,atrim=0:{ln},volume={vol},afade=t=in:d=0.4,afade=t=out:st={max(0, ln - 0.6)}:d=0.6,adelay={ms}|{ms},aresample=44100,aformat=channel_layouts=stereo[m{j}]"); ml.append(f"[m{j}]")
 f.append(f"{''.join(ml)}amix=inputs={len(ml)}:normalize=0,volume=0.55[mus]")
 f.append("[mus][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=350[duck]")
 f.append(f"[vo][duck][sfx]amix=inputs=3:normalize=0,atrim=0:{T},loudnorm=I=-14:TP=-1.5:LRA=11[out]")

@@ -6,10 +6,11 @@ import glob, json, os, subprocess, sys
 import numpy as np
 from faster_whisper import WhisperModel
 D = sys.argv[1]; files = [os.path.join(D, f) for f in sys.argv[2:]] or sorted(glob.glob(os.path.join(D, "v_*.mp3")))
-m = WhisperModel("small.en", device="cpu", compute_type="int8")
+LANG = os.environ.get("LANG_WHISPER", "en")  # LANG_WHISPER=es para los canales en español
+m = WhisperModel("small.en" if LANG == "en" else "small", device="cpu", compute_type="int8")
 for f in files:
     a = np.frombuffer(subprocess.check_output(["ffmpeg", "-v", "error", "-i", f, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"]), np.float32)
-    segs, _ = m.transcribe(a, word_timestamps=True, language="en")
+    segs, _ = m.transcribe(a, word_timestamps=True, language=LANG)
     w = [{"w": x.word.strip(), "s": round(x.start, 2), "e": round(x.end, 2)} for s in segs for x in s.words]
     out = f.replace("/v_", "/w_").replace(".mp3", ".json"); json.dump(w, open(out, "w"))
     print(os.path.basename(f), "→", " ".join(f"{x['w']}@{x['s']}" for x in w), flush=True)

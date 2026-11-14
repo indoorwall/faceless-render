@@ -1,0 +1,50 @@
+import sys; sys.path.insert(0, "../../tools")
+from ep import *
+BR, VS, VC, MO, CO, LR, CH = "lib/bg_boardroom.png", "lib/bg_video_store.png", "lib/bg_video_store_closed.png", "lib/bg_mail_office.png", "lib/bg_courtroom.png", "lib/bg_living_room.png", "lib/bg_pizza_chef.png"
+FO, CL = "lib/cut_founders.png", "lib/cut_ceo_laughing.png"
+CTA = S("if", "lib/bg_vault.png", [D("thumbs", 360, 1040, 700, 0, "left"), {"type": "subscribe", "x": 1300, "y": 300, "at": "subscribe", "sound": "pop"},
+      HTML("<div class='w' style='left:1300px;top:480px;font-family:Anton;font-size:64px;color:#F8F5EC' data-anim='fade' data-in='3.8'><span style='color:#FFC400'>$</span> WE MAKE MONEY MAKE SENSE</div>"),
+      {"type": "disclaimer", "at": 0.4, "x": 1300, "y": 1010}], kb=[1.0, 1.1, 0])
+sc = [
+ SC(1, [S(0, BR, [A(FO, 560, 1080, 820, 0, "left", "bob"), W("50", "$50 MILLION?", 1300, 260, "box", 130, anim="slam")], tr="none", kb=[1.0, 1.1, 0]),
+        S("according", BR, [A(CL, 1350, 1080, 880, 0, "right", "shake", react="struggling"), W("struggling", "«STRUGGLING NOT TO LAUGH»", 640, 300, "red", 70), N("according", "— Marc Randolph, Netflix co-founder", 640, 410, 34)], kb=[1.1, 1.0, 0]),
+        S("the#1", "NAVY", [W("netflix", "NETFLIX", 960, 460, "big", 260, anim="slam")], tr="zoom")]),
+ SC(2, [S(0, "NAVY", [C("255", 0, 255, "≈ ${v}B", 960, 420, 260, "#22C55E", 1.2), N("255", "Netflix market value today", 960, 640, 40)], tr="zoom", sounds=[["255", "score", 0.6]]),
+        S("blockbuster", VC, [W("one", "1 STORE LEFT", 960, 240, "red", 130, anim="slam"), N("bend", "Bend, Oregon", 960, 380, 44)], kb=[1.0, 1.12, 0]),
+        S("so", "NAVY", [W("giant", "HOW DOES A GIANT LOSE?", 960, 460, "box", 110)], tr="zoom")]),
+ SC(3, [S(0, VS, [C("9", 0, 9000, "{v}+ STORES", 960, 240, 150, "#FFC400", 1.2), N("2004", "peak, 2004", 960, 380, 40)], kb=[1.0, 1.15, 0], tr="slide-l"),
+        S("friday", VS, [W("friday", "FRIDAY NIGHT RITUAL", 960, 240, "box", 110)], kb=[1.3, 1.4, -200], tr="zoom")]),
+ SC(4, [S(0, VS, [W("paid", "LATE? YOU PAY.", 960, 220, "red", 120, anim="slam", out="according")], kb=[1.2, 1.35, 150]),
+        S("according", "NAVY", [C("800", 0, 800, "${v}M", 960, 400, 260, "#EF4444", 1.2), N("according", "late fees in 2000 — according to reports", 960, 600, 40, out="thats"),
+                                W("thats", "≈ $1 OF EVERY $6", 960, 640, "box", 90, out="16"), W("16", "16× WHAT NETFLIX ASKED", 960, 640, "red", 90)], tr="zoom")]),
+ SC(5, [S(0, MO, [W("no", "NO LATE FEES", 960, 220, "green", 120, anim="slam")], kb=[1.0, 1.12, 0]),
+        S("its", BR, [A(FO, 560, 1080, 820, 0, "pop", "bob"), W("buys", "BUY US. WE RUN ONLINE.", 1300, 260, "box", 80)], kb=[1.0, 1.08, 0]),
+        S("reed", BR, [A(CL, 1350, 1080, 880, 0, "pop", "bob"), W("thousand", "1,000× OUR SIZE", 640, 280, "box", 100), N("reed", "— Reed Hastings, recalling", 640, 400, 34),
+                       W("no#1", "NO.", 640, 620, "stamp", 220, anim="slam", rot=-8)], kb=[1.1, 1.0, 0])]),
+ SC(6, [S(0, "NAVY", [W("why", "WHY SAY NO?", 960, 460, "big", 180, anim="slam")], tr="zoom"),
+        S("imagine", CH, [BADGE(), W("one", "$1 OF EVERY $6 = BOX FEES", 960, 900, "red", 84)], kb=[1.0, 1.15, 0], sounds=[[0, "pop", 0.5]]),
+        S("then", "NAVY", [BADGE(), PIZZA(160, 260, 520, 0, idle="none"), PIZZA(1240, 260, 520, 0.3, idle="none"), N("then", "Tony's", 420, 820, 44), N("new", "the new shop", 1500, 820, 44),
+                           W("box", "NO BOX FEES. EVER.", 1500, 180, "green", 76, out="kills"), W("kills", "KILL YOUR OWN MONEY MACHINE?", 960, 180, "red", 76)]),
+        S("that", "NAVY", [BADGE(), D("explain", 380, 1060, 720, 0, "left"), W("innovators", "THE INNOVATOR'S DILEMMA", 1250, 380, "box", 90, anim="slam"),
+                           N("cash", "your cash cow makes the future painful", 1250, 520, 36)])]),
+ SC(7, [S(0, VS, [N("launched", "2004 · Blockbuster Online", 960, 160, 44, out="dropped"), W("dropped", "NO MORE LATE FEES (2005)", 960, 200, "green", 96, out="swap"),
+                  W("swap", "FREE IN-STORE SWAPS", 960, 200, "box", 100)], kb=[1.0, 1.15, 0]),
+        S("it#1", "NAVY", [C(0.3, 0, 55000, "−{v}", 960, 360, 220, "#EF4444", 1.5), N("netflix", "Netflix subscribers lost in one quarter of 2007 — according to CNBC", 960, 540, 34),
+                           W("everything", "«EVERYTHING BUT THE KITCHEN SINK»", 960, 760, "box", 70), N("hastings", "— Reed Hastings", 960, 870, 34)], tr="zoom", sounds=[["55", "error", 0.6]])]),
+ SC(8, [S(0, BR, [W("2", "−$2 PER FREE SWAP", 960, 220, "red", 110, out="activist"), W("activist", "AN ACTIVIST INVESTOR SAYS NO", 960, 220, "box", 84, out="in#1"),
+                  N("activist", "Carl Icahn, 3 board seats — as reported", 960, 340, 34, out="in#1"), W("in#1", "THE CEO STEPS AWAY (2007)", 960, 220, "box", 90)], kb=[1.0, 1.12, 0]),
+        S("the#4", VS, [W("raised", "PRICES UP. SWAPS GONE.", 960, 220, "red", 100, out="by"), W("by", "LATE FEES ARE BACK (2010)", 960, 220, "stamp", 110, anim="slam", rot=-6)], kb=[1.1, 1.0, 0])]),
+ SC(9, [S(0, LR, [W("streaming", "STREAMING (2007)", 960, 200, "green", 120, out="nothing"), W("nothing", "NOTHING TO RETURN", 960, 200, "box", 110)], kb=[1.0, 1.12, 0]),
+        S("blockbuster#1", "NAVY", [C(0.2, 0, 1, "≈ ${v}B DEBT", 960, 300, 180, "#EF4444", 0.6),
+                                    W("if", "«IF IT HADN'T BEEN FOR THEIR DEBT, THEY COULD HAVE KILLED US»", 960, 620, "box", 46), N("hastings", "— Reed Hastings, 2009, as reported", 960, 730, 34)], tr="zoom")]),
+ SC(10, [S(0, CO, [W("bankruptcy", "BANKRUPT", 960, 300, "stamp", 200, anim="slam", rot=-8), N("citing", "Sept 23, 2010 · about $900M in debt", 960, 520, 40, out="dish"),
+                   N("dish", "Dish Network buys what's left: $320M", 960, 520, 40)], kb=[1.0, 1.12, 0]),
+         S("stores", VC, [W("single", "THE LAST ONE: BEND, OREGON", 960, 220, "red", 90)], kb=[1.0, 1.15, 0])]),
+ SC(11, [S(0, MO, [W("final", "THE LAST RED ENVELOPE (2023)", 960, 200, "box", 90), N("purpose", "Netflix shut down its own DVD business", 960, 320, 36)], kb=[1.1, 1.0, 0]),
+         S("today", "NAVY", [C(0.3, 0, 255, "≈ ${v}B", 960, 400, 260, "#22C55E", 1.2), N("as", "Netflix market value, Nov 13, 2026", 960, 600, 40)], tr="zoom", sounds=[["255", "score", 0.6]]),
+         S("thats", "NAVY", [W("thats", "NOT CASH: PRICE × ALL SHARES", 960, 380, "box", 80, out="5"), W("5", "≈ 5,000× THE $50M PRICE", 960, 380, "red", 100, anim="slam")])]),
+ SC(12, [S(0, VC, [W("saw", "THEY SAW THE FUTURE…", 960, 200, "box", 100, out="giving"), W("giving", "…IT COST THEIR LATE FEES", 960, 200, "red", 100)], kb=[1.0, 1.12, 0]),
+         CTA]),
+]
+music = [["spy", 0], ["fun", 2, None, 0.7], ["none", 4, "no#1-0.6"], ["fun", 5], ["spy", 6, "it#1"], ["fun", 10]]
+save("episode.json", sc, music)

@@ -48,6 +48,7 @@ ITEMS (x, y en píxeles del lienzo; las palabras se centran en x,y; los personaj
 import html as H, json, math, os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+BRAND = json.load(open(os.path.join(ROOT, "brand.json")))  # nombre del canal: cámbialo solo aquí
 EP = sys.argv[1]
 WD = os.path.dirname(os.path.abspath(EP))
 E = json.load(open(EP))
@@ -149,7 +150,7 @@ def item(it, sc, s0, t_abs):
         return (f'<div class="w big" style="{st}" data-anim="pop" data-in="{at:.2f}" data-out="{f:.2f}">{it["text"]}</div>'
                 f'<div class="w big" style="{st}" data-anim="fold" data-in="{f:.2f}">{it["text"]}</div>')
     if ty == "logo":
-        return f'<div class="logo" style="left:{it.get("x", 90)}px;top:{it.get("y", 90)}px" data-anim="slide-l" data-in="{at:.2f}"><i>$</i>BILLION DOLLAR STORIES</div>'
+        return f'<div class="logo" style="left:{it.get("x", 90)}px;top:{it.get("y", 90)}px" data-anim="slide-l" data-in="{at:.2f}"><i>$</i>{BRAND["name"]}</div>'
     if ty == "stripes":
         return '<div class="stripe" style="top:0" data-anim="slide-l" data-in="0"></div><div class="stripe" style="bottom:0" data-anim="slide-r" data-in="0"></div>'
     if ty == "disclaimer":

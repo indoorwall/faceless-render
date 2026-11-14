@@ -14,7 +14,7 @@ Las sesiones diarias de Claude (tareas programadas) escriben aquí los guiones d
 | --- | --- | --- | --- |
 | Frente insólito (es) | `9aa16a1f-0a4d-42dd-9c8e-cac2090deb1e` | 2 Shorts | 12:30 y 18:30 |
 | 5 curiosidades (es) | `b1fcab59-d0c6-4afc-8335-d00753b38cca` | 2 Shorts | 12:30 y 18:30 |
-| Billion Dollar Stories (en, EE. UU.) | ver `select id from channels where name='Billion Dollar Stories'` | 1 largo + 2 Shorts | largo 20:00 · Shorts 16:00 y 01:00 |
+| Billion Dollar Stories (en, EE. UU.) | `fee9f75e-fd80-47c4-a3e3-70c396d0a104` | 1 largo + 2 Shorts | largo 20:00 · Shorts 16:00 y 01:00 |
 
 El calendario lo pone la web (planificador): tú solo dejas los vídeos hechos. Produce **para el día siguiente**.
 
@@ -96,7 +96,7 @@ Ejemplo completo y verificado: `studio/bds/examples/nvidia/` (guion, cronología
 cd studio/bds && pip install -q scipy faster-whisper numpy pillow && python3 tools/fetch_assets.py
 ```
 **1. Tema.** Busca la noticia de dinero del día (o un clásico del pilar 70/30). Mira que no se haya hecho ya:
-`select title from videos where channel_id = '<BDS>' order by created_at desc limit 60;`
+`select title from videos where channel_id = 'fee9f75e-fd80-47c4-a3e3-70c396d0a104' order by created_at desc limit 60;`
 **2. Verifica** en fuentes primarias y escribe una tabla de hechos: confirmado / atribuido. Si algo no se puede comprobar,
 no va.
 **3. Guion** del largo (lo que pida la historia, normalmente 4-8 min) dividido en escenas, más 3 títulos y 2 miniaturas;
@@ -146,7 +146,7 @@ Y crea los vídeos ya terminados (la web no los vuelve a montar; los programa y 
 ```sql
 insert into videos (channel_id, status, format, engine, idea_title, title, description, tags, sources, video_url,
                     thumbnail_url, duration_sec, script, auto, analysis, stage, progress)
-values ('<BDS>', 'final_review', 'long', 'studio', '<título>', '<título>', '<descripción con Fuentes:>', array['...'],
+values ('fee9f75e-fd80-47c4-a3e3-70c396d0a104', 'final_review', 'long', 'studio', '<título>', '<título>', '<descripción con Fuentes:>', array['...'],
         '<sources json>'::jsonb, '<public_url del mp4>', '<public_url de la miniatura>', <segundos>,
         jsonb_build_object('narration', '<guion completo>', 'facts', '<tabla de hechos json>'::jsonb),
         jsonb_build_object('by','claude-studio','preapproved',true),

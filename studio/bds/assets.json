@@ -25,6 +25,22 @@
   "sfx_zoom.mp3": "Efecto: zoom/transformación",
   "sfx_error.mp3": "Efecto: error (caídas, malas noticias)",
   "sfx_score.mp3": "Efecto: subida/acierto",
-  "sfx_tick.mp3": "Efecto: tic de contador"
+  "sfx_tick.mp3": "Efecto: tic de contador",
+  "bg_video_store.png": "Fondo: videoclub de los 90 lleno, estanterías de cintas sin marcas, mostrador con monitor (sin rótulos)",
+  "bg_video_store_closed.png": "Fondo: videoclub abandonado, estanterías vacías y cajas en el suelo (quiebra, cierre)",
+  "bg_crypto_exchange.png": "Fondo: sala de un exchange de cripto con pantallas de bitcoin y tres operadores",
+  "bg_coat_check.png": "Fondo: guardarropa con mostrador y abrigos (metáfora de custodia)",
+  "bg_server_room.png": "Fondo: sala de servidores oscura (hackeo); usar con night",
+  "bg_mail_office.png": "Fondo: oficina de envíos con sobres rojos — OJO: cartel con texto raro 'VPCS', evitar en vertical",
+  "bg_courtroom.png": "Fondo: juzgado con juez (quiebras, juicios)",
+  "bg_printing_press.png": "Fondo: imprenta de billetes a todo vapor (inflación)",
+  "bg_grocery.png": "Fondo: supermercado con estantes vacíos — OJO: rótulo garabateado, tapar con texto",
+  "bg_central_bank.png": "Fondo: edificio de banco central con rótulo 'CENTRAL BANK'",
+  "bg_bakery.png": "Fondo: panadería con pizarra de precios — OJO: pizarra garabateada, tapar con BOARD html",
+  "bg_wallpaper_room.png": "Fondo: salón empapelado con billetes (Alemania 1923)",
+  "cut_hacker.png": "Personaje: hacker con capucha y portátil",
+  "cut_spokesperson.png": "Personaje: portavoz en atril con ayudante",
+  "cut_founders.png": "Personaje: dos fundadores jóvenes (startup)",
+  "cut_ceo_laughing.png": "Personaje: CEO tapándose la boca, reprimiendo la risa / nervioso"
  }
 }

@@ -894,14 +894,17 @@ async function forcedAlign(audioUrl: string, narration: string) {
 
 // ---------- Paso: voz (por lotes) ----------
 // Frases que hunden la retención en los Shorts (datos del 14-nov: la gente se va justo ahí). Se quitan solas antes de grabar.
-const BAD_SHORT_LINE = /(s[ií]gueme|s[ií]guenos|sigue (el|al) canal|suscr[ií]bete|parte \d|ma[ñn]ana,? (otra|m[aá]s)|^primero,|te (dejo|guardo) .*(para el )?final|(va|queda|guardo) (para el|al) final|la (m[aá]s|historia m[aá]s|curiosidad m[aá]s) [^.]* (va |queda )?(para el|al) final|¿cu[aá]l no sab[ií]as\?|¿lo sab[ií]as\?|¿(tu|t[uú]) (perro|gato) lo hace\?|¿habr[ií]as )/i;
+const BAD_SHORT_LINE = /(s[ií]gueme|s[ií]guenos|\bsigue (el|al|para)\b|suscr[ií]bete|qu[eé]date para|parte \d|ma[ñn]ana,? (otra|m[aá]s)|^primero,|te (dejo|guardo) .*(para el )?final|(va|queda|guardo) (para el|al) final|la (m[aá]s|historia m[aá]s|curiosidad m[aá]s) [^.]* (va |queda )?(para el|al) final|comentario|^m[aá]s (historias|guerras|curiosidades|inventos|animales|datos|fugas)\b|\baqu[ií]\.$)/i;
+// En la última escena, además, fuera las preguntas al espectador («¿Habrías…?», «¿Fue suerte o…?»): rompen el bucle
 // deno-lint-ignore no-explicit-any
 function cleanShortScript(script: any) {
   const removed: string[] = [];
+  const all = script?.scenes ?? [];
   // deno-lint-ignore no-explicit-any
-  const scenes = (script?.scenes ?? []).map((sc: any) => {
+  const scenes = all.map((sc: any, i: number) => {
+    const last = i === all.length - 1;
     // deno-lint-ignore no-explicit-any
-    const shots = (sc.shots ?? []).filter((sh: any) => { const bad = BAD_SHORT_LINE.test(String(sh.line ?? "").trim()); if (bad) removed.push(String(sh.line)); return !bad; });
+    const shots = (sc.shots ?? []).filter((sh: any) => { const t = String(sh.line ?? "").trim(); const bad = BAD_SHORT_LINE.test(t) || (last && /\?\s*$/.test(t)); if (bad) removed.push(t); return !bad; });
     // deno-lint-ignore no-explicit-any
     return { ...sc, shots, narration: shots.map((sh: any) => String(sh.line ?? "").trim()).join(" ") };
   // deno-lint-ignore no-explicit-any

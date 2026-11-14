@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Billion Dollar Stories — motor de montaje.
+"""The Money Slice — motor de montaje.
 
 Convierte un guion de montaje (episode.json) en render.html + plan.json:
   python3 engine.py work/<episodio>/episode.json

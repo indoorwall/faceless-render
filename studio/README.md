@@ -47,9 +47,22 @@ select title, stats->>'views' as views, stats->'analytics'->>'avg_pct' as pct, s
   from videos where channel_id = '<id>' and youtube_video_id is not null order by published_at desc limit 60;
 select id, idea_title, idea_angle, idea_hook from videos where channel_id = '<id>' and status = 'idea_review' order by created_at desc limit 30;
 ```
-Puedes usar una idea del banco (`idea_review`) o una tuya. Frente: historias reales e insólitas de guerra; el gancho es
-SIEMPRE una escena concreta con contradicción, nunca una pregunta hipotética. 5 curiosidades: formato «pregunta-hilo»
-(el título es la pregunta; la 5.ª curiosidad la resuelve). Respeta la `style_guide` del canal: manda sobre esto.
+Puedes usar una idea del banco (`idea_review`) o una tuya. Respeta la `style_guide` y el `playbook` del canal: mandan sobre esto.
+
+**Reglas del 14-nov (salen de las estadísticas; las decidió el dueño):**
+- **Cierre:** el Short termina en el giro o el dato más fuerte. SIN «Sígueme», «Sigue el canal», «Quédate para más…», «más
+  historias aquí» y SIN pregunta al espectador al final («¿Habrías…?», «¿Cuál no sabías?»): con ellas el final retiene la mitad
+  (27 % frente a 55 %) y se rompe el bucle. El worker las quita solo antes de grabar, pero no las escribas.
+- **Nunca anuncies lo que viene:** «Primero…», «Te dejo… para el final», «La más rara va al final», «Lo sabrás al final»,
+  «Primera pista». Ahí se va la mitad de la gente en los segundos 4-6.
+- **Frente insólito:** gancho = escena concreta con contradicción («Cada día, unos prisioneros sacaban un potro de gimnasia…»,
+  36.000 visitas), NUNCA una pregunta. 80 % Segunda Guerra Mundial y siglo XX (engaños, fugas, espías, animales, cifras
+  absurdas); la Edad Media y la Antigüedad rinden la mitad. Prioriza secuelas de los éxitos (caballo de madera, emús, Garbo,
+  El Principito, gaita).
+- **5 curiosidades:** una pregunta concreta (gancho y título, como «¿Los cuervos guardan rencor durante años?», 9.700 visitas)
+  y 3 respuestas que suben de intensidad, sin numerarlas, 38-50 s. Temas: 60 % mascotas y animales con «poderes», 25 % personas
+  del momento (como el papa León XIV), 15 % cuerpo. Nunca temas abstractos (olores del espacio, medallas de arte, huesos).
+  Imágenes reales del sujeto exacto de cada frase; nada de stock de relleno.
 
 **Paso 3 — Investiga** con WebSearch/WebFetch (Wikipedia y fuentes serias). Guarda las URL que abras.
 

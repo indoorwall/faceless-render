@@ -67,6 +67,10 @@ Puedes usar una idea del banco (`idea_review`) o una tuya. Respeta la `style_gui
   últimos 7 Shorts vuelva a pasar de 1.000: solo temas seguros (perros, gatos, cuervos y animales con «poderes», famosos del
   momento) y prioridad a secuelas de los éxitos (cuervos 9.700, cachorro 3.500, papa León XIV 2.600, perros que ladran 2.600),
   con un ángulo nuevo. Comprueba la mediana antes de elegir tema.
+- **Frente insólito, plan de recuperación (2 semanas desde el 14-nov):** la mediana bajó de 1.433 a 792. Hasta que la de los
+  últimos 7 Shorts vuelva a pasar de 1.200: solo Segunda Guerra Mundial y siglo XX (107 de 125 suscriptores) y secuelas o
+  ángulos nuevos de los éxitos (caballo de madera 36.000, gaita 7.800, El Principito 4.100, emús 3.000, nº 3 de Hitler 3.000,
+  isla vacía 2.100, Garbo).
 
 **Paso 3 — Investiga** con WebSearch/WebFetch (Wikipedia y fuentes serias). Guarda las URL que abras.
 

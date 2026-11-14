@@ -71,7 +71,9 @@ class Scene:
         w, n, off = m.group(1).strip().lower(), int(m.group(2) or 0), float((m.group(3) or "0").replace(" ", ""))
         # Un texto es siempre una palabra («600» = la palabra «$600»); los segundos se escriben como número JSON
         key = re.sub(r"[^a-z0-9]", "", w)
-        hits = [x["s"] for x in self.w if re.sub(r"[^a-z0-9]", "", x["w"].lower()).startswith(key)]
+        norm = lambda w: re.sub(r"[^a-z0-9]", "", w.lower())
+        hits = [x["s"] for x in self.w if norm(x["w"]) == key]           # primero la palabra exacta («the» no es «their»)
+        if len(hits) <= n: hits = [x["s"] for x in self.w if norm(x["w"]).startswith(key)]
         if len(hits) <= n: raise SystemExit(f"No encuentro la palabra «{w}»#{n} en la escena (palabras: {' '.join(x['w'] for x in self.w)[:400]})")
         return hits[n] + off
 

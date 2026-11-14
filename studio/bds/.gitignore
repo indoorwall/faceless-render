@@ -5,3 +5,4 @@ examples/*/render.html
 examples/*/plan.json
 examples/*/video_only.mp4
 examples/*/mix.m4a
+__pycache__/

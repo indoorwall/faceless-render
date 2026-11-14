@@ -135,7 +135,7 @@ Miniatura: HTML 1920x1080 con los dibujos del canal y 1-2 palabras grandes (ejem
 captura con Playwright y guárdala en JPG 1280x720.
 **7. Revisión antes de subir**: mira capturas de todo el vídeo, comprueba que cada texto en pantalla coincide con lo que
 dice la voz y con la tabla de hechos.
-**8. Subir a la web** — pide una URL de subida por archivo y súbelo con curl:
+**8. Subir a la web** (máximo 50 MB por archivo; `mix.py` ya comprime hasta que quepa) — pide una URL de subida por archivo y súbelo con curl:
 ```sql
 insert into jobs(step, payload) values ('studio', jsonb_build_object('op','upload_url','path','studio/bds/<slug>/final.mp4')) returning id;
 ```

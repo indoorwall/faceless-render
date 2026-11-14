@@ -20,7 +20,13 @@ const q = new URLSearchParams(location.search);
 const ok = q.get("ok") === "1";
 document.getElementById("t").textContent = ok ? `Conectado a ${q.get("canal") || "YouTube"}` : (q.get("error") || "No se pudo conectar");
 if (q.get("aviso")) document.getElementById("m").textContent = q.get("aviso") + " Ya puedes cerrar esta pestaña.";
-try { if (ok && window.opener) window.opener.postMessage("yt-connected", "*"); } catch (e) {}
+let opener = false;
+try { if (window.opener) { opener = true; if (ok) window.opener.postMessage("yt-connected", "*"); } } catch (e) {}
+// Sin ventana de origen (móvil: se abrió en la misma pestaña) → enlace y vuelta automática a la web
+if (!opener) {
+  document.getElementById("m").innerHTML = `${q.get("aviso") ? q.get("aviso") + " " : ""}<a href="./" style="color:inherit;font-weight:600">Volver a Faceless Studio</a>`;
+  setTimeout(() => location.replace("./"), ok ? 2500 : 6000);
+}
 </script>
 </body>
 </html>

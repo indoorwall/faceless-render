@@ -893,8 +893,31 @@ async function forcedAlign(audioUrl: string, narration: string) {
 }
 
 // ---------- Paso: voz (por lotes) ----------
+// Frases que hunden la retención en los Shorts (datos del 14-nov: la gente se va justo ahí). Se quitan solas antes de grabar.
+const BAD_SHORT_LINE = /(s[ií]gueme|s[ií]guenos|sigue (el|al) canal|suscr[ií]bete|parte \d|ma[ñn]ana,? (otra|m[aá]s)|^primero,|te (dejo|guardo) .*(para el )?final|(va|queda|guardo) (para el|al) final|la (m[aá]s|historia m[aá]s|curiosidad m[aá]s) [^.]* (va |queda )?(para el|al) final|¿cu[aá]l no sab[ií]as\?|¿lo sab[ií]as\?|¿(tu|t[uú]) (perro|gato) lo hace\?|¿habr[ií]as )/i;
+// deno-lint-ignore no-explicit-any
+function cleanShortScript(script: any) {
+  const removed: string[] = [];
+  // deno-lint-ignore no-explicit-any
+  const scenes = (script?.scenes ?? []).map((sc: any) => {
+    // deno-lint-ignore no-explicit-any
+    const shots = (sc.shots ?? []).filter((sh: any) => { const bad = BAD_SHORT_LINE.test(String(sh.line ?? "").trim()); if (bad) removed.push(String(sh.line)); return !bad; });
+    // deno-lint-ignore no-explicit-any
+    return { ...sc, shots, narration: shots.map((sh: any) => String(sh.line ?? "").trim()).join(" ") };
+  // deno-lint-ignore no-explicit-any
+  }).filter((sc: any) => sc.shots.length);
+  return { script: { ...script, scenes }, removed };
+}
+
 async function stepVoice(job: Job) {
   const v = await getVideo(job.video_id);
+  if (!job.payload?.cont && v.format === "short" && Array.isArray(v.script?.scenes)) {
+    const { script, removed } = cleanShortScript(v.script);
+    if (removed.length && script.scenes.length) {
+      v.script = script; await sb.from("videos").update({ script }).eq("id", v.id);
+      await log(job, `Guion: quitadas ${removed.length} frase(s) que hacen irse a la gente («${removed.map((x) => x.slice(0, 50)).join("» · «")}»)`);
+    }
+  }
   if (!job.payload?.cont) {
     // Se reaprovecha la voz, los efectos y las imágenes de lo que no ha cambiado desde el último montaje
     const { data: old } = await sb.from("scenes").select("narration,audio_url,audio_duration,words,sfx_prompt,sfx_url,shots").eq("video_id", v.id);
@@ -1455,7 +1478,7 @@ async function stepRender(job: Job) {
       sfx_volume: ch.sfx_volume ?? 55,
       subtitles: { ...(sh ? { max_words: 3, y: 0.64, size: 0.07 } : { max_words: 6, y: 0.86, size: 0.05 }), ...subStyleOf(ch, sh) },
       ...(await titleOverlayOf(v, ch, sh)),
-      // Botón «Suscríbete» animado al final (recordatorio visual que acompaña a la invitación de la voz)
+      // Botón «Suscríbete» animado al final (en los Shorts sustituye a la invitación hablada, que rompía el bucle)
       subscribe_cta: (({ es: ["Suscríbete", "Suscrito"], ca: ["Subscriu-t'hi", "Subscrit"], en: ["Subscribe", "Subscribed"], fr: ["Abonne-toi", "Abonné"], pt: ["Inscreva-se", "Inscrito"], it: ["Iscriviti", "Iscritto"], de: ["Abonnieren", "Abonniert"] } as Record<string, string[]>)[String(ch.language ?? "es").slice(0, 2)] ?? ["Suscríbete", "Suscrito"]).reduce((o, x, i) => ({ ...o, [i ? "done" : "text"]: x }), {} as Record<string, string>),
       ...(sh ? await chaptersOf(v, ch, scenes ?? []) : {}),
     };
@@ -1673,7 +1696,7 @@ const VIRAL_RULES = (short: boolean) => `CRITERIOS DE VIRALIDAD (${short ? "Shor
 - Bucles de curiosidad: ${short ? "cada 8-10 s" : "cada 60-90 s"} algo nuevo (giro, cifra, conflicto, revelación) que justifique seguir mirando. Escala la intensidad hacia el clímax.
 - Cero relleno: elimina toda frase que no sorprenda, no emocione o no haga avanzar la historia. Mejor 45 s apretados que 60 s flojos.
 - Ritmo visual: cambio de plano cada ${short ? "1,5-3,5 s" : "3-6 s"}, siempre ligado a lo que se dice; alterna recreación, foto real y reencuadre. Una foto real tras una recreación provoca el "¿esto pasó de verdad?".
-- Cierre: ${short ? "frase final memorable que conecte con la primera para invitar al rebote (bucle), o un giro emocional; justo antes o después, una invitación a seguir el canal de 4-8 palabras, concreta y ligada al tema (ej. «Sígueme: mañana, otra historia así»), y una pregunta muy fácil de contestar en comentarios (ej. «¿Cuál no sabías?», «¿Tu perro lo hace?»); casi nadie comenta y los comentarios empujan el vídeo" : "remate emocional, una invitación breve y concreta a seguir el canal y un avance que invite a ver otro vídeo del canal"}. Nunca un "suscríbete" genérico ni preguntas sobre nombres que el público no conoce.
+- Cierre: ${short ? "termina en el giro o el dato más fuerte, con una frase final que conecte con la primera para que el vídeo vuelva a empezar (bucle). SIN invitación hablada a seguir el canal y SIN pregunta al espectador: con «Sígueme…» o «¿Habrías…?» el final retiene la mitad (27 % frente a 55 % en Frente insólito) y se rompe el bucle; el botón de suscripción ya sale animado en pantalla" : "remate emocional, una invitación breve y concreta a seguir el canal y un avance que invite a ver otro vídeo del canal"}. Nunca un "suscríbete" genérico ni preguntas sobre nombres que el público no conoce.
 - Compartible: la premisa se puede contar en una frase a un amigo ("¿sabías que...?").
 - Empaquetado: título de menos de 55 caracteres, concreto y con curiosidad, sin clickbait falso; texto de miniatura de 2-4 palabras que complementa al título, no lo repite.
 - Rigor: lo dudoso se cuenta como testimonio ("cuentan que", "según testigos"), nunca como hecho. Nada inventado.`;
@@ -1711,7 +1734,7 @@ const QUALITY_RUBRIC = (short: boolean) => `CRITERIOS DE CALIDAD (los mismos con
 - Gancho: la primera frase crea una pregunta o sorpresa concreta y NO destripa el final ni la cifra clave.
 - Historia: UNA sola historia con protagonista con nombre, objetivo, obstáculo, giro y clímax; nada de resumen de Wikipedia ni lista de datos sueltos${short ? "" : " (en vídeo largo, varias escenas pero un hilo claro)"}.
 - Claridad: se entiende a la primera quién, dónde y cuándo; nada de frases crípticas, telegráficas ni contradicciones.
-- Cierre: frase final memorable o giro; la invitación a seguir el canal es coherente (si dice «parte 2» o «#N», cuadra con la serie) y no genérica.
+- Cierre: termina en el giro o el dato más fuerte, sin invitación hablada a seguir ni pregunta al espectador en los Shorts (rompen el bucle).
 - Título: como mucho 55 caracteres sin contar la etiqueta de serie que va tras «|», despierta curiosidad, no cuenta el desenlace.
 - Rigor: nada inventado ni exagerado.
 - Actualidad: si el vídeo menciona un tema del momento (p. ej. un videojuego), el enlace con la historia tiene que ser natural y estar justificado en una frase, no un parche.

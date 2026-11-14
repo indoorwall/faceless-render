@@ -4495,7 +4495,7 @@ async function stepBench(job: Job) {
 // payload: { name, style, prompts: [..], thumb?: { prompt, text } } → URLs en el registro de actividad
 // ---------- Paso: estudio (las sesiones de Claude que escriben y montan desde fuera) ----------
 // Piden aquí lo que necesita una clave (voz propia en Modal, imágenes FLUX) o permiso para subir un archivo.
-// payload.op: "tts" {text, language?, ref_url?, ref_start?, path} · "images" {prompts[], style?, paths[]} · "upload_url" {path}
+// payload.op: "tts" {text, language?, ref_url?, ref_start?, exaggeration? (0.3 neutra · 0.5 normal · 0.7 expresiva), path} · "images" {prompts[], style?, paths[]} · "upload_url" {path}
 // El resultado queda en jobs.payload.result. Solo se escribe dentro de media/studio/.
 async function stepStudio(job: Job) {
   const p = job.payload ?? {};
@@ -4504,7 +4504,7 @@ async function stepStudio(job: Job) {
   let result: any;
   if (p.op === "tts") {
     const path = okPath(p.path);
-    const t = await modalTts(String(p.text ?? "").slice(0, 5000), String(p.language ?? "en"), { ref_url: p.ref_url, ref_start: p.ref_start != null ? Number(p.ref_start) : undefined });
+    const t = await modalTts(String(p.text ?? "").slice(0, 5000), String(p.language ?? "en"), { ref_url: p.ref_url, ref_start: p.ref_start != null ? Number(p.ref_start) : undefined, exaggeration: p.exaggeration != null ? Number(p.exaggeration) : undefined });
     result = { url: await upload(path, t.bytes, "audio/mpeg"), duration: t.duration };
   } else if (p.op === "images") {
     const paths = (p.paths ?? []) as string[]; const prompts = (p.prompts ?? []) as string[];

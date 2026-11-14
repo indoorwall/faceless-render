@@ -89,7 +89,14 @@ resumen). Explica cada concepto con un ejemplo sencillo (como la pizza = accione
 Inglés estadounidense sencillo. Personajes que reaccionan y se mueven solo cuando aporta. La mascota aparece en
 explicaciones, veredicto y despedida, no en todas las escenas. Texto en pantalla: ≤ 4 palabras, cifras grandes.
 Cierre: «This is Billion Dollar Stories. We make money make sense.» + avance del siguiente tema si lo sabes.
-Ejemplo completo y verificado: `studio/bds/examples/nvidia/` (guion, cronología verificada y `episode.json`).
+Ejemplo completo y verificado: `studio/bds/examples/nvidia/` (guion y cronología) y `examples/nvidia-v4/episode.json`
+(el montaje de referencia). Reglas de retención aprendidas en la V4:
+- Un mensaje por plano: como mucho un cartel grande y una nota pequeña a la vez (usa `out` para que el anterior se vaya).
+- Cada salto de tiempo se justifica en pantalla (rebobinado con contador de años, tira de calendario para una semana).
+- Un solo gráfico de bolsa por vídeo; el resto se cuenta con personajes, contadores o la metáfora.
+- Los personajes reaccionan en el momento clave (`react`) en vez de moverse sin motivo.
+- Música según la emoción: suspense en el conflicto, alegre/cálida en orígenes y explicación, y silencios antes del golpe y en el giro.
+- Un único final: la idea memorable + despedida de 4 s.
 
 **0. Preparación** (cada sesión es un ordenador nuevo):
 ```bash
@@ -101,12 +108,12 @@ cd studio/bds && pip install -q scipy faster-whisper numpy pillow && python3 too
 no va.
 **3. Guion** del largo (lo que pida la historia, normalmente 4-8 min) dividido en escenas, más 3 títulos y 2 miniaturas;
 elige el mejor título. Y 2 Shorts **con narración propia** (20-60 s, gancho inmediato, no recortes del largo).
-**4. Voz** (Modal, gratis dentro de los créditos): un trabajo por escena. Escribe nombres difíciles de forma fonética
+**4. Voz** (Modal, gratis dentro de los créditos): un trabajo por escena. `exaggeration` 0.45 = cálida/explicación, 0.55-0.6 = momentos de tensión o giro. Escribe nombres difíciles de forma fonética
 («En-vidia» si Whisper oye mal «Nvidia»; «A-I» en vez de «A.I.»).
 ```sql
 insert into jobs(step, payload) values ('studio', jsonb_build_object('op','tts','language','en',
   'ref_url','https://archive.org/download/treasure_island_1307_librivox/treasureisland_02_stevenson_64kb.mp3','ref_start',60,
-  'text','<texto de la escena>','path','studio/bds/<fecha-slug>/v_01.mp3')) returning id;
+  'exaggeration',0.5,'text','<texto de la escena>','path','studio/bds/<fecha-slug>/v_01.mp3')) returning id;
 select status, error, payload->'result' from jobs where id = <id>;   -- result.url cuando status = done
 ```
 Descarga cada `result.url` a `work/<fecha-slug>/v_01.mp3` y saca los tiempos: `python3 tools/words.py work/<fecha-slug>`.

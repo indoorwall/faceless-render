@@ -8,7 +8,9 @@ El HTML se graba con tools/rec.cjs y el audio se mezcla con tools/mix.py (ver st
 Formato de episode.json (todas las rutas relativas a la carpeta del episodio):
 {
   "orientation": "landscape" | "portrait",          # 1920x1080 o 1080x1920
-  "music": [["spy", 0], ["fun", 8]],                # pista y escena desde la que suena (tools/fetch_assets.py)
+  "music": [["spy", 0], ["none", 1, "where"], ["fun", 2, null, 0.6]],
+                       # [pista, escena, palabra o segundos dentro de la escena (opcional), volumen (opcional)];
+                       # "none" = silencio (antes de un golpe o en el giro de la historia)
   "end_pad": 1.6,                                   # segundos de cola tras la última escena
   "scenes": [
     {"voice": "v_01.mp3", "words": "w_01.json", "gap": 0.35,
@@ -36,6 +38,10 @@ ITEMS (x, y en píxeles del lienzo; las palabras se centran en x,y; los personaj
   {"type":"pie","x":..,"y":..,"size":720,"at":0,"pull":"slice","label":"NVDA"}
   {"type":"chip","x":..,"y":..,"size":400,"at":..} · {"type":"factory",...} · {"type":"face","kind":"happy|scared",...,"out":..}
   {"type":"fold","at":..,"text":"−$600B","x":..,"y":..,"size":300,"color":"#EF4444","fold":"twist"}   # el número se dobla como papel
+  {"type":"pizza8","x":..,"y":..,"size":640,"sell":["accepted","less",...],"back":[...]}  # pizza en 8 trozos que salen volando al venderse y vuelven
+  {"type":"tag",...,"steps":5}          # la etiqueta de precio baja/sube a saltos (una venta, un salto)
+  {"type":"calendar","states":[[0,"MON",{"MON":"−4%"}],["tuesday","TUE",{"TUE":"−5%"}]]}  # tira de días: justifica los saltos de tiempo
+  {"type":"scan","at":..}               # líneas de vídeo antiguo (rebobinados, flashbacks)
   {"type":"logo"} · {"type":"stripes"} · {"type":"disclaimer","at":..}
   {"type":"subscribe","x":..,"y":..,"at":..} · {"type":"html","html":"<div class='w' ...>"}
 """
@@ -113,7 +119,7 @@ def item(it, sc, s0, t_abs):
         fmt = it.get("fmt", "{v}")
         return f'<div class="w big" style="left:{x}px;top:{y}px;font-size:{it.get("size", 170)}px;color:{it.get("color", "#EF4444")}" data-anim="count" data-in="{at:.2f}" data-dur="{it.get("dur", 1.2)}" data-from="{it.get("from", 0)}" data-to="{it["to"]}" data-fmt="{fmt}"{o(out)}>{fmt.replace("{v}", str(it.get("from", 0)))}</div>'
     if ty == "tag":
-        return f'<div class="w" style="left:{x}px;top:{y}px;font-family:Anton;font-size:{it.get("size", 110)}px;color:#111;background:#F8F5EC;border:8px solid #111;border-radius:18px;padding:4px 34px;box-shadow:10px 10px 0 #111" data-anim="count" data-in="{at:.2f}" data-dur="{it.get("dur", 2)}" data-from="{it["from"]}" data-to="{it["to"]}" data-fmt="${{v}}"{o(out)} data-rot="-4">${it["from"]}</div>'
+        return f'<div class="w" style="left:{x}px;top:{y}px;font-family:Anton;font-size:{it.get("size", 110)}px;color:#111;background:#F8F5EC;border:8px solid #111;border-radius:18px;padding:4px 34px;box-shadow:10px 10px 0 #111" data-anim="count" data-in="{at:.2f}" data-dur="{it.get("dur", 2)}" data-from="{it["from"]}" data-to="{it["to"]}" data-fmt="${{v}}"{o(out)}{f' data-steps="{it["steps"]}"' if it.get("steps") else ""} data-rot="-4">${it["from"]}</div>'
     if ty == "chart":
         dr = T(it.get("draw", at)); w, h = it.get("w", 1050), it.get("h", 588)
         return (f'<svg class="ov" style="left:{x}px;top:{y}px" width="{w}" height="{h}" viewBox="0 0 1000 560" data-anim="fade" data-in="{at:.2f}"{o(out)}>'
@@ -148,15 +154,43 @@ def item(it, sc, s0, t_abs):
         return f'<div class="w" style="left:{x}px;top:{it.get("y", SH-70)}px;font-family:Inter;font-size:30px;color:#F8F5EC;opacity:.7" data-anim="fade" data-in="{at:.2f}">For education only. Not financial advice.</div>'
     if ty == "subscribe":
         return f'<div class="w sub" style="left:{x}px;top:{y}px" data-anim="pop" data-in="{at:.2f}">▶ SUBSCRIBE</div>'
+    if ty == "pizza8":
+        # Pizza en 8 trozos: "sell" = cuándo sale volando cada trozo (se vende), "back" = cuándo vuelve
+        s_ = it.get("size", 640); sell = [T(r) for r in it.get("sell", [])]; back = [T(r) for r in it.get("back", [])]
+        g = []
+        for k in range(8):
+            a0, a1 = math.radians(k * 45 - 90), math.radians((k + 1) * 45 - 90); am = (a0 + a1) / 2
+            p = lambda r, a: f"{290 + r*math.cos(a):.1f} {290 + r*math.sin(a):.1f}"
+            tops = "".join(f'<circle cx="{290 + rr*math.cos(am + d):.0f}" cy="{290 + rr*math.sin(am + d):.0f}" r="26" fill="#C2410C" stroke="#7C2D12" stroke-width="5"/>' for rr, d in ((150, 0.12), (215, -0.15)))
+            wedge = (f'<path d="M290 290 L{p(278, a0)} A278 278 0 0 1 {p(278, a1)} Z" fill="#D97706" stroke="#111" stroke-width="8" stroke-linejoin="round"/>'
+                     f'<path d="M290 290 L{p(240, a0)} A240 240 0 0 1 {p(240, a1)} Z" fill="#FCD34D"/>{tops}')
+            lv = f' data-leave="{sell[k]:.2f}"' if k < len(sell) and sell[k] is not None else ' data-leave="1e9"'
+            bk = f' data-back="{back[k]:.2f}"' if k < len(back) and back[k] is not None else ""
+            g.append(f'<g data-anim="wedge"{lv}{bk} data-ang="{math.degrees(am):.0f}">{wedge}</g>')
+        return f'<svg class="ov" style="left:{x}px;top:{y}px;overflow:visible" width="{s_}" height="{s_}" viewBox="0 0 580 580" data-anim="pop" data-in="{at:.2f}"{o(out)} data-idle="{it.get("idle", "none")}">{"".join(g)}</svg>'
+    if ty == "calendar":
+        # Tira de días de la semana; "states": [[cuándo, día activo, {día: marca}], ...]
+        days = it.get("days", ["SUN", "MON", "TUE", "WED", "THU"]); out_html = []
+        st = it.get("states", [[0, it.get("active"), it.get("marks", {})]])
+        marks = {}
+        for i, (ref, act, mk) in enumerate(st):
+            marks = {**marks, **(mk or {})}; t_in = T(ref) or 0.0; t_out = T(st[i + 1][0]) if i + 1 < len(st) else None
+            cells = "".join(f'<span class="{"on" if d == act else ""}">{d}' + (f'<b class="{"dn" if str(marks[d]).startswith(("−", "-")) else "up"}">{marks[d]}</b>' if d in marks else "") + "</span>" for d in days)
+            out_html.append(f'<div class="cal" data-anim="none" data-in="{t_in:.2f}"{o(t_out)}>{cells}</div>')
+            if i > 0: sfx.append((t_abs + t_in, "tick", 0.5))
+        return "".join(out_html)
+    if ty == "scan":
+        return f'<div class="scan" data-anim="fade" data-in="{at:.2f}"{o(out)}></div>'
     if ty == "html":
         return it["html"]
     raise SystemExit(f"Tipo de elemento desconocido: {ty}")
 
 T0 = 0.0
 music_marks = []
+SCENES = []
 for si, scn in enumerate(E["scenes"]):
     words = json.load(open(os.path.join(WD, scn["words"])))
-    sc = Scene(words)
+    sc = Scene(words); SCENES.append(sc)
     d = dur(scn["voice"]); gap = float(scn.get("gap", 0.35))
     voices.append((T0, scn["voice"]))
     end = d + gap if si < len(E["scenes"]) - 1 else d + float(E.get("end_pad", 1.6))
@@ -183,7 +217,12 @@ for si, scn in enumerate(E["scenes"]):
 
 TOTAL = T0
 starts_abs = [0.0] + music_marks[:-1]
-music = [[trk, round(starts_abs[min(int(sc_i), len(starts_abs) - 1)], 3)] for trk, sc_i in E.get("music", [["spy", 0]])]
+music = []
+for m in E.get("music", [["spy", 0]]):
+    trk, sc_i = m[0], min(int(m[1]), len(starts_abs) - 1)
+    off = SCENES[sc_i].t(m[2]) if len(m) > 2 and m[2] is not None else 0.0
+    music.append([trk, round(starts_abs[sc_i] + off, 3), float(m[3]) if len(m) > 3 else 1.0])
+music.sort(key=lambda x: x[1])
 page = open(os.path.join(ROOT, "render_tpl.html")).read()
 page = (page.replace("%%W%%", str(SW)).replace("%%H%%", str(SH))
         .replace("%%DEFS%%", open(os.path.join(ROOT, "dummy_defs.svg")).read())

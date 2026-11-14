@@ -275,6 +275,7 @@ async function runStep(job: Job) {
     case "explore_refresh": return stepExploreRefresh(job);
     case "bench": return stepBench(job);
     case "style_test": return stepStyleTest(job);
+    case "studio": return stepStudio(job);
     // Calibración: solo puntúa con el crítico el guion de un vídeo (no cambia nada)
     case "critic_test": { const v = await getVideo(job.video_id); const c = await criticScore(v, v.channel, v.script ?? {}, v.channel.format === "short"); await log(job, `Calibración del crítico: «${v.title}» → ${c.score}/10 · ${c.issues.slice(0, 3).join(" | ").slice(0, 600)}`); return; }
     case "notify_test": { const res = await notify(`test:${Date.now()}`, "✅ Prueba: los avisos funcionan", "<p>Este es el aviso de prueba de Faceless Studio. A partir de ahora te escribiré aquí si falta saldo, un vídeo falla o se queda parado, o hay un vídeo de actualidad para aprobar.</p>", 0); await log(job, `Aviso de prueba por email: ${res}`, res === "enviado" ? "info" : "warn"); return; }
@@ -3231,7 +3232,8 @@ async function planChannel(job: Job, ch: any) {
     }
     // 3) Mantener la cola llena según el calendario
     const s = scheduleOf(ch), horizon = Date.now() + (s.buffer_days ?? 5) * 86400000;
-    for (const f of mirrorOnly ? [] : ["long", "short"]) {
+    // Canales «studio»: los guiones los escriben las sesiones diarias de Claude (studio/README.md); el piloto no encarga nada
+    for (const f of mirrorOnly || ch.production_type === "studio" ? [] : ["long", "short"]) {
       const slots = slotsFor(ch, f, s.buffer_days ?? 5).filter((t) => t.getTime() <= horizon).length; if (!slots) continue;
       // Lo programado más allá del horizonte no tapa los huecos de los próximos días
       const inFlight = V.filter((v) => fmtOf(v) === f && (["scripting", "script_review", "producing", "final_review"].includes(v.status) || (["publishing", "scheduled"].includes(v.status) && v.publish_at && new Date(v.publish_at).getTime() > Date.now() && new Date(v.publish_at).getTime() <= horizon))).length;
@@ -4491,6 +4493,38 @@ async function stepBench(job: Job) {
 
 // ---------- Paso: prueba de estilo visual (imágenes de muestra y una miniatura antes de decidir un formato) ----------
 // payload: { name, style, prompts: [..], thumb?: { prompt, text } } → URLs en el registro de actividad
+// ---------- Paso: estudio (las sesiones de Claude que escriben y montan desde fuera) ----------
+// Piden aquí lo que necesita una clave (voz propia en Modal, imágenes FLUX) o permiso para subir un archivo.
+// payload.op: "tts" {text, language?, ref_url?, ref_start?, path} · "images" {prompts[], style?, paths[]} · "upload_url" {path}
+// El resultado queda en jobs.payload.result. Solo se escribe dentro de media/studio/.
+async function stepStudio(job: Job) {
+  const p = job.payload ?? {};
+  const okPath = (x: unknown) => { const s = String(x ?? ""); if (!/^studio\/[A-Za-z0-9_\-./]+$/.test(s) || s.includes("..")) throw new UserError(`Ruta no permitida: ${s}`); return s; };
+  // deno-lint-ignore no-explicit-any
+  let result: any;
+  if (p.op === "tts") {
+    const path = okPath(p.path);
+    const t = await modalTts(String(p.text ?? "").slice(0, 5000), String(p.language ?? "en"), { ref_url: p.ref_url, ref_start: p.ref_start != null ? Number(p.ref_start) : undefined });
+    result = { url: await upload(path, t.bytes, "audio/mpeg"), duration: t.duration };
+  } else if (p.op === "images") {
+    const paths = (p.paths ?? []) as string[]; const prompts = (p.prompts ?? []) as string[];
+    if (!KEYS["FAL_KEY"]) throw new UserError("Falta la clave FAL_KEY");
+    const urls: (string | null)[] = [];
+    for (const [i, pr] of prompts.entries()) {
+      const path = okPath(paths[i]);
+      try { const b = await fluxImage(`${pr}${p.style ? `. Style: ${p.style}` : ""}. Absolutely no text, letters or watermarks.`, !!p.vertical); urls.push(b ? await upload(path, b, "image/png") : null); }
+      catch (e) { if (e instanceof OverBudget) throw e; urls.push(null); await log(job, `Estudio: imagen ${i + 1} falló: ${(e as Error).message}`.slice(0, 300), "warn"); }
+    }
+    result = { urls };
+  } else if (p.op === "upload_url") {
+    const path = okPath(p.path);
+    const { data, error } = await sb.storage.from("media").createSignedUploadUrl(path, { upsert: true });
+    if (error || !data) throw new Error(`Subida: ${error?.message ?? "sin URL"}`);
+    result = { upload_url: data.signedUrl, public_url: sb.storage.from("media").getPublicUrl(path).data.publicUrl };
+  } else throw new UserError(`Operación de estudio desconocida: ${p.op}`);
+  await sb.from("jobs").update({ payload: { ...p, result } }).eq("id", job.id);
+}
+
 async function stepStyleTest(job: Job) {
   const p = job.payload ?? {};
   const style = String(p.style ?? "");

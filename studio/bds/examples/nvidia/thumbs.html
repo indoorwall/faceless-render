@@ -1,0 +1,104 @@
+<!doctype html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@700;900&display=swap" rel="stylesheet"><style>
+*{box-sizing:border-box;margin:0}
+html,body{width:1920px;height:1080px;overflow:hidden;background:#0E1630}
+#stage{position:absolute;inset:0;overflow:hidden}
+.shot{position:absolute;inset:0;overflow:hidden;visibility:hidden;background:#0E1630}
+.bg{position:absolute;inset:-40px;background-size:cover;background-position:center}
+.navy{inset:-260px;background:radial-gradient(60% 60% at 40% 40%,rgba(255,196,0,.10),transparent 70%),repeating-linear-gradient(-45deg,rgba(255,255,255,.035) 0 40px,transparent 40px 80px),radial-gradient(120% 90% at 30% 20%,#1d2b57,#0E1630)}
+.a{position:absolute;transform-origin:50% 100%;filter:drop-shadow(10px 14px 0 rgba(0,0,0,.35))}
+.ov{position:absolute;transform-origin:50% 50%}
+.w{position:absolute;white-space:nowrap;font-family:Anton;letter-spacing:1px;line-height:1.05;transform-origin:50% 50%}
+.box{background:#FFC400;color:#111;padding:8px 30px;border:7px solid #111;border-radius:16px;box-shadow:10px 10px 0 #111}
+.red{background:#EF4444;color:#fff;padding:8px 30px;border:7px solid #111;border-radius:16px;box-shadow:10px 10px 0 #111}
+.green{background:#22C55E;color:#fff;padding:8px 30px;border:7px solid #111;border-radius:16px;box-shadow:10px 10px 0 #111}
+.big{color:#fff;-webkit-text-stroke:10px #111;paint-order:stroke fill;text-shadow:12px 12px 0 #111}
+.stamp{color:#EF4444;border:16px solid #EF4444;border-radius:26px;padding:6px 44px;background:rgba(255,250,240,.93)}
+.stampg{color:#22C55E;border:20px solid #22C55E;border-radius:30px;padding:10px 50px;background:rgba(14,22,48,.6);font-family:Anton;font-size:170px}
+.line{font-family:Inter;font-weight:900;font-size:64px;color:#111;background:#F8F5EC;border:7px solid #111;border-radius:18px;padding:14px 40px;box-shadow:10px 10px 0 #111}
+.line b{color:#22C55E}
+.sub{font-family:Inter;font-weight:900;font-size:80px;color:#fff;background:#EF4444;border-radius:20px;padding:18px 54px;box-shadow:0 12px 0 #7f1d1d}
+.tile{position:absolute;width:520px;height:292px;background-size:cover;background-position:center;border:8px solid #FFC400;border-radius:18px;transform-origin:50% 50%;overflow:hidden}
+.tile span{position:absolute;left:0;right:0;bottom:0;padding:14px;font-family:Anton;font-size:46px;line-height:1.05;color:#fff;background:linear-gradient(transparent,rgba(0,0,0,.85));text-align:center}
+.stripe{position:absolute;left:-40px;right:-40px;height:46px;background:repeating-linear-gradient(-45deg,#FFC400 0 40px,#111 40px 80px)}
+.logo{position:absolute;display:flex;align-items:center;gap:22px;font-family:Anton;font-size:46px;letter-spacing:2px;color:#F8F5EC}
+.logo i{width:56px;height:56px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#FFE27A,#E0A800 60%,#9A6B00);border:5px solid #F8F5EC;display:grid;place-items:center;font-style:normal;color:#5a3c00;font-size:30px}
+#grain{position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(rgba(255,255,255,.05) 1px,transparent 1.4px);background-size:7px 7px;z-index:999}
+#vig{position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at center,transparent 60%,rgba(0,0,0,.35));z-index:998}
+</style>
+<style>.t{width:1920px;height:1080px;position:relative;overflow:hidden}</style></head><body>
+<svg width="0" height="0" style="position:absolute"><defs>
+ <symbol id="target" viewBox="-50 -50 100 100"><circle r="46" fill="#111"/><path d="M0 0 L0 -40 A40 40 0 0 1 40 0 Z" fill="#FFC400"/><path d="M0 0 L0 40 A40 40 0 0 1 -40 0 Z" fill="#FFC400"/><circle r="46" fill="none" stroke="#111" stroke-width="6"/></symbol>
+ <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FBEFB8"/><stop offset="1" stop-color="#E9D27A"/></linearGradient>
+ <g id="body">
+  <!-- legs -->
+  <rect x="-62" y="250" width="48" height="150" rx="20" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <rect x="14" y="250" width="48" height="150" rx="20" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <ellipse cx="-38" cy="404" rx="44" ry="20" fill="#111"/><ellipse cx="38" cy="404" rx="44" ry="20" fill="#111"/>
+  <!-- torso -->
+  <rect x="-95" y="80" width="190" height="190" rx="60" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+  <use href="#target" x="-30" y="140" width="60" height="60"/>
+  <!-- tie -->
+  <path d="M-14 84 L14 84 L8 100 L20 160 L0 180 L-20 160 L-8 100 Z" fill="#18244A" stroke="#111" stroke-width="5"/>
+  <!-- neck -->
+  <rect x="-22" y="60" width="44" height="30" rx="10" fill="url(#skin)" stroke="#111" stroke-width="8"/>
+ </g>
+ <g id="head">
+  <ellipse cx="0" cy="-60" rx="120" ry="130" fill="url(#skin)" stroke="#111" stroke-width="9"/>
+  <use href="#target" x="-26" y="-190" width="52" height="52"/>
+  <path d="M-120 -70 Q0 -50 120 -70" fill="none" stroke="#111" stroke-width="5" opacity=".35"/>
+ </g>
+<g id="dm_explain">
+ <use href="#body"/>
+ <path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q170 60 210 -20" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q170 60 210 -20" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <line x1="210" y1="-20" x2="300" y2="-170" stroke="#8B5A2B" stroke-width="12" stroke-linecap="round"/><circle cx="300" cy="-170" r="12" fill="#EF4444"/>
+ <use href="#head"/>
+ <ellipse cx="-42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="-36" cy="-66" r="11" fill="#111"/>
+ <ellipse cx="42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="48" cy="-66" r="11" fill="#111"/>
+ <path d="M-30 -110 L-58 -118 M30 -112 L58 -122" stroke="#111" stroke-width="8" stroke-linecap="round"/>
+ <path d="M-36 -10 Q0 22 40 -12" fill="none" stroke="#111" stroke-width="8" stroke-linecap="round"/></g>
+<g id="dm_shock">
+ <use href="#body"/>
+ <path d="M-90 120 Q-170 40 -110 -40" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-170 40 -110 -40" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q170 40 110 -40" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q170 40 110 -40" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <use href="#head"/>
+ <circle cx="-110" cy="-40" r="30" fill="#F3E39A" stroke="#111" stroke-width="8"/><circle cx="110" cy="-40" r="30" fill="#F3E39A" stroke="#111" stroke-width="8"/>
+ <circle cx="-42" cy="-72" r="30" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="-42" cy="-72" r="8" fill="#111"/>
+ <circle cx="42" cy="-72" r="30" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="42" cy="-72" r="8" fill="#111"/>
+ <path d="M-30 -122 L-56 -136 M30 -122 L56 -136" stroke="#111" stroke-width="8" stroke-linecap="round"/>
+ <ellipse cx="0" cy="0" rx="24" ry="32" fill="#4A1414" stroke="#111" stroke-width="7"/>
+ <g stroke="#FFC400" stroke-width="8" stroke-linecap="round"><line x1="-150" y1="-170" x2="-185" y2="-205"/><line x1="150" y1="-170" x2="185" y2="-205"/><line x1="0" y1="-210" x2="0" y2="-250"/></g></g>
+<g id="dm_thumbs">
+ <use href="#body"/>
+ <path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M-90 120 Q-150 170 -140 240" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <path d="M90 120 Q190 110 200 20" fill="none" stroke="#111" stroke-width="44" stroke-linecap="round"/><path d="M90 120 Q190 110 200 20" fill="none" stroke="#F3E39A" stroke-width="30" stroke-linecap="round"/>
+ <g transform="translate(200,10)">
+  <rect x="-40" y="-26" width="80" height="62" rx="20" fill="#F3E39A" stroke="#111" stroke-width="8"/>
+  <path d="M-40 -6 H34 M-40 12 H34" stroke="#111" stroke-width="5" opacity=".5"/>
+  <path d="M-34 -22 Q-46 -70 -26 -86 Q-8 -92 -6 -70 L-4 -24" fill="#F3E39A" stroke="#111" stroke-width="8" stroke-linejoin="round"/>
+ </g>
+ <use href="#head"/>
+ <path d="M-62 -72 Q-42 -92 -22 -72" fill="none" stroke="#111" stroke-width="9" stroke-linecap="round"/>
+ <ellipse cx="42" cy="-70" rx="22" ry="26" fill="#fff" stroke="#111" stroke-width="6"/><circle cx="46" cy="-66" r="11" fill="#111"/>
+ <path d="M-50 -14 Q0 40 52 -16 Q0 10 -50 -14 Z" fill="#fff" stroke="#111" stroke-width="7" stroke-linejoin="round"/>
+ <path d="M28 -116 L58 -126" stroke="#111" stroke-width="8" stroke-linecap="round"/></g>
+</defs></svg>
+<div class="t" id="A">
+ <div style="position:absolute;inset:0;background:url(../../lib/bg_trading_floor.png) center/cover;filter:brightness(.7)"></div>
+ <svg style="position:absolute;left:60px;top:300px" width="1100" height="616" viewBox="0 0 1000 560"><rect width="1000" height="560" rx="28" fill="#0E1630" stroke="#111" stroke-width="12"/>
+ <polyline fill="none" stroke="#EF4444" stroke-width="26" stroke-linejoin="round" stroke-linecap="round" points="40,90 220,120 360,170 450,300 560,330 680,450 820,500 960,530"/>
+ <polygon points="960,530 900,470 990,470" fill="#EF4444" transform="rotate(25 960 530)"/></svg>
+ <img src="../../lib/cut_trader_panic.png" style="position:absolute;right:-30px;bottom:-40px;height:1080px;filter:drop-shadow(14px 14px 0 rgba(0,0,0,.4))">
+ <div class="w big" style="left:560px;top:180px;font-size:300px;color:#EF4444;transform:translate(-50%,-50%) rotate(-4deg)">−$600B</div>
+</div>
+<div class="t" id="C">
+ <div style="position:absolute;inset:0;background:radial-gradient(60% 60% at 40% 40%,rgba(255,196,0,.15),transparent 70%),radial-gradient(120% 90% at 30% 20%,#1d2b57,#0E1630)"></div>
+ <svg style="position:absolute;left:120px;top:150px" width="860" height="860" viewBox="0 0 580 580"><circle cx="290" cy="290" r="280" fill="#D97706" stroke="#111" stroke-width="14"/><circle cx="290" cy="290" r="240" fill="#FCD34D"/>
+<g fill="#C2410C" stroke="#7C2D12" stroke-width="5"><circle cx="200" cy="170" r="30"/><circle cx="360" cy="150" r="30"/><circle cx="130" cy="300" r="30"/><circle cx="300" cy="290" r="30"/><circle cx="450" cy="320" r="30"/><circle cx="210" cy="430" r="30"/><circle cx="380" cy="450" r="30"/><circle cx="470" cy="220" r="30"/></g>
+<g stroke="#111" stroke-width="5"><line x1="290" y1="290" x2="570" y2="290"/><line x1="290" y1="290" x2="565" y2="345"/><line x1="290" y1="290" x2="549" y2="397"/><line x1="290" y1="290" x2="523" y2="446"/><line x1="290" y1="290" x2="488" y2="488"/><line x1="290" y1="290" x2="446" y2="523"/><line x1="290" y1="290" x2="397" y2="549"/><line x1="290" y1="290" x2="345" y2="565"/><line x1="290" y1="290" x2="290" y2="570"/><line x1="290" y1="290" x2="235" y2="565"/><line x1="290" y1="290" x2="183" y2="549"/><line x1="290" y1="290" x2="134" y2="523"/><line x1="290" y1="290" x2="92" y2="488"/><line x1="290" y1="290" x2="57" y2="446"/><line x1="290" y1="290" x2="31" y2="397"/><line x1="290" y1="290" x2="15" y2="345"/><line x1="290" y1="290" x2="10" y2="290"/><line x1="290" y1="290" x2="15" y2="235"/><line x1="290" y1="290" x2="31" y2="183"/><line x1="290" y1="290" x2="57" y2="134"/><line x1="290" y1="290" x2="92" y2="92"/><line x1="290" y1="290" x2="134" y2="57"/><line x1="290" y1="290" x2="183" y2="31"/><line x1="290" y1="290" x2="235" y2="15"/><line x1="290" y1="290" x2="290" y2="10"/><line x1="290" y1="290" x2="345" y2="15"/><line x1="290" y1="290" x2="397" y2="31"/><line x1="290" y1="290" x2="446" y2="57"/><line x1="290" y1="290" x2="488" y2="92"/><line x1="290" y1="290" x2="523" y2="134"/><line x1="290" y1="290" x2="549" y2="183"/><line x1="290" y1="290" x2="565" y2="235"/></g>
+  <path d="M290 290 L570 290 A280 280 0 0 1 488 488 Z" fill="#EF4444" stroke="#111" stroke-width="10" transform="translate(40,30)"/>
+  <text x="440" y="400" font-family="Anton" font-size="52" fill="#fff" stroke="#111" stroke-width="4" paint-order="stroke">NVDA</text>
+  <path d="M330 300 L380 340 L360 370 L420 420" fill="none" stroke="#111" stroke-width="8"/></svg>
+ <svg viewBox="-270 -280 620 720" style="position:absolute;left:1150px;top:300px;height:780px;width:672px"><use href="#dm_shock"/></svg>
+ <div class="w big" style="left:1420px;top:200px;font-size:230px;color:#FFC400;transform:translate(-50%,-50%) rotate(4deg)">$600B?</div>
+</div></body></html>

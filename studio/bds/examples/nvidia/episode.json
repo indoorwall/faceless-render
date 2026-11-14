@@ -1,0 +1,24 @@
+{
+ "orientation": "landscape",
+ "music": [["spy", 0], ["fun", 8]],
+ "end_pad": 1.6,
+ "scenes": [
+  {"voice": "v_s1.mp3", "words": "w_s1.json", "shots": [
+    {"at": 0, "bg": "lib/bg_trading_floor.png", "kb": [1.0, 1.08, 0], "tr": "zoom", "items": [
+      {"type": "chart", "x": 90, "y": 170, "w": 1050, "h": 588, "at": 0, "draw": "600-0.6", "label": "NVDA · THURSDAY 9:30 AM", "points": "50,110 200,130 330,170 420,260 520,300 640,390 760,430 880,470 950,500", "dur": 1.6},
+      {"type": "actor", "src": "lib/cut_trader_panic.png", "x": 1530, "y": 1080, "h": 800, "at": 0, "enter": "up", "idle": "shake", "react": "600+0.9"},
+      {"type": "count", "at": "600", "from": 0, "to": 600, "fmt": "−${v}B", "x": 600, "y": 900, "size": 170, "dur": 1.0, "sound": "none"},
+      {"type": "word", "at": "1", "text": "$1,500+ PER AMERICAN", "x": 1480, "y": 150, "style": "box", "size": 72}],
+     "sounds": [["600", "tick", 0.5], ["600+0.35", "tick", 0.5], ["600+0.7", "tick", 0.5], ["600+1.0", "hit", 0.8]]}]},
+  {"voice": "v_s2.mp3", "words": "w_s2.json", "shots": [
+    {"at": 0, "bg": "lib/bg_trading_floor.png", "kb": [1.08, 1.0, 0], "tr": "none", "items": [
+      {"type": "chart", "x": 90, "y": 170, "w": 1050, "h": 588, "at": 0, "draw": "by", "label": "NVDA · THURSDAY CLOSE", "points": "50,110 200,130 330,170 420,260 520,300 600,380 640,390 720,300 800,220 880,190 950,180", "dur": 1.8, "color": "#22C55E"},
+      {"type": "actor", "src": "lib/cut_trader_panic.png", "x": 1530, "y": 1080, "h": 800, "at": 0, "enter": "pop", "idle": "bob"},
+      {"type": "count", "at": "400", "from": 0, "to": 420, "fmt": "+${v}B", "x": 600, "y": 900, "size": 170, "color": "#22C55E", "dur": 1.0, "sound": "none"}],
+     "sounds": [["400", "score", 0.6]]},
+    {"at": "nobody", "bg": "lib/bg_vault.png", "kb": [1.0, 1.15, 0], "items": [
+      {"type": "word", "at": 0, "text": "NO VAULT ROBBED", "x": 960, "y": 180, "size": 100},
+      {"type": "word", "at": "nobody#1", "text": "NO CASH RETURNED", "x": 960, "y": 340, "size": 100},
+      {"type": "word", "at": "where", "text": "WHERE DID IT GO?", "x": 960, "y": 860, "style": "red", "size": 120, "anim": "slam"}]}]}
+ ]
+}

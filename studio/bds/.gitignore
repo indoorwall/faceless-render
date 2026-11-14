@@ -1,0 +1,7 @@
+lib/
+work/
+examples/*/prev/
+examples/*/render.html
+examples/*/plan.json
+examples/*/video_only.mp4
+examples/*/mix.m4a

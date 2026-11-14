@@ -27,5 +27,8 @@ f.append("[mus][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=35
 f.append(f"[vo][duck][sfx]amix=inputs=3:normalize=0,atrim=0:{T},loudnorm=I=-14:TP=-1.5:LRA=11[out]")
 mix = os.path.join(D, "mix.m4a")
 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *inp, "-filter_complex", ";".join(f), "-map", "[out]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", mix], check=True)
-subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", os.path.join(D, "video_only.mp4"), "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "copy", "-shortest", "-movflags", "+faststart", OUT], check=True)
-print("OK", OUT)
+# Supabase admite archivos de hasta 50 MB: se sube la calidad hasta que el vídeo quepa (dibujos planos aguantan bien crf 30)
+for crf in (23, 26, 28, 30, 32, 34):
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", os.path.join(D, "video_only.mp4"), "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "slow", "-crf", str(crf), "-c:a", "copy", "-shortest", "-movflags", "+faststart", OUT], check=True)
+    if os.path.getsize(OUT) < 48e6: break
+print("OK", OUT, f"{os.path.getsize(OUT)/1e6:.1f} MB (crf {crf})")

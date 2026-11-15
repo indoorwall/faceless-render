@@ -1590,8 +1590,11 @@ async function stepPublish(job: Job) {
     return;
   }
   // Vídeo rehecho: se borra la versión anterior de YouTube y se sube la nueva a la misma hora (si aún no ha pasado)
+  // La cuota de la subida se reserva antes de borrar: si no hay para subir la nueva, el original se queda como está
+  let prepaid = false;
   if (v.auto?.replace && !v.auto.replace.deleted && v.youtube_video_id) {
-    if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) throw new QuotaWait("youtube");
+    if (!(await sb.rpc("yt_quota_take", { p_units: 1700 })).data) throw new QuotaWait("youtube");
+    prepaid = true;
     const d = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${v.youtube_video_id}`, { method: "DELETE", headers: { Authorization: `Bearer ${access_token}` } });
     if (!d.ok && d.status !== 404) throw new Error(`YouTube (borrar versión anterior) ${d.status}: ${(await d.text()).slice(0, 200)}`);
     const keep = v.auto.replace.publish_at && new Date(v.auto.replace.publish_at) > new Date(Date.now() + 15 * 60000) ? v.auto.replace.publish_at : null;
@@ -1608,8 +1611,10 @@ async function stepPublish(job: Job) {
     try { const ch2 = await chaptersText(v); if (ch2) { v.description = `${String(v.description ?? "").trim()}\n\nCapítulos:\n${ch2}`.slice(0, 4900); await sb.from("videos").update({ description: v.description }).eq("id", v.id); } } catch (e) { if (e instanceof OverBudget) throw e; await log(job, `Capítulos no añadidos: ${(e as Error).message}`, "warn"); }
   }
   // Cuota: subir un vídeo gasta 1.600 unidades y la miniatura 50 (10.000 al día por proyecto)
-  const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
-  if (qok !== true) throw new QuotaWait("youtube");
+  if (!prepaid) {
+    const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
+    if (qok !== true) throw new QuotaWait("youtube");
+  }
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
     snippet: { title: withMust(v, String(v.title ?? v.idea_title)).slice(0, 100), description: withSources(v), tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },

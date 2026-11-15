@@ -1615,6 +1615,8 @@ async function stepPublish(job: Job) {
     const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
     if (qok !== true) throw new QuotaWait("youtube");
   }
+  // Tenía fecha pero la subida se retrasó (p. ej. esperando cuota): sale en 10 minutos como programado, no con la privacidad por defecto del canal
+  if (v.publish_at && new Date(v.publish_at) <= new Date(Date.now() + 5 * 60000)) { v.publish_at = new Date(Date.now() + 10 * 60000).toISOString(); await sb.from("videos").update({ publish_at: v.publish_at }).eq("id", v.id); }
   const future = v.publish_at && new Date(v.publish_at) > new Date();
   const meta = {
     snippet: { title: withMust(v, String(v.title ?? v.idea_title)).slice(0, 100), description: withSources(v), tags: v.tags ?? [], defaultLanguage: v.channel.language, defaultAudioLanguage: v.channel.language, categoryId: "27" },

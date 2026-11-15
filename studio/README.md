@@ -86,15 +86,15 @@ Puedes usar una idea del banco (`idea_review`) o una tuya. Respeta la `style_gui
 El primer plano es `ai` con el visual más impactante. Máximo 6 planos `ai`. `reframe` = `{"x":0.5,"y":0.4,"zoom":1.5}`.
 `narration` de cada escena = sus `line` unidas, palabra por palabra.
 
-**Paso 5 — Mételo en la cola** (el disparador de la base de datos arranca la producción al pasar a `producing`):
+**Paso 5 — Mételo en la cola** (el disparador de la base de datos arranca la producción al pasar a `producing`). Son DOS
+sentencias: en una sola (`with … update`) el `update` no ve la fila recién insertada y el vídeo se queda en `idea_review`:
 ```sql
-with v as (
-  insert into videos (channel_id, status, format, engine, idea_title, title, description, tags, sources, script, auto, stage)
+insert into videos (channel_id, status, format, engine, idea_title, title, description, tags, sources, script, auto, stage)
   values ('<id>', 'idea_review', 'short', 'documentary', '<título>', '<título>', '<descripción>', array['tag1','tag2'],
           '<sources json>'::jsonb, '<guion json>'::jsonb,
           jsonb_build_object('by','claude-studio','preapproved',true,'script',jsonb_build_object('by','claude-studio','at',now())),
-          'Guion de Claude') returning id)
-update videos set status = 'producing', progress = 0, stage = 'En cola' from v where videos.id = v.id returning videos.id;
+          'Guion de Claude') returning id;
+update videos set status = 'producing', progress = 0, stage = 'En cola' where id = '<id devuelto>' returning id;
 ```
 `preapproved` hace que, cuando el vídeo esté montado y revisado, la web lo programe sola en su hueco.
 Comprueba al final con `select status, stage, error from videos where id = '<id>'` que ha empezado (stage cambia).

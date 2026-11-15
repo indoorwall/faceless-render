@@ -267,6 +267,7 @@ async function runStep(job: Job) {
     case "reschedule": return stepReschedule(job);
     case "yt_retitle": return stepRetitle(job);
     case "voice_test": return stepVoiceTest(job);
+    case "yt_check": return stepYtCheck(job);
     case "visual_check": return stepVisualCheck(job);
     case "voice_design": return stepVoiceDesign(job);
     case "explore": return stepExplore(job);
@@ -1066,9 +1067,12 @@ async function stepAudio(job: Job) {
       const tracks = [...info.keys()];
       if (v.music_url && meta?.prompt === prompt && Number(meta?.sec) >= need) {
         await log(job, "Se reaprovecha la música del montaje anterior");
-      } else if (tracks.length >= MUSIC_LIBRARY && (short || tracks.some((t) => info.get(t)!.sec >= 120))) {
-        // La pista de la biblioteca que mejor encaja con el tono del vídeo, sin repetir las 2 últimas usadas
-        const recent = (lib ?? []).slice(0, 2).map((x) => String(x.music_url));
+      } else if (tracks.length >= MUSIC_LIBRARY && (short || tracks.some((t) => info.get(t)!.sec >= 120)) &&
+                 tracks.some((t) => !(lib ?? []).slice(0, Number(ch.render_style?.music_fresh ?? 2)).map((x) => String(x.music_url)).includes(t) && (short || info.get(t)!.sec >= 120))) {
+        // La pista de la biblioteca que mejor encaja con el tono del vídeo, sin repetir las últimas usadas
+        // (render_style.music_fresh = cuántos vídeos seguidos sin repetir pista; si no queda ninguna libre, se compone una nueva:
+        // repetir el mismo audio en muchos Shorts es una señal de contenido en serie para YouTube)
+        const recent = (lib ?? []).slice(0, Number(ch.render_style?.music_fresh ?? 2)).map((x) => String(x.music_url));
         const words = (t: string) => new Set(t.toLowerCase().split(/[^a-záéíóúñü]+/).filter((w) => w.length > 3));
         const want = words(prompt);
         const score = (t: string) => { const w = words(info.get(t)!.prompt); let n = 0; for (const x of want) if (w.has(x)) n++; return n / Math.max(1, want.size); };
@@ -4126,6 +4130,29 @@ async function stepCompile(job: Job) {
 // Cambiar el título de un vídeo ya subido (prueba: a un Short atascado en el feed se le da un título más general).
 // Se lee el snippet actual y se reenvía entero con el título nuevo; el título anterior queda en auto.retitles
 // Prueba de voces: el mismo texto con varias voces y motores (Fish Audio y ElevenLabs en sus modos) para escucharlas y comparar coste
+// Estado real en YouTube de unos vídeos (por si un Short se queda sin visitas): privacidad, restricciones de edad o país,
+// «para niños», licencia y estadísticas. Payload: { video_ids: [ids de la tabla videos] }. Resultado en payload.result y en activity.
+async function stepYtCheck(job: Job) {
+  const ids = (job.payload?.video_ids ?? []) as string[];
+  const { data: vids } = await sb.from("videos").select("id,title,channel_id,youtube_video_id").in("id", ids);
+  // deno-lint-ignore no-explicit-any
+  const out: any[] = [];
+  for (const v of vids ?? []) {
+    if (!v.youtube_video_id) { out.push({ id: v.id, title: v.title, error: "sin youtube_video_id" }); continue; }
+    const token = await ytAccess(v.channel_id);
+    if (!token) { out.push({ id: v.id, title: v.title, error: "canal sin conectar" }); continue; }
+    const r = await ytGet(token, "https://www.googleapis.com/youtube/v3/videos", { part: "status,contentDetails,statistics,snippet", id: v.youtube_video_id });
+    const it = r?.items?.[0];
+    out.push(it ? { id: v.id, title: v.title, yt: v.youtube_video_id, privacy: it.status?.privacyStatus, upload: it.status?.uploadStatus, rejection: it.status?.rejectionReason ?? null, failure: it.status?.failureReason ?? null,
+      made_for_kids: it.status?.madeForKids, self_kids: it.status?.selfDeclaredMadeForKids, license: it.status?.license, embeddable: it.status?.embeddable, public_stats: it.status?.publicStatsViewable,
+      age: it.contentDetails?.contentRating?.ytRating ?? null, region: it.contentDetails?.regionRestriction ?? null, duration: it.contentDetails?.duration, definition: it.contentDetails?.definition,
+      licensed: it.contentDetails?.licensedContent, views: it.statistics?.viewCount, published: it.snippet?.publishedAt, category: it.snippet?.categoryId, lang: it.snippet?.defaultAudioLanguage ?? null }
+      : { id: v.id, title: v.title, yt: v.youtube_video_id, error: "YouTube no devuelve el vídeo (borrado o privado de otra cuenta)" });
+  }
+  await sb.from("jobs").update({ payload: { ...(job.payload ?? {}), result: out } }).eq("id", job.id);
+  await log(job, `Estado en YouTube: ${out.map((o) => `«${String(o.title).slice(0, 30)}» ${o.error ?? `${o.privacy}/${o.upload}${o.rejection ? ` rechazo ${o.rejection}` : ""}${o.age ? ` edad ${o.age}` : ""}${o.made_for_kids ? " niños" : ""}${o.region ? " restricción país" : ""} · ${o.views} visitas`}`).join(" · ")}`.slice(0, 1800));
+}
+
 async function stepVoiceTest(job: Job) {
   const p = job.payload ?? {};
   const text = String(p.text ?? "").trim();

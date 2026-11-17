@@ -1593,7 +1593,7 @@ async function stepPublish(job: Job) {
   // La cuota de la subida se reserva antes de borrar: si no hay para subir la nueva, el original se queda como está
   let prepaid = false;
   if (v.auto?.replace && !v.auto.replace.deleted && v.youtube_video_id) {
-    if (!(await sb.rpc("yt_quota_take", { p_units: 1700 })).data) throw new QuotaWait("youtube");
+    if (!(await sb.rpc("yt_quota_take", { p_units: 1700, p_project: await ytProject(v.channel_id) })).data) throw new QuotaWait("youtube");
     prepaid = true;
     const d = await fetch(`https://www.googleapis.com/youtube/v3/videos?id=${v.youtube_video_id}`, { method: "DELETE", headers: { Authorization: `Bearer ${access_token}` } });
     if (!d.ok && d.status !== 404) throw new Error(`YouTube (borrar versión anterior) ${d.status}: ${(await d.text()).slice(0, 200)}`);
@@ -1612,7 +1612,7 @@ async function stepPublish(job: Job) {
   }
   // Cuota: subir un vídeo gasta 1.600 unidades y la miniatura 50 (10.000 al día por proyecto)
   if (!prepaid) {
-    const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650 });
+    const { data: qok } = await sb.rpc("yt_quota_take", { p_units: 1650, p_project: await ytProject(v.channel_id) });
     if (qok !== true) throw new QuotaWait("youtube");
   }
   // Tenía fecha pero la subida se retrasó (p. ej. esperando cuota): sale en 10 minutos como programado, no con la privacidad por defecto del canal
@@ -2393,10 +2393,17 @@ async function stepCompare(job: Job) {
 }
 
 // ---------- YouTube con la cuenta del canal (OAuth): analíticas reales ----------
+// Proyecto de Google Cloud del canal: «2» usa GOOGLE_CLIENT_ID_2/SECRET_2 y su propia cuota diaria (10.000 unidades más)
+async function ytProject(channelId: string): Promise<string | null> {
+  const { data } = await sb.from("channels").select("yt_project").eq("id", channelId).maybeSingle();
+  const p = String(data?.yt_project ?? "").trim();
+  return p && p !== "1" ? p : null;
+}
 async function ytAccess(channelId: string): Promise<string | null> {
   const { data: tok } = await sb.from("youtube_tokens").select("refresh_token").eq("channel_id", channelId).maybeSingle();
   if (!tok) return null;
-  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: key("GOOGLE_CLIENT_ID"), client_secret: key("GOOGLE_CLIENT_SECRET"), refresh_token: tok.refresh_token, grant_type: "refresh_token" }) });
+  const proj = await ytProject(channelId); const sfx = proj ? `_${proj}` : "";
+  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: key(`GOOGLE_CLIENT_ID${sfx}`), client_secret: key(`GOOGLE_CLIENT_SECRET${sfx}`), refresh_token: tok.refresh_token, grant_type: "refresh_token" }) });
   if (!t.ok) throw new UserError(`No se pudo renovar el acceso a YouTube (${t.status}). Vuelve a conectar el canal.`);
   return (await t.json()).access_token;
 }
@@ -3917,20 +3924,21 @@ async function stepPlaylists(job: Job) {
   const pending = (fresh ?? []).filter((x) => x.auto?.series?.name && !x.auto?.playlisted);
   const lists: Record<string, string> = { ...(ch.yt_playlists ?? {}) };
   let added = 0, made = 0;
+  const pp = ch.yt_project && String(ch.yt_project) !== "1" ? String(ch.yt_project) : null;
   for (const v of pending) {
     const name = String(v.auto.series.name);
     if (!lists[name]) {
-      if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
+      if (!(await sb.rpc("yt_quota_take", { p_units: 50, p_project: pp })).data) break;
       const r = await fetch("https://www.googleapis.com/youtube/v3/playlists?part=snippet,status", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ snippet: { title: name, description: `${name}: todos los vídeos de la serie en «${ch.name}», del primero al último.`, defaultLanguage: ch.language ?? "es" }, status: { privacyStatus: "public" } }) });
-      if (!r.ok) { await sb.rpc("yt_quota_take", { p_units: -50 }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (lista) ${r.status}: ${t.slice(0, 200)}`); }
+      if (!r.ok) { await sb.rpc("yt_quota_take", { p_units: -50, p_project: pp }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (lista) ${r.status}: ${t.slice(0, 200)}`); }
       lists[name] = (await r.json()).id; made++;
       await sb.from("channels").update({ yt_playlists: lists }).eq("id", ch.id);
     }
-    if (!(await sb.rpc("yt_quota_take", { p_units: 50 })).data) break;
+    if (!(await sb.rpc("yt_quota_take", { p_units: 50, p_project: pp })).data) break;
     const r = await fetch("https://www.googleapis.com/youtube/v3/playlistItems?part=snippet", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ snippet: { playlistId: lists[name], resourceId: { kind: "youtube#video", videoId: v.youtube_video_id } } }) });
-    if (!r.ok && r.status !== 409) { await sb.rpc("yt_quota_take", { p_units: -50 }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (añadir a lista) ${r.status}: ${t.slice(0, 200)}`); }
+    if (!r.ok && r.status !== 409) { await sb.rpc("yt_quota_take", { p_units: -50, p_project: pp }); const t = await r.text(); if (r.status === 403 && /insufficient|scope/i.test(t)) return playlistScopeMissing(job, ch); throw new Error(`YouTube (añadir a lista) ${r.status}: ${t.slice(0, 200)}`); }
     await sb.from("videos").update({ auto: { ...(v.auto ?? {}), playlisted: lists[name] } }).eq("id", v.id);
     added++;
   }

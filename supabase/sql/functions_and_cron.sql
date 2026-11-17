@@ -217,3 +217,8 @@ $f$;
 -- storage: los miembros pueden subir a media/channels/<id>/audio/ (sonidos propios)
 -- on_video_status_change: producing → 'retos_assets' si engine = 'challenges' (si no, 'voice'); scripting solo para documental
 -- rerender_video: para retos encola 'retos_assets' (no hay escenas)
+
+-- 17-nov: segundo proyecto de Google Cloud por canal (otra cuota diaria de YouTube)
+alter table channels add column if not exists yt_project text;
+-- yt_quota_take(p_units numeric, p_project text default null): cuenta 'yt_units' o 'yt_units_<p>' con tope 'yt_quota_daily[_<p>]'
+-- set_api_key / api_key_status aceptan GOOGLE_CLIENT_ID_2 y GOOGLE_CLIENT_SECRET_2

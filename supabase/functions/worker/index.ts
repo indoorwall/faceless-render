@@ -895,7 +895,7 @@ async function forcedAlign(audioUrl: string, narration: string) {
 
 // ---------- Paso: voz (por lotes) ----------
 // Frases que hunden la retención en los Shorts (datos del 14-nov: la gente se va justo ahí). Se quitan solas antes de grabar.
-const BAD_SHORT_LINE = /(s[ií]gueme|s[ií]guenos|\bsigue (el|al|para)\b|suscr[ií]bete|qu[eé]date para|parte \d|ma[ñn]ana,? (otra|m[aá]s)|^primero,|te (dejo|guardo) .*(para el )?final|(va|queda|guardo) (para el|al) final|la (m[aá]s|historia m[aá]s|curiosidad m[aá]s) [^.]* (va |queda )?(para el|al) final|comentario|^m[aá]s (historias|guerras|curiosidades|inventos|animales|datos|fugas)\b|\baqu[ií]\.$)/i;
+const BAD_SHORT_LINE = /(s[ií]gueme|s[ií]guenos|\bsigue (el|al|para)\b|suscr[ií]bete|qu[eé]date para|parte \d|ma[ñn]ana,? (otra|m[aá]s)|^primero,|te (dejo|guardo) .*(para el )?final|(va|queda|guardo) (para el|al) final|la (m[aá]s|historia m[aá]s|curiosidad m[aá]s) [^.]* (va |queda )?(para el|al) final|lo sabr[aá]s (al|en el) final|lo (m[aá]s )?(fuerte|raro|loco|incre[ií]ble)[^.]*(al|viene al|llega al) final|(la|el) [uú]ltim[oa] (dato|curiosidad|respuesta|pista|rareza)?[^.]*es (la|el) m[aá]s|lo sabr[aá]s en la [uú]ltima|\bstay (until|till|to) the end|wait for the (last|end)|\bsubscribe\b|\bfollow (for|me)|comentario|^m[aá]s (historias|guerras|curiosidades|inventos|animales|datos|fugas)\b|\baqu[ií]\.$)/i;
 // En la última escena, además, fuera las preguntas al espectador («¿Habrías…?», «¿Fue suerte o…?»): rompen el bucle
 // deno-lint-ignore no-explicit-any
 function cleanShortScript(script: any) {

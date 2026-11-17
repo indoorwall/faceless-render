@@ -26,6 +26,12 @@ async function hmac(data: string) {
   const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(data));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
 }
+// Proyecto de Google Cloud del canal (channels.yt_project): «2» usa GOOGLE_CLIENT_ID_2/SECRET_2
+async function projSuffix(channelId: string) {
+  const { data } = await sb.from("channels").select("yt_project").eq("id", channelId).maybeSingle();
+  const p = String(data?.yt_project ?? "").trim();
+  return p && p !== "1" ? `_${p}` : "";
+}
 async function keys() {
   const { data } = await sb.rpc("get_api_keys");
   return (data ?? {}) as Record<string, string>;
@@ -40,11 +46,12 @@ Deno.serve(async (req) => {
     if (!data?.user) return json({ error: "unauthorized" }, 401);
     const { data: m } = await sb.from("members").select("user_id").eq("user_id", data.user.id).maybeSingle();
     if (!m) return json({ error: "unauthorized" }, 401);
-    if (!K.GOOGLE_CLIENT_ID || !K.GOOGLE_CLIENT_SECRET) return json({ error: "Faltan GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en Ajustes." }, 400);
     const { channel_id } = await req.json();
+    const sfx = await projSuffix(channel_id);
+    if (!K[`GOOGLE_CLIENT_ID${sfx}`] || !K[`GOOGLE_CLIENT_SECRET${sfx}`]) return json({ error: `Faltan GOOGLE_CLIENT_ID${sfx} y GOOGLE_CLIENT_SECRET${sfx} en Ajustes.` }, 400);
     const state = `${channel_id}.${await hmac(channel_id)}`;
     const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-    u.search = new URLSearchParams({ client_id: K.GOOGLE_CLIENT_ID, redirect_uri: REDIRECT, response_type: "code", access_type: "offline", prompt: "select_account consent", include_granted_scopes: "true", scope: SCOPES, state }).toString();
+    u.search = new URLSearchParams({ client_id: K[`GOOGLE_CLIENT_ID${sfx}`], redirect_uri: REDIRECT, response_type: "code", access_type: "offline", prompt: "select_account consent", include_granted_scopes: "true", scope: SCOPES, state }).toString();
     return json({ url: u.toString() });
   }
   // Callback de Google
@@ -54,7 +61,8 @@ Deno.serve(async (req) => {
   if (url.searchParams.get("error")) return done({ error: "Conexión cancelada" });
   const [channelId, sig] = state.split(".");
   if (!code || !channelId || sig !== (await hmac(channelId))) return done({ error: "Enlace no válido" });
-  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: K.GOOGLE_CLIENT_ID, client_secret: K.GOOGLE_CLIENT_SECRET, redirect_uri: REDIRECT, grant_type: "authorization_code" }) });
+  const sfx = await projSuffix(channelId);
+  const t = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: K[`GOOGLE_CLIENT_ID${sfx}`], client_secret: K[`GOOGLE_CLIENT_SECRET${sfx}`], redirect_uri: REDIRECT, grant_type: "authorization_code" }) });
   const tk = await t.json();
   if (!t.ok || !tk.refresh_token) return done({ error: `No se pudo conectar (${tk.error ?? t.status})` });
   // Sin el permiso de analíticas el canal se conecta igual, pero se avisa

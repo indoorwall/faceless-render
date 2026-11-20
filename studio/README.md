@@ -84,6 +84,10 @@ Puedes usar una idea del banco (`idea_review`) o una tuya. Respeta la `style_gui
              "stock_query":"(stock) 2-4 palabras inglés","reframe":null}]}]}
 ```
 El primer plano es `ai` con el visual más impactante. Máximo 6 planos `ai`. `reframe` = `{"x":0.5,"y":0.4,"zoom":1.5}`.
+**Ojo (20-nov):** un `reframe` solo reutiliza la imagen del plano anterior de la MISMA escena. Si es el primer plano de una
+escena (o el 3.º tras otro reframe), el worker genera una imagen nueva a partir de la frase, sin «no text», y suele salir con
+letras inventadas. Para reutilizar una imagen de otra escena, dale `media_url` explícita de esa imagen, o usa un plano `ai`.
+Revisa SIEMPRE fotogramas del vídeo montado antes de aprobarlo.
 `narration` de cada escena = sus `line` unidas, palabra por palabra.
 
 **Paso 5 — Mételo en la cola** (el disparador de la base de datos arranca la producción al pasar a `producing`). Son DOS

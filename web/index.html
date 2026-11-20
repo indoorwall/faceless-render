@@ -82,6 +82,19 @@ section{display:flex;flex-direction:column;gap:12px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
 .card.click{cursor:pointer}
+/* Deslizar tarjetas: derecha = aprobar, izquierda = descartar; a medias se abre una bandeja con más acciones */
+.sw{position:relative;border-radius:var(--r);overflow:hidden;touch-action:pan-y;min-width:0}
+.sw>.card{position:relative;z-index:1;transition:transform .22s ease;will-change:transform}
+.sw.drag>.card{transition:none}
+.sw-bg{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:stretch;border-radius:var(--r);overflow:hidden}
+.sw-bg>div{display:flex;align-items:center;gap:6px;padding:0 10px;opacity:0;transition:opacity .15s}
+.sw-bg>div{position:absolute;top:0;bottom:0}.sw-l{left:0;background:var(--ok);color:#fff}.sw-r{right:0;background:var(--bad);color:#fff}
+.sw-bg>div{pointer-events:none}.sw.show-l .sw-l,.sw.show-r .sw-r{opacity:1;pointer-events:auto}
+.sw-bg button{background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:10px;padding:10px 12px;font-weight:700;font-size:13px;white-space:nowrap;cursor:pointer}
+.sw-bg button:active{background:rgba(255,255,255,.32)}
+.sw-hint{font-size:11.5px;color:var(--muted);margin:-4px 0 6px}
+.toast.act{pointer-events:auto;display:flex;gap:12px;align-items:center}
+.toast button{background:none;border:0;color:var(--bg);font-weight:800;text-decoration:underline;cursor:pointer;font-size:14px}
 .card.click:hover{border-color:var(--muted)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .row.end{justify-content:flex-end}
@@ -469,7 +482,8 @@ const costTag = (v) => { const c=costOf(v.usage); return c&&c.total>=0.005?`<spa
 const fmtN = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? Math.round(n/1e3)+"k" : String(n ?? 0);
 const ago = (d) => { const s=(Date.now()-new Date(d))/1000; if(s<60) return "ahora"; if(s<3600) return Math.floor(s/60)+" min"; if(s<86400) return Math.floor(s/3600)+" h"; return new Date(d).toLocaleDateString("es-ES",{day:"numeric",month:"short"}); };
 const dur = (s) => s ? `${Math.floor(s/60)}:${String(Math.round(s%60)).padStart(2,"0")}` : "–";
-function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("on"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),2600); }
+function toast(msg){ const t=$("#toast"); t.classList.remove("act"); t.textContent=msg; t.classList.add("on"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),2600); }
+function toastUndo(msg, undo){ const t=$("#toast"); t.innerHTML=""; t.classList.add("act","on"); const s=document.createElement("span"); s.textContent=msg; const b=document.createElement("button"); b.textContent="Deshacer"; b.onclick=async()=>{ t.classList.remove("on","act"); await undo(); }; t.append(s,b); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on","act"),6000); }
 function chip(status){ const [l,c]=STATUS[status]||[status,""]; return `<span class="chip ${c}">${esc(l)}</span>`; }
 function chTag(id){ const c=ch(id); return `<span class="chip"><span class="dot" style="background:${esc(c.color||'#888')}"></span>${esc(c.name||"Canal")}</span>`; }
 function icon(name){ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`; }
@@ -572,15 +586,25 @@ function chTabs(){
 }
 // Tarjetas (con el color del canal en el borde izquierdo)
 const bl = (v) => `style="border-left:4px solid ${esc(chColor(v.channel_id))}"`;
+// Acciones al deslizar por tipo de tarjeta: [etiqueta, función(id)]. «ok» = derecha (aprobar), «no» = izquierda (descartar)
+const SW = {
+  idea:  { ok:["Aprobar",id=>approveIdea(id)], more_l:[], no:["Descartar",id=>swDiscard(id)], more_r:[["Abrir",id=>openVideo(id)]] },
+  script:{ ok:["Producir",id=>swApproveScript(id)], more_l:[], no:["Descartar",id=>swDiscard(id)], more_r:[["Rehacer…",id=>openVideo(id)]] },
+  final: { ok:["Programar",id=>swApproveFinal(id,false)], more_l:[["Publicar ya",id=>swApproveFinal(id,true)]], no:["Descartar",id=>swDiscard(id)], more_r:[["Volver a montar",id=>rerender(id)]] },
+  failed:{ ok:["Reintentar",id=>retry(id)], more_l:[], no:["Descartar",id=>swDiscard(id)], more_r:[["Abrir",id=>openVideo(id)]] },
+};
+const sw = (kind, v, html) => { const a=SW[kind]; const b=(arr)=>arr.map(([l],i)=>`<button data-swa="${i}">${esc(l)}</button>`).join("");
+  return `<div class="sw" data-sw="${kind}" data-id="${v.id}"><div class="sw-bg"><div class="sw-l"><button data-swa="ok">✓ ${esc(a.ok[0])}</button>${b(a.more_l)}</div><div class="sw-r">${b(a.more_r).replace(/data-swa="/g,'data-swa="r')}<button data-swa="no">${esc(a.no[0])} ✕</button></div></div>${html}</div>`; };
+const swHint = () => `<div class="sw-hint">Desliza → para aprobar, ← para descartar; a medias para más opciones.</div>`;
 const autoChip = (v) => { const a=v.auto||{}; const held=a.final?.held||a.script?.held; if(a.by==="claude-studio"&&!held) return `<span class="chip st-acc" title="Guion escrito y revisado por Claude en la sesión diaria del estudio">Hecho por Claude</span>`; return held?`<span class="chip st-warn" title="${esc(held)}">Te espera: ${esc(String(held).slice(0,40))}</span>`:(a.final?.by==="auto"||a.script?.by==="auto")?`<span class="chip st-acc">Automático</span>`:""; };
 const derivedChip = (v) => v.derived==="clip"?`<span class="chip">Short del largo</span>`:v.derived==="dub"?`<span class="chip">Doblaje</span>`:"";
-const finalCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')">
+const finalCard = (v, tag=true) => sw("final", v, `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')">
   ${v.thumbnail_url?`<img src="${esc(v.thumbnail_url)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px">`:""}
   <div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span>${derivedChip(v)}${autoChip(v)}<span class="mono muted">${dur(v.duration_sec)}</span>${costTag(v)}</div>
-  <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`;
-const scriptCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span>${derivedChip(v)}${autoChip(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`;
-const failedCard = (v, tag=true) => `<div class="card" ${bl(v)}><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
-  <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`;
+  <div class="idea-t">${esc(v.title||v.idea_title)}</div></div>`);
+const scriptCard = (v, tag=true) => sw("script", v, `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}<span class="chip">${v.format==="short"?"Short":"Largo"}</span>${derivedChip(v)}${autoChip(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div></div><span class="btn sm">${v.engine==="challenges"?"Revisar retos":"Revisar guion"}</span></div></div>`);
+const failedCard = (v, tag=true) => sw("failed", v, `<div class="card" ${bl(v)}><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip("failed")}${costTag(v)}</div><div class="idea-t" style="margin-top:8px">${esc(v.title||v.idea_title)}</div><div class="mono" style="color:var(--bad);margin-top:6px;word-break:break-word">${esc(v.error)}</div></div>
+  <div class="row"><button class="btn sm" onclick="retry('${v.id}')">Reintentar</button><button class="btn sm ghost" onclick="openVideo('${v.id}')">Abrir</button></div></div></div>`);
 const prodCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${derivedChip(v)}${autoChip(v)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title||v.idea_title)}</div></div><span class="mono muted">${esc(v.stage||"")} ${v.status==="producing"?v.progress+"%":""}</span></div>
   ${v.status==="producing"?`<div class="bar"><i style="width:${v.progress}%"></i></div>`:""}</div>`;
 const pubCard = (v, tag=true) => `<div class="card click" ${bl(v)} onclick="openVideo('${v.id}')"><div class="spread"><div style="min-width:0"><div class="row">${tag?chTag(v.channel_id):""}${chip(v.status)}${costTag(v)}</div><div style="font-weight:600;margin-top:6px">${esc(v.title)}</div></div>${v.youtube_video_id?`<a class="btn sm" target="_blank" rel="noopener" href="https://youtu.be/${esc(v.youtube_video_id)}" onclick="event.stopPropagation()">Ver en YouTube</a>`:""}</div></div>`;
@@ -664,14 +688,14 @@ function viewChannelReview(c){
     ${retos&&window.RetosUI?RetosUI.producerSection():""}
     ${failed.length?`<section><div class="sec-h"><h2>Con error</h2><span class="mono">${failed.length}</span></div><div class="list">${failed.map(v=>failedCard(v,false)).join("")}</div></section>`:""}
     <section><div class="sec-h"><h2>Vídeos por aprobar</h2><span class="mono">${finals.length}</span></div>
-      ${finals.length?`<div class="grid">${finals.map(v=>finalCard(v,false)).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
+      ${finals.length?`${swHint()}<div class="grid">${finals.map(v=>finalCard(v,false)).join("")}</div>`:`<div class="empty">Nada pendiente. Cuando un vídeo termine de montarse aparecerá aquí para que lo veas y des el ok.</div>`}
     </section>
     <section><div class="sec-h"><h2>${retos?"Retos por revisar":"Guiones por revisar"}</h2><span class="mono">${scripts.length}</span></div>
-      ${scripts.length?`<div class="list">${scripts.map(v=>scriptCard(v,false)).join("")}</div>`:`<div class="empty">${retos?"Sin retos pendientes. Genera un vídeo arriba.":"Sin guiones pendientes."}</div>`}
+      ${scripts.length?`${swHint()}<div class="list">${scripts.map(v=>scriptCard(v,false)).join("")}</div>`:`<div class="empty">${retos?"Sin retos pendientes. Genera un vídeo arriba.":"Sin guiones pendientes."}</div>`}
     </section>
     ${retos&&!ideas.length?"":`<section><div class="sec-h"><h2>Ideas por aprobar</h2><span class="mono">${ideas.length}</span>${ideasChip(c.id)}</div>
       ${retos?"":ideaGenerator(c.id)}
-      ${ideas.length?`<div class="list">${ideas.map(ideaCard).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pídelas arriba; además, cada mañana a las 8:30 llegan solas.</div>`}
+      ${ideas.length?`${swHint()}<div class="list">${ideas.map(v=>sw("idea",v,ideaCard(v))).join("")}</div>`:`<div class="empty">No hay ideas pendientes. Pídelas arriba; además, cada mañana a las 8:30 llegan solas.</div>`}
     </section>`}
     ${prod.length?`<section><div class="sec-h"><h2>En producción</h2><span class="mono">${prod.length}</span></div><div class="list">${prod.map(v=>prodCard(v,false)).join("")}</div></section>`:""}
     ${pub.length?`<section><div class="sec-h"><h2>Publicados recientes</h2></div><div class="list">${pub.map(v=>pubCard(v,false)).join("")}</div></section>`:""}`;
@@ -1297,6 +1321,62 @@ function autoBanner(v){
   return `<div class="card" style="border-left:4px solid var(--warn);gap:6px"><div class="label" style="color:var(--warn)">Piloto automático</div>${held?`<div>Te espera porque: <b>${esc(held)}</b></div>`:""}${warn.length?`<div class="why">Avisos: ${warn.map(esc).join(" · ")}</div>`:""}</div>`;
 }
 async function discardVideo(){ await run(async()=>{ const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",S.open.v.id); if(error) throw error; closeSheet(); }, "Descartado"); }
+// ---------- acciones rápidas al deslizar ----------
+async function swDiscard(id){
+  const v=S.videos.find(x=>x.id===id); if(!v) return; const prev=v.status;
+  const {error}=await sb.from("videos").update({status:"idea_rejected"}).eq("id",id); if(error) return toast(error.message);
+  S.videos=S.videos.filter(x=>x.id!==id); render();
+  toastUndo("Descartado", async()=>{ const {error}=await sb.from("videos").update({status:prev}).eq("id",id); if(error) return toast(error.message); await load(); toast("Recuperado"); });
+}
+async function swApproveScript(id){
+  const v=S.videos.find(x=>x.id===id); if(!v) return;
+  if(v.engine==="challenges"||v.retos?.kind) return openVideo(id); // los retos se revisan en su editor
+  await run(async()=>{ const {error}=await sb.from("videos").update({status:"producing",progress:0,stage:"En cola"}).eq("id",id); if(error) throw error; await kick(); }, "Guion aprobado. Produciendo el vídeo…");
+}
+async function swApproveFinal(id, now){
+  const v=S.videos.find(x=>x.id===id); if(!v) return;
+  const patch={status:"publishing",stage:"Subiendo a YouTube",publish_at:now?null:(v.publish_at&&new Date(v.publish_at)>Date.now()+30*60000?v.publish_at:null),auto:{...(v.auto||{}),publish_now:!!now,final:{...(v.auto?.final||{}),by:"tú",at:new Date().toISOString()}}};
+  await run(async()=>{ const {error}=await sb.from("videos").update(patch).eq("id",id); if(error) throw error; await kick(); }, now?"Publicando en YouTube…":"Aprobado: irá al siguiente hueco del calendario");
+}
+// Gestos: arrastre horizontal con puntero (táctil y ratón). Suelta pasado el 40 % = acción principal;
+// entre 64 px y el 40 % = se queda abierta la bandeja de ese lado con más acciones.
+(function(){
+  let cur=null, sx=0, sy=0, dx=0, mode=null, open=null;
+  const W=(el)=>el.getBoundingClientRect().width;
+  const set=(el,x)=>{ el.querySelector(":scope>.card").style.transform=x?`translateX(${x}px)`:""; el.classList.toggle("show-l",x>0); el.classList.toggle("show-r",x<0); };
+  const close=(el)=>{ if(!el) return; set(el,0); el.dataset.open=""; if(open===el) open=null; };
+  const trayW=(el,side)=>{ const t=el.querySelector(side>0?".sw-l":".sw-r"); return Math.min(W(el)*.85, t.scrollWidth+8); };
+  const fire=(el,key)=>{ const a=SW[el.dataset.sw], id=el.dataset.id; close(el);
+    if(key==="ok") return a.ok[1](id); if(key==="no") return a.no[1](id);
+    if(key.startsWith("r")) return a.more_r[+key.slice(1)][1](id); return a.more_l[+key][1](id); };
+  document.addEventListener("pointerdown",e=>{
+    const b=e.target.closest(".sw-bg button"); if(b){ e.preventDefault(); return; }
+    const el=e.target.closest(".sw"); if(open&&open!==el) close(open);
+    if(!el||e.target.closest("input,textarea,select,a")) return;
+    if(e.pointerType==="mouse"&&e.button!==0) return;
+    cur=el; sx=e.clientX; sy=e.clientY; dx=+(el.dataset.open||0); mode=null;
+  },{passive:false});
+  document.addEventListener("pointermove",e=>{
+    if(!cur) return; const mx=e.clientX-sx, my=e.clientY-sy;
+    if(!mode){ if(Math.abs(mx)<8&&Math.abs(my)<8) return; mode=Math.abs(mx)>Math.abs(my)*1.2?"x":"y"; if(mode==="x"){ cur.classList.add("drag"); try{cur.setPointerCapture(e.pointerId);}catch(_){} } }
+    if(mode!=="x") return; e.preventDefault(); set(cur,(+(cur.dataset.open||0))+mx);
+  },{passive:false});
+  const end=e=>{
+    if(!cur) return; const el=cur; cur=null; el.classList.remove("drag"); if(mode!=="x"){ return; }
+    const x=(+(el.dataset.open||0))+(e.clientX-sx), w=W(el);
+    el._swiped=Date.now();
+    if(x>w*.4) return fire(el,"ok");
+    if(x<-w*.4) return fire(el,"no");
+    if(Math.abs(x)>64){ const side=x>0?1:-1, tw=trayW(el,side)*side; el.dataset.open=String(tw); set(el,tw); open=el; return; }
+    close(el);
+  };
+  document.addEventListener("pointerup",end); document.addEventListener("pointercancel",end);
+  // Pulsar un botón de la bandeja; y que un deslizamiento no abra la tarjeta
+  document.addEventListener("click",e=>{
+    const b=e.target.closest(".sw-bg button"); if(b){ e.stopPropagation(); fire(b.closest(".sw"),b.dataset.swa); return; }
+    const el=e.target.closest(".sw"); if(el&&(Date.now()-(el._swiped||0)<350||el.dataset.open)){ e.stopPropagation(); e.preventDefault(); if(el.dataset.open&&Date.now()-(el._swiped||0)>=350) close(el); }
+  },true);
+})();
 async function rerender(id){ await run(async()=>{ const {error}=await sb.rpc("rerender_video",{p_id:id}); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Volviendo a montar el vídeo…"); }
 async function retry(id){ await run(async()=>{ const {error}=await sb.rpc("retry_video",{p_id:id}); if(error) throw error; await kick(); if(S.open) closeSheet(); }, "Reintentando…"); }
 

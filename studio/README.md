@@ -91,8 +91,11 @@ Revisa SIEMPRE fotogramas del vídeo montado antes de aprobarlo.
 **No sustituyas vídeos ya subidos (21-nov).** Borrar y volver a subir un Short (`auto.replace`) ha hundido las visitas en
 todos los casos (40-114 frente a 400-1.100 de los normales). Si un vídeo ya subido tiene un fallo, se queda como está (o se
 avisa al dueño si es grave) y se produce otro nuevo. Los arreglos de imágenes, solo ANTES de que se suba.
-**Frente insólito (21-nov):** los guiones los escribe la web (rinden más que los del estudio). La sesión diaria solo revisa
-datos e imágenes y aprueba los mejores guiones en `script_review`.
+**Análisis de 30 días (21-nov, manda sobre las reglas anteriores):** los Shorts de 50-60 s sacan la mediana más alta
+(≈1.000-1.250 visitas a 48 h); los de menos de 40 s se hunden (≈180-730). Frente y 5 curiosidades: 50-60 s (130-150 palabras).
+Máximo 2 Shorts al día por canal (Frente y 5 curiosidades a las 12:30 y 21:00; The Money Slice a las 19:00 y 01:00): 3 o más en
+12 h se canibalizan. Los guiones los escribe la sesión diaria del estudio (para no gastar API), con 3 ganchos candidatos y
+autoevaluación ≥ 9/10: calidad antes que cantidad; si solo hay uno excelente, se publica uno.
 `narration` de cada escena = sus `line` unidas, palabra por palabra.
 
 **Paso 5 — Mételo en la cola** (el disparador de la base de datos arranca la producción al pasar a `producing`). Son DOS

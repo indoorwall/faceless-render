@@ -88,6 +88,11 @@ El primer plano es `ai` con el visual más impactante. Máximo 6 planos `ai`. `r
 escena (o el 3.º tras otro reframe), el worker genera una imagen nueva a partir de la frase, sin «no text», y suele salir con
 letras inventadas. Para reutilizar una imagen de otra escena, dale `media_url` explícita de esa imagen, o usa un plano `ai`.
 Revisa SIEMPRE fotogramas del vídeo montado antes de aprobarlo.
+**No sustituyas vídeos ya subidos (21-nov).** Borrar y volver a subir un Short (`auto.replace`) ha hundido las visitas en
+todos los casos (40-114 frente a 400-1.100 de los normales). Si un vídeo ya subido tiene un fallo, se queda como está (o se
+avisa al dueño si es grave) y se produce otro nuevo. Los arreglos de imágenes, solo ANTES de que se suba.
+**Frente insólito (21-nov):** los guiones los escribe la web (rinden más que los del estudio). La sesión diaria solo revisa
+datos e imágenes y aprueba los mejores guiones en `script_review`.
 `narration` de cada escena = sus `line` unidas, palabra por palabra.
 
 **Paso 5 — Mételo en la cola** (el disparador de la base de datos arranca la producción al pasar a `producing`). Son DOS

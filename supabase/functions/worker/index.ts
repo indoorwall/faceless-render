@@ -3177,7 +3177,9 @@ async function allocateBudget() {
   const rows: { ch: { id: string; name: string }; need: number; first: number; det: string[]; sp: number; low: boolean }[] = [];
   for (const ch of chs ?? []) {
     const s = scheduleOf(ch), D = Number(s.buffer_days ?? 2), hz = now + D * 864e5;
-    const { data: vids } = await sb.from("videos").select("status,format,publish_at").eq("channel_id", ch.id).in("status", ["final_review", "publishing", "scheduled"]);
+    const { data: vidsAll } = await sb.from("videos").select("status,format,publish_at,auto").eq("channel_id", ch.id).in("status", ["final_review", "publishing", "scheduled"]);
+    // Un vídeo retenido por el piloto (auto.final.held) no está listo: si contara, el canal se quedaría sin presupuesto para producir otro
+    const vids = (vidsAll ?? []).filter((v) => !(v.status === "final_review" && v.auto?.final?.held));
     let need = 0, first = Infinity; const det: string[] = [];
     for (const f of ["short", "long"]) {
       const slots = slotsFor(ch, f, D + 1).filter((t) => t.getTime() > now && t.getTime() <= hz);
